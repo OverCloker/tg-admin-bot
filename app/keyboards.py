@@ -147,6 +147,40 @@ def feedback_reply_menu(user_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def dig_register_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Зарегистрироваться в игре", callback_data="dig:register")],
+        ]
+    )
+
+
+def dig_bag_menu(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Магазин", callback_data=f"dig:shop:{user_id}")],
+            [InlineKeyboardButton(text="Достижения", callback_data=f"dig:achievements:{user_id}")],
+        ]
+    )
+
+
+def dig_shop_menu(user_id: int, items: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for key, name, price in items:
+        rows.append([InlineKeyboardButton(text=f"{name} - {price}", callback_data=f"dig:buy:{user_id}:{key}")])
+    rows.append([InlineKeyboardButton(text="Назад к сумке", callback_data=f"dig:bag:{user_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def dig_buy_confirm_menu(user_id: int, item_key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Купить", callback_data=f"dig:confirm:{user_id}:{item_key}")],
+            [InlineKeyboardButton(text="Назад в магазин", callback_data=f"dig:shop:{user_id}")],
+        ]
+    )
+
+
 def alarm_menu(chat_id: int, enabled: bool) -> InlineKeyboardMarkup:
     toggle_text = "Выключить режим" if enabled else "Включить режим"
     return InlineKeyboardMarkup(
@@ -161,6 +195,7 @@ def alarm_menu(chat_id: int, enabled: bool) -> InlineKeyboardMarkup:
 
 def quiet_menu(chat_id: int, has_media: bool) -> InlineKeyboardMarkup:
     rows = [
+        [InlineKeyboardButton(text="Замуть того", callback_data=f"quiet:manual:{chat_id}")],
         [InlineKeyboardButton(text="Текст ответа", callback_data=f"quiet:text:{chat_id}")],
         [InlineKeyboardButton(text="Гиф/голос/аудио", callback_data=f"quiet:media:{chat_id}")],
     ]

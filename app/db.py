@@ -157,6 +157,39 @@ class QuietSettings:
     updated_at: str
 
 
+@dataclass(frozen=True)
+class DigPlayer:
+    chat_id: int
+    user_id: int
+    username: str | None
+    full_name: str
+    coins: int
+    total_depth: int
+    best_session_depth: int
+    luck: int
+    last_luck_at: str
+    last_dig_at: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class DigItem:
+    chat_id: int
+    user_id: int
+    item_key: str
+    quantity: int
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class DigAchievement:
+    chat_id: int
+    user_id: int
+    achievement_key: str
+    created_at: str
+
+
 class Database:
     def __init__(self, path: str) -> None:
         self.path = Path(path)
@@ -356,6 +389,42 @@ class Database:
                 updated_by integer,
                 updated_at text not null,
                 foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists dig_players (
+                chat_id integer not null,
+                user_id integer not null,
+                username text,
+                full_name text not null,
+                coins integer not null default 0,
+                total_depth integer not null default 0,
+                best_session_depth integer not null default 0,
+                luck integer not null default 100,
+                last_luck_at text not null,
+                last_dig_at text,
+                created_at text not null,
+                updated_at text not null,
+                primary key (chat_id, user_id),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists dig_items (
+                chat_id integer not null,
+                user_id integer not null,
+                item_key text not null,
+                quantity integer not null default 0,
+                updated_at text not null,
+                primary key (chat_id, user_id, item_key),
+                foreign key (chat_id, user_id) references dig_players(chat_id, user_id) on delete cascade
+            );
+
+            create table if not exists dig_achievements (
+                chat_id integer not null,
+                user_id integer not null,
+                achievement_key text not null,
+                created_at text not null,
+                primary key (chat_id, user_id, achievement_key),
+                foreign key (chat_id, user_id) references dig_players(chat_id, user_id) on delete cascade
             );
             """
         )
@@ -1165,6 +1234,280 @@ class Database:
             (chat_id, current.reply_text, updated_by, utc_now()),
         )
         self._conn.commit()
+
+    def get_dig_player(self, chat_id: int, user_id: int) -> DigPlayer | None:
+        row = self._conn.execute(
+            """
+            select chat_id, user_id, username, full_name, coins, total_depth, best_session_depth,
+                   luck, last_luck_at, last_dig_at, created_at, updated_at
+            from dig_players
+            where chat_id = ? and user_id = ?
+            """,
+            (chat_id, user_id),
+        ).fetchone()
+        return DigPlayer(**dict(row)) if row else None
+
+    def register_dig_player(self, chat_id: int, user_id: int, username: str | None, full_name: str) -> bool:
+        now = utc_now()
+        cur = self._conn.execute(
+            """
+            insert or ignore into dig_players (
+                chat_id, user_id, username, full_name, coins, total_depth, best_session_depth,
+                luck, last_luck_at, last_dig_at, created_at, updated_at
+            )
+            values (?, ?, ?, ?, 0, 0, 0, 100, ?, null, ?, ?)
+            """,
+            (chat_id, user_id, normalize_username(username) if username else None, full_name, now, now, now),
+        )
+        if cur.rowcount == 0:
+            self._conn.execute(
+                """
+                update dig_players
+                set username = ?, full_name = ?, updated_at = ?
+                where chat_id = ? and user_id = ?
+                """,
+                (normalize_username(username) if username else None, full_name, now, chat_id, user_id),
+            )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def update_dig_player_after_dig(
+        self,
+        chat_id: int,
+        user_id: int,
+        username: str | None,
+        full_name: str,
+        coins_delta: int,
+        depth_delta: int,
+        best_session_depth: int,
+        luck: int,
+        last_luck_at: str,
+        last_dig_at: str,
+    ) -> None:
+        self._conn.execute(
+            """
+            update dig_players
+            set username = ?,
+                full_name = ?,
+                coins = coins + ?,
+                total_depth = total_depth + ?,
+                best_session_depth = max(best_session_depth, ?),
+                luck = ?,
+                last_luck_at = ?,
+                last_dig_at = ?,
+                updated_at = ?
+            where chat_id = ? and user_id = ?
+            """,
+            (
+                normalize_username(username) if username else None,
+                full_name,
+                max(0, int(coins_delta)),
+                max(0, int(depth_delta)),
+                max(0, int(best_session_depth)),
+                max(0, min(100, int(luck))),
+                last_luck_at,
+                last_dig_at,
+                utc_now(),
+                chat_id,
+                user_id,
+            ),
+        )
+        self._conn.commit()
+
+    def top_dig_depth(self, chat_id: int, limit: int = 10) -> list[DigPlayer]:
+        rows = self._conn.execute(
+            """
+            select chat_id, user_id, username, full_name, coins, total_depth, best_session_depth,
+                   luck, last_luck_at, last_dig_at, created_at, updated_at
+            from dig_players
+            where chat_id = ?
+            order by total_depth desc, best_session_depth desc, coins desc
+            limit ?
+            """,
+            (chat_id, limit),
+        ).fetchall()
+        return [DigPlayer(**dict(row)) for row in rows]
+
+    def top_dig_coins(self, chat_id: int, limit: int = 10) -> list[DigPlayer]:
+        rows = self._conn.execute(
+            """
+            select chat_id, user_id, username, full_name, coins, total_depth, best_session_depth,
+                   luck, last_luck_at, last_dig_at, created_at, updated_at
+            from dig_players
+            where chat_id = ?
+            order by coins desc, total_depth desc
+            limit ?
+            """,
+            (chat_id, limit),
+        ).fetchall()
+        return [DigPlayer(**dict(row)) for row in rows]
+
+    def list_all_dig_players(self) -> list[DigPlayer]:
+        rows = self._conn.execute(
+            """
+            select chat_id, user_id, username, full_name, coins, total_depth, best_session_depth,
+                   luck, last_luck_at, last_dig_at, created_at, updated_at
+            from dig_players
+            order by chat_id, user_id
+            """
+        ).fetchall()
+        return [DigPlayer(**dict(row)) for row in rows]
+
+    def list_dig_items(self, chat_id: int, user_id: int) -> list[DigItem]:
+        rows = self._conn.execute(
+            """
+            select chat_id, user_id, item_key, quantity, updated_at
+            from dig_items
+            where chat_id = ? and user_id = ? and quantity > 0
+            order by item_key collate nocase
+            """,
+            (chat_id, user_id),
+        ).fetchall()
+        return [DigItem(**dict(row)) for row in rows]
+
+    def get_dig_item_quantity(self, chat_id: int, user_id: int, item_key: str) -> int:
+        row = self._conn.execute(
+            """
+            select quantity from dig_items
+            where chat_id = ? and user_id = ? and item_key = ?
+            """,
+            (chat_id, user_id, item_key),
+        ).fetchone()
+        return int(row["quantity"]) if row else 0
+
+    def add_dig_item(self, chat_id: int, user_id: int, item_key: str, quantity: int = 1) -> None:
+        self._conn.execute(
+            """
+            insert into dig_items (chat_id, user_id, item_key, quantity, updated_at)
+            values (?, ?, ?, ?, ?)
+            on conflict(chat_id, user_id, item_key) do update set
+                quantity = quantity + excluded.quantity,
+                updated_at = excluded.updated_at
+            """,
+            (chat_id, user_id, item_key, max(1, int(quantity)), utc_now()),
+        )
+        self._conn.commit()
+
+    def consume_dig_item(self, chat_id: int, user_id: int, item_key: str) -> bool:
+        cur = self._conn.execute(
+            """
+            update dig_items
+            set quantity = quantity - 1, updated_at = ?
+            where chat_id = ? and user_id = ? and item_key = ? and quantity > 0
+            """,
+            (utc_now(), chat_id, user_id, item_key),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def spend_dig_coins(self, chat_id: int, user_id: int, amount: int) -> bool:
+        cur = self._conn.execute(
+            """
+            update dig_players
+            set coins = coins - ?, updated_at = ?
+            where chat_id = ? and user_id = ? and coins >= ?
+            """,
+            (max(0, int(amount)), utc_now(), chat_id, user_id, max(0, int(amount))),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def add_dig_coins(self, chat_id: int, user_id: int, amount: int) -> None:
+        self._conn.execute(
+            """
+            update dig_players
+            set coins = coins + ?, updated_at = ?
+            where chat_id = ? and user_id = ?
+            """,
+            (max(0, int(amount)), utc_now(), chat_id, user_id),
+        )
+        self._conn.commit()
+
+    def purchase_dig_item(
+        self,
+        chat_id: int,
+        user_id: int,
+        item_key: str,
+        price: int,
+        quantity: int = 1,
+        unique: bool = False,
+    ) -> str:
+        now = utc_now()
+        try:
+            self._conn.execute("begin immediate")
+            if unique:
+                row = self._conn.execute(
+                    """
+                    select quantity from dig_items
+                    where chat_id = ? and user_id = ? and item_key = ?
+                    """,
+                    (chat_id, user_id, item_key),
+                ).fetchone()
+                if row and int(row["quantity"]) > 0:
+                    self._conn.rollback()
+                    return "owned"
+
+            cur = self._conn.execute(
+                """
+                update dig_players
+                set coins = coins - ?, updated_at = ?
+                where chat_id = ? and user_id = ? and coins >= ?
+                """,
+                (max(0, int(price)), now, chat_id, user_id, max(0, int(price))),
+            )
+            if cur.rowcount == 0:
+                self._conn.rollback()
+                return "no_coins"
+
+            self._conn.execute(
+                """
+                insert into dig_items (chat_id, user_id, item_key, quantity, updated_at)
+                values (?, ?, ?, ?, ?)
+                on conflict(chat_id, user_id, item_key) do update set
+                    quantity = quantity + excluded.quantity,
+                    updated_at = excluded.updated_at
+                """,
+                (chat_id, user_id, item_key, max(1, int(quantity)), now),
+            )
+            self._conn.commit()
+            return "ok"
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def set_dig_luck(self, chat_id: int, user_id: int, luck: int, last_luck_at: str) -> None:
+        self._conn.execute(
+            """
+            update dig_players
+            set luck = ?, last_luck_at = ?, updated_at = ?
+            where chat_id = ? and user_id = ?
+            """,
+            (max(0, min(100, int(luck))), last_luck_at, utc_now(), chat_id, user_id),
+        )
+        self._conn.commit()
+
+    def add_dig_achievement(self, chat_id: int, user_id: int, achievement_key: str) -> bool:
+        cur = self._conn.execute(
+            """
+            insert or ignore into dig_achievements (chat_id, user_id, achievement_key, created_at)
+            values (?, ?, ?, ?)
+            """,
+            (chat_id, user_id, achievement_key, utc_now()),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def list_dig_achievements(self, chat_id: int, user_id: int) -> list[DigAchievement]:
+        rows = self._conn.execute(
+            """
+            select chat_id, user_id, achievement_key, created_at
+            from dig_achievements
+            where chat_id = ? and user_id = ?
+            order by created_at
+            """,
+            (chat_id, user_id),
+        ).fetchall()
+        return [DigAchievement(**dict(row)) for row in rows]
 
 
 def normalize_username(username: str) -> str:

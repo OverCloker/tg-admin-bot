@@ -3,6 +3,7 @@ import logging
 import os
 import random
 import re
+import secrets
 import sys
 from datetime import datetime, timezone
 from datetime import timedelta
@@ -17,7 +18,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Chat, ChatPermissions, LabeledPrice, Message, PreCheckoutQuery
+from aiogram.types import CallbackQuery, Chat, ChatPermissions, LabeledPrice, Message, MessageReactionUpdated, PreCheckoutQuery
 
 from .config import load_config
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
@@ -27,6 +28,10 @@ from .keyboards import (
     back_to_chat_menu,
     chat_admin_menu,
     chat_select_menu,
+    dig_bag_menu,
+    dig_buy_confirm_menu,
+    dig_register_menu,
+    dig_shop_menu,
     feedback_reply_menu,
     leave_confirm_menu,
     main_menu,
@@ -54,6 +59,48 @@ DEFAULT_AVAILABLE_REACTIONS = [
     {"type": "emoji", "emoji": emoji}
     for emoji in ["👍", "👎", "❤", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "🤬", "😢", "🎉", "🤩", "🤮", "💩"]
 ]
+DIG_COOLDOWN = timedelta(hours=4)
+DIG_LUCK_COST = 33
+DIG_LUCK_REGEN_PER_HOUR = 5
+DIG_SUCCESS_CHANCES = [90, 80, 70, 60, 50, 41, 31, 21, 11, 1]
+DIG_REWARDS = {
+    0: (1, 5),
+    1: (5, 10),
+    2: (10, 20),
+    3: (20, 30),
+    4: (30, 40),
+    5: (40, 50),
+    6: (50, 60),
+    7: (60, 70),
+    8: (70, 80),
+    9: (80, 90),
+    10: (90, 100),
+}
+DIG_SHOP_ITEMS = {
+    "helmet": ("Каска шахтера", 40, "Даёт +5 удачи на следующую раскопку."),
+    "shovel": ("Крепкая лопата", 70, "Снижает шанс обвала на 50% в следующей раскопке."),
+    "flashlight": ("Фонарик", 90, "Даёт +10% к шансам пройти метры в следующей раскопке."),
+    "insurance": ("Страховка", 120, "Если раскопка провалилась на первом метре, засчитает 1 метр."),
+    "title_badge": ("Кличка в шахте", 150, "Добавляет титул 'Шахтер' в сумку и топы."),
+    "cursed_pick": ("Проклятая кирка", 60, "Один раз спасает от мута при проигрыше в монетку."),
+    "prank": ("Подстава", 200, "Покупает шуточную шахтерскую проверку в чат."),
+    "tea": ("Чай перед сменой", 80, "Сразу восстанавливает +20 удачи."),
+    "bucket": ("Премиум ведро", 100, "Увеличивает награду за следующую раскопку на 25%."),
+    "safe": ("Сейф", 130, "Один раз защищает от потери глубины при обвале."),
+}
+DIG_ITEM_ORDER = ["helmet", "shovel", "flashlight", "insurance", "title_badge", "cursed_pick", "prank", "tea", "bucket", "safe"]
+DIG_ACHIEVEMENTS = {
+    "first_dig": ("Первый спуск", "Сделать первую раскопку.", 10, None),
+    "first_meter": ("Первый метр", "Прокопать хотя бы 1 метр за вылазку.", 15, None),
+    "five_meter_run": ("Глубокий вдох", "Прокопать 5 метров за одну вылазку.", 50, "helmet"),
+    "ten_meter_run": ("До ядра почти дошел", "Прокопать 10 метров за одну вылазку.", 100, "bucket"),
+    "total_25": ("Шахтерская смена", "Прокопать 25 метров всего.", 80, None),
+    "total_100": ("Подземный барон", "Прокопать 100 метров всего.", 200, "safe"),
+    "coins_500": ("Звенит сумка", "Накопить 500 котоинов.", 100, None),
+    "stone_zero": ("Каменная встреча", "Упереться в камень на нулевой глубине.", 20, None),
+    "collapse_survive": ("Не завалило", "Пережить обвал и продолжить.", 40, "shovel"),
+    "first_purchase": ("Покупатель", "Купить первый предмет в магазине.", 30, None),
+}
 
 router = Router()
 db: Database
@@ -61,7 +108,7 @@ BOT_ADMIN_IDS: set[int] = set()
 OPENAI_API_KEY: str | None = None
 OPENAI_MODEL = "gpt-4.1-mini"
 BOT_STARTED_AT = datetime.now(timezone.utc)
-LOCK_HANDLE = None
+DIG_PURCHASE_GUARD: dict[tuple[int, int, str, int], datetime] = {}
 
 
 class DropStaleMessagesMiddleware(BaseMiddleware):
@@ -85,6 +132,7 @@ class AdminInput(StatesGroup):
     set_roll_mute = State()
     set_quiet_text = State()
     set_quiet_media = State()
+    set_quiet_manual = State()
     feedback_reply = State()
 
 
@@ -270,6 +318,182 @@ def parse_unquiet_payload(text: str | None) -> str | None:
     if len(parts) == 2 and parts[0].startswith("@") and parts[1].casefold() == "трещи":
         return normalize_username(parts[0])
     return ""
+
+
+def parse_quiet_manual_payload(text: str | None) -> tuple[str | None, int | None, str]:
+    if not text:
+        return None, None, ""
+    parts = text.strip().split(maxsplit=2)
+    if len(parts) < 2 or not parts[1].isdigit():
+        return None, None, ""
+    reason = ""
+    if len(parts) == 3:
+        reason = parts[2].strip()
+        if reason.startswith("-"):
+            reason = reason[1:].strip()
+    return parts[0].strip(), int(parts[1]), reason
+
+
+def refreshed_dig_luck(luck: int, last_luck_at: str, now: datetime) -> int:
+    try:
+        last = datetime.fromisoformat(last_luck_at)
+    except ValueError:
+        return max(0, min(100, luck))
+    elapsed = max(0, (now - last).total_seconds())
+    restored = int(elapsed // 3600) * DIG_LUCK_REGEN_PER_HOUR
+    return max(0, min(100, luck + restored))
+
+
+def dig_coin_reward(depth: int) -> int:
+    low, high = DIG_REWARDS.get(max(0, min(10, depth)), (1, 5))
+    return low + secrets.randbelow(high - low + 1)
+
+
+def dig_player_name(username: str | None, full_name: str) -> str:
+    return f"@{username}" if username else full_name
+
+
+def dig_items_map(chat_id: int, user_id: int) -> dict[str, int]:
+    return {item.item_key: item.quantity for item in db.list_dig_items(chat_id, user_id)}
+
+
+def dig_display_name(chat_id: int, user_id: int, username: str | None, full_name: str) -> str:
+    name = dig_player_name(username, full_name)
+    if db.get_dig_item_quantity(chat_id, user_id, "title_badge") > 0:
+        return f"{name} [Шахтер]"
+    return name
+
+
+def dig_effects_text(items: dict[str, int]) -> str:
+    active = []
+    for key, count in items.items():
+        if count <= 0:
+            continue
+        name = DIG_SHOP_ITEMS.get(key, (key, 0, ""))[0]
+        active.append(f"{name} x{count}")
+    return "\n".join(active) if active else "Нет активных эффектов."
+
+
+def dig_shop_items_for_keyboard() -> list[tuple[str, str, int]]:
+    return [(key, DIG_SHOP_ITEMS[key][0], DIG_SHOP_ITEMS[key][1]) for key in DIG_ITEM_ORDER]
+
+
+def dig_purchase_is_duplicate(chat_id: int, user_id: int, item_key: str, message_id: int) -> bool:
+    now = datetime.now(timezone.utc)
+    expired = [
+        key
+        for key, created_at in DIG_PURCHASE_GUARD.items()
+        if (now - created_at).total_seconds() > 10
+    ]
+    for key in expired:
+        DIG_PURCHASE_GUARD.pop(key, None)
+
+    key = (chat_id, user_id, item_key, message_id)
+    if key in DIG_PURCHASE_GUARD:
+        return True
+    DIG_PURCHASE_GUARD[key] = now
+    return False
+
+
+def award_dig_achievement(chat_id: int, user_id: int, achievement_key: str) -> str | None:
+    achievement = DIG_ACHIEVEMENTS.get(achievement_key)
+    if achievement is None:
+        return None
+    if not db.add_dig_achievement(chat_id, user_id, achievement_key):
+        return None
+
+    name, _, coins, item_key = achievement
+    if coins:
+        db.add_dig_coins(chat_id, user_id, coins)
+    item_text = ""
+    if item_key:
+        db.add_dig_item(chat_id, user_id, item_key, 1)
+        item_name = DIG_SHOP_ITEMS.get(item_key, (item_key, 0, ""))[0]
+        item_text = f", предмет: {item_name}"
+    return f"{name}: +{coins} котоинов{item_text}"
+
+
+def check_dig_achievements(
+    chat_id: int,
+    user_id: int,
+    player,
+    dug: int,
+    coins_before_reward: int,
+    collapse_depth: int,
+    stopped_by_stone: bool,
+) -> list[str]:
+    total_depth = player.total_depth + dug
+    total_coins = player.coins + coins_before_reward
+    checks = ["first_dig"]
+    if dug >= 1:
+        checks.append("first_meter")
+    if dug >= 5:
+        checks.append("five_meter_run")
+    if dug >= 10:
+        checks.append("ten_meter_run")
+    if total_depth >= 25:
+        checks.append("total_25")
+    if total_depth >= 100:
+        checks.append("total_100")
+    if total_coins >= 500:
+        checks.append("coins_500")
+    if stopped_by_stone and dug == 0:
+        checks.append("stone_zero")
+    if collapse_depth:
+        checks.append("collapse_survive")
+
+    awarded = []
+    for key in checks:
+        text = award_dig_achievement(chat_id, user_id, key)
+        if text:
+            awarded.append(text)
+    return awarded
+
+
+def dig_achievements_text(chat_id: int, user_id: int) -> str:
+    owned = {item.achievement_key for item in db.list_dig_achievements(chat_id, user_id)}
+    lines = [f"<b>Достижения:</b> {len(owned)}/{len(DIG_ACHIEVEMENTS)}"]
+    for key, (name, description, coins, item_key) in DIG_ACHIEVEMENTS.items():
+        mark = "✓" if key in owned else "•"
+        reward = f"+{coins} котоинов"
+        if item_key:
+            reward += f", {DIG_SHOP_ITEMS.get(item_key, (item_key, 0, ''))[0]}"
+        lines.append(f"{mark} <b>{escape(name)}</b> — {escape(description)} Награда: {escape(reward)}")
+    return "\n".join(lines)
+
+
+def backfill_dig_achievements() -> int:
+    awarded_count = 0
+    for player in db.list_all_dig_players():
+        checks = []
+        if player.last_dig_at:
+            checks.append("first_dig")
+        if player.total_depth >= 1 or player.best_session_depth >= 1:
+            checks.append("first_meter")
+        if player.best_session_depth >= 5:
+            checks.append("five_meter_run")
+        if player.best_session_depth >= 10:
+            checks.append("ten_meter_run")
+        if player.total_depth >= 25:
+            checks.append("total_25")
+        if player.total_depth >= 100:
+            checks.append("total_100")
+        if player.coins >= 500:
+            checks.append("coins_500")
+        if db.list_dig_items(player.chat_id, player.user_id):
+            checks.append("first_purchase")
+
+        for key in checks:
+            if award_dig_achievement(player.chat_id, player.user_id, key):
+                awarded_count += 1
+    return awarded_count
+
+
+async def require_dig_button_owner(callback: CallbackQuery, owner_id: int) -> bool:
+    if callback.from_user.id != owner_id:
+        await callback.answer("Это не твой магазин.", show_alert=True)
+        return False
+    return True
 
 
 def extract_ai_prompt(text: str | None) -> str | None:
@@ -525,6 +749,26 @@ async def send_quiet_media(message: Message, media_type: str | None, file_id: st
         return
 
 
+async def send_quiet_media_to_chat(
+    bot: Bot,
+    chat_id: int,
+    media_type: str | None,
+    file_id: str | None,
+    reply_to_message_id: int | None = None,
+) -> None:
+    if not media_type or not file_id:
+        return
+    try:
+        if media_type == "animation":
+            await bot.send_animation(chat_id, file_id, reply_to_message_id=reply_to_message_id)
+        elif media_type == "voice":
+            await bot.send_voice(chat_id, file_id, reply_to_message_id=reply_to_message_id)
+        elif media_type == "audio":
+            await bot.send_audio(chat_id, file_id, reply_to_message_id=reply_to_message_id)
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+        return
+
+
 async def telegram_api_call(bot: Bot, method: str, payload: dict) -> dict:
     url = f"https://api.telegram.org/bot{bot.token}/{method}"
     timeout = aiohttp.ClientTimeout(total=8)
@@ -591,6 +835,29 @@ async def safe_reply(message: Message, text: str, **kwargs) -> None:
         return
 
 
+async def delete_message_later(bot: Bot, chat_id: int, message_id: int, delay_seconds: int = 60) -> None:
+    await asyncio.sleep(delay_seconds)
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound):
+        return
+
+
+async def temporary_reply(message: Message, text: str, delay_seconds: int = 60, **kwargs) -> None:
+    try:
+        sent = await message.reply(text, **kwargs)
+    except TelegramRetryAfter as exc:
+        await asyncio.sleep(int(getattr(exc, "retry_after", 3)) + 1)
+        try:
+            sent = await message.reply(text, **kwargs)
+        except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+            return
+    except (TelegramBadRequest, TelegramForbiddenError):
+        return
+
+    asyncio.create_task(delete_message_later(message.bot, sent.chat.id, sent.message_id, delay_seconds))
+
+
 async def restart_process(delay_seconds: float = 1.0) -> None:
     await asyncio.sleep(delay_seconds)
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -598,22 +865,44 @@ async def restart_process(delay_seconds: float = 1.0) -> None:
     os.execv(sys.executable, [sys.executable, "-m", "app.bot"])
 
 
-def acquire_single_instance_lock() -> None:
-    global LOCK_HANDLE
-
-    import msvcrt
-
+def restart_panel_path() -> str:
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    lock_path = os.path.join(project_root, "bot.lock")
-    LOCK_HANDLE = open(lock_path, "w", encoding="utf-8")
+    return os.path.join(project_root, "restart_panel_chat.txt")
+
+
+def remember_restart_panel_chat(chat_id: int) -> None:
+    with open(restart_panel_path(), "w", encoding="utf-8") as file:
+        file.write(str(chat_id))
+
+
+async def send_restart_panel_if_needed(bot: Bot) -> None:
+    path = restart_panel_path()
+    if not os.path.exists(path):
+        return
+
     try:
-        msvcrt.locking(LOCK_HANDLE.fileno(), msvcrt.LK_NBLCK, 1)
-    except OSError as exc:
-        raise RuntimeError(
-            "Bot is already running. Close the other PowerShell window or stop the previous bot process first."
-        ) from exc
-    LOCK_HANDLE.write(str(os.getpid()))
-    LOCK_HANDLE.flush()
+        with open(path, "r", encoding="utf-8") as file:
+            chat_id = int(file.read().strip())
+    except (OSError, ValueError):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return
+
+    try:
+        await bot.send_message(
+            chat_id,
+            "Бот перезапущен. Панель управления снова открыта.",
+            reply_markup=main_menu(),
+        )
+    except (TelegramBadRequest, TelegramForbiddenError):
+        pass
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 async def clear_previous_control_buttons(message: Message, state: FSMContext) -> None:
@@ -658,6 +947,41 @@ async def resolve_command_target(message: Message, username: str | None) -> tupl
     user = message.reply_to_message.from_user
     db.upsert_seen_user(
         chat_id=message.chat.id,
+        user_id=user.id,
+        username=user.username,
+        full_name=user.full_name,
+        is_bot=user.is_bot,
+    )
+    name = f"@{user.username}" if user.username else user.full_name
+    return user.id, name, None
+
+
+async def resolve_quiet_panel_target(bot: Bot, chat_id: int, target: str) -> tuple[int | None, str | None, str | None]:
+    if target.startswith("@"):
+        username = normalize_username(target)
+        user = db.get_seen_user_by_username(chat_id, username)
+        if not user:
+            return None, None, (
+                f"Я еще не видел @{escape(username)} в этой группе. "
+                "Можно указать numeric id пользователя или дождаться, пока он напишет в чат."
+            )
+        name = f"@{user.username}" if user.username else user.full_name
+        return user.user_id, name, None
+
+    if not target.isdigit():
+        return None, None, "Первым укажи @username или numeric id пользователя."
+
+    user_id = int(target)
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        return None, None, f"Не получилось найти пользователя по id в этой группе.\n<code>{escape(str(exc))}</code>"
+
+    user = member.user
+    if user.is_bot:
+        return None, None, "Ботов этой командой ограничивать не нужно."
+    db.upsert_seen_user(
+        chat_id=chat_id,
         user_id=user.id,
         username=user.username,
         full_name=user.full_name,
@@ -973,6 +1297,247 @@ async def cb_feedback_start(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "dig:register")
+async def cb_dig_register(callback: CallbackQuery) -> None:
+    if not callback.message or callback.message.chat.type not in SUPPORTED_CHAT_TYPES:
+        await callback.answer("Регистрироваться нужно в группе.", show_alert=True)
+        return
+
+    await register_current_chat(callback.message)
+    user = callback.from_user
+    created = db.register_dig_player(
+        chat_id=callback.message.chat.id,
+        user_id=user.id,
+        username=user.username,
+        full_name=user.full_name,
+    )
+    if created:
+        await callback.answer("Ты в игре.", show_alert=True)
+        await callback.message.answer(
+            f"{escape(dig_player_name(user.username, user.full_name))} зарегистрировался в раскопках.\n"
+            "Теперь можно писать: <code>копай</code>"
+        )
+    else:
+        await callback.answer("Ты уже зарегистрирован.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("dig:bag"))
+async def cb_dig_bag(callback: CallbackQuery) -> None:
+    if not callback.message or callback.message.chat.type not in SUPPORTED_CHAT_TYPES:
+        await callback.answer("Сумка доступна в группе.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    owner_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else callback.from_user.id
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+
+    player = db.get_dig_player(callback.message.chat.id, callback.from_user.id)
+    if player is None:
+        await callback.answer("Сначала зарегистрируйся.", show_alert=True)
+        return
+
+    now = datetime.now(timezone.utc)
+    luck = refreshed_dig_luck(player.luck, player.last_luck_at, now)
+    items = dig_items_map(player.chat_id, player.user_id)
+    await safe_edit(
+        callback,
+        "<b>Сумка шахтера</b>\n"
+        f"Игрок: {escape(dig_display_name(player.chat_id, player.user_id, player.username, player.full_name))}\n"
+        f"Котоины: <b>{player.coins}</b>\n"
+        f"Общая глубина: <b>{player.total_depth}</b> м\n"
+        f"Лучшая раскопка: <b>{player.best_session_depth}</b> м\n"
+        f"Удача: <b>{luck}</b>/100\n\n"
+        f"<b>Активные эффекты:</b>\n{escape(dig_effects_text(items))}",
+        reply_markup=dig_bag_menu(callback.from_user.id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dig:shop"))
+async def cb_dig_shop(callback: CallbackQuery) -> None:
+    if not callback.message or callback.message.chat.type not in SUPPORTED_CHAT_TYPES:
+        await callback.answer("Магазин доступен в группе.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    owner_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else callback.from_user.id
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+
+    player = db.get_dig_player(callback.message.chat.id, callback.from_user.id)
+    if player is None:
+        await callback.answer("Сначала зарегистрируйся.", show_alert=True)
+        return
+
+    items = dig_items_map(player.chat_id, player.user_id)
+    await safe_edit(
+        callback,
+        "<b>Магазин раскопок</b>\n"
+        f"Котоины: <b>{player.coins}</b>\n\n"
+        f"<b>Активные эффекты:</b>\n{escape(dig_effects_text(items))}\n\n"
+        "Выбери предмет для покупки:",
+        reply_markup=dig_shop_menu(callback.from_user.id, dig_shop_items_for_keyboard()),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dig:achievements:"))
+async def cb_dig_achievements(callback: CallbackQuery) -> None:
+    if not callback.message or callback.message.chat.type not in SUPPORTED_CHAT_TYPES:
+        await callback.answer("Достижения доступны в группе.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    owner_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else callback.from_user.id
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+
+    player = db.get_dig_player(callback.message.chat.id, callback.from_user.id)
+    if player is None:
+        await callback.answer("Сначала зарегистрируйся.", show_alert=True)
+        return
+
+    await safe_edit(
+        callback,
+        dig_achievements_text(callback.message.chat.id, callback.from_user.id),
+        reply_markup=dig_bag_menu(callback.from_user.id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dig:buy:"))
+async def cb_dig_buy(callback: CallbackQuery) -> None:
+    if not callback.message or callback.message.chat.type not in SUPPORTED_CHAT_TYPES:
+        await callback.answer("Магазин доступен в группе.", show_alert=True)
+        return
+
+    parts = callback.data.split(":", 3)
+    if len(parts) == 4 and parts[2].isdigit():
+        owner_id = int(parts[2])
+        item_key = parts[3]
+    else:
+        owner_id = callback.from_user.id
+        item_key = callback.data.split(":", 2)[2]
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+
+    item = DIG_SHOP_ITEMS.get(item_key)
+    if item is None:
+        await callback.answer("Предмет не найден.", show_alert=True)
+        return
+
+    player = db.get_dig_player(callback.message.chat.id, callback.from_user.id)
+    if player is None:
+        await callback.answer("Сначала зарегистрируйся.", show_alert=True)
+        return
+
+    name, price, description = item
+    await safe_edit(
+        callback,
+        f"<b>{escape(name)}</b>\n"
+        f"Цена: <b>{price}</b> котоинов\n"
+        f"У тебя: <b>{player.coins}</b> котоинов\n\n"
+        f"{escape(description)}",
+        reply_markup=dig_buy_confirm_menu(callback.from_user.id, item_key),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dig:confirm:"))
+async def cb_dig_confirm(callback: CallbackQuery) -> None:
+    if not callback.message or callback.message.chat.type not in SUPPORTED_CHAT_TYPES:
+        await callback.answer("Магазин доступен в группе.", show_alert=True)
+        return
+
+    parts = callback.data.split(":", 3)
+    if len(parts) == 4 and parts[2].isdigit():
+        owner_id = int(parts[2])
+        item_key = parts[3]
+    else:
+        owner_id = callback.from_user.id
+        item_key = callback.data.split(":", 2)[2]
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+
+    item = DIG_SHOP_ITEMS.get(item_key)
+    if item is None:
+        await callback.answer("Предмет не найден.", show_alert=True)
+        return
+
+    chat_id = callback.message.chat.id
+    player = db.get_dig_player(chat_id, callback.from_user.id)
+    if player is None:
+        await callback.answer("Сначала зарегистрируйся.", show_alert=True)
+        return
+
+    if dig_purchase_is_duplicate(chat_id, callback.from_user.id, item_key, callback.message.message_id):
+        await callback.answer("Покупка уже обрабатывается.", show_alert=True)
+        return
+
+    name, price, _ = item
+    now = datetime.now(timezone.utc)
+    result = f"Куплено: <b>{escape(name)}</b>."
+    if item_key == "tea":
+        if not db.spend_dig_coins(chat_id, callback.from_user.id, price):
+            await callback.answer("Не хватает котоинов.", show_alert=True)
+            return
+        player = db.get_dig_player(chat_id, callback.from_user.id)
+        if player is None:
+            await callback.answer("Игрок не найден.", show_alert=True)
+            return
+        luck = refreshed_dig_luck(player.luck, player.last_luck_at, now)
+        db.set_dig_luck(chat_id, callback.from_user.id, min(100, luck + 20), now.isoformat(timespec="seconds"))
+        result = f"Чай выпит. Удача восстановлена до <b>{min(100, luck + 20)}</b>/100."
+    elif item_key == "prank":
+        if not db.spend_dig_coins(chat_id, callback.from_user.id, price):
+            await callback.answer("Не хватает котоинов.", show_alert=True)
+            return
+        prank_text = f"{escape(dig_player_name(callback.from_user.username, callback.from_user.full_name))} оформил шахтерскую проверку. Кто-то явно копает не туда."
+        try:
+            await callback.message.answer(prank_text)
+        except (TelegramBadRequest, TelegramForbiddenError) as exc:
+            db.add_dig_coins(chat_id, callback.from_user.id, price)
+            await callback.answer("Не получилось отправить подставу, котоины возвращены.", show_alert=True)
+            await safe_edit(
+                callback,
+                "Не получилось отправить подставу, котоины возвращены.\n"
+                f"<code>{escape(str(exc))}</code>",
+                reply_markup=dig_shop_menu(callback.from_user.id, dig_shop_items_for_keyboard()),
+            )
+            return
+        result = "Подстава куплена и отправлена в чат."
+    else:
+        purchase_status = db.purchase_dig_item(
+            chat_id,
+            callback.from_user.id,
+            item_key,
+            price,
+            quantity=1,
+            unique=item_key == "title_badge",
+        )
+        if purchase_status == "owned":
+            await callback.answer("Кличка уже куплена.", show_alert=True)
+            return
+        if purchase_status == "no_coins":
+            await callback.answer("Не хватает котоинов.", show_alert=True)
+            return
+
+    updated = db.get_dig_player(chat_id, callback.from_user.id)
+    achievement_text = award_dig_achievement(chat_id, callback.from_user.id, "first_purchase")
+    items = dig_items_map(chat_id, callback.from_user.id)
+    achievement_block = f"\n\n<b>Достижение:</b>\n{escape(achievement_text)}" if achievement_text else ""
+    await safe_edit(
+        callback,
+        f"{result}\n\n"
+        f"Котоины: <b>{updated.coins if updated else 0}</b>\n\n"
+        f"<b>Активные эффекты:</b>\n{escape(dig_effects_text(items))}"
+        f"{achievement_block}",
+        reply_markup=dig_shop_menu(callback.from_user.id, dig_shop_items_for_keyboard()),
+    )
+    await callback.answer("Куплено")
+
+
 @router.callback_query(F.data.startswith("feedback:reply:"))
 async def cb_feedback_reply(callback: CallbackQuery, state: FSMContext) -> None:
     if not is_bot_admin(callback.from_user.id):
@@ -1120,6 +1685,8 @@ async def cb_restart_confirm(callback: CallbackQuery) -> None:
         await callback.answer("Перезагрузка доступна только администратору бота.", show_alert=True)
         return
 
+    if callback.message:
+        remember_restart_panel_chat(callback.message.chat.id)
     await safe_edit(callback, "Перезапускаюсь...", reply_markup=None)
     await callback.answer()
     asyncio.create_task(restart_process())
@@ -1315,10 +1882,6 @@ async def cb_action(callback: CallbackQuery, state: FSMContext) -> None:
             reply_markup=back_to_chat_menu(chat_id),
         )
     elif action == "quiet":
-        if not is_bot_admin(callback.from_user.id):
-            await callback.answer("Настройка доступна только администратору бота.", show_alert=True)
-            return
-
         settings = db.get_quiet_settings(chat_id)
         text_preview = preview_html(settings.reply_text or "{user} затих на <b>{minutes}</b> мин.{reason_line}")
         media_text = settings.media_type or "не выбрано"
@@ -1460,9 +2023,6 @@ async def cb_quiet(callback: CallbackQuery, state: FSMContext) -> None:
     chat = await require_selected_admin(callback, chat_id)
     if chat is None:
         return
-    if not is_bot_admin(callback.from_user.id):
-        await callback.answer("Настройка доступна только администратору бота.", show_alert=True)
-        return
 
     if action == "text":
         await state.set_state(AdminInput.set_quiet_text)
@@ -1481,6 +2041,10 @@ async def cb_quiet(callback: CallbackQuery, state: FSMContext) -> None:
             reply_markup=back_to_chat_menu(chat_id),
         )
     elif action == "media":
+        if not is_bot_admin(callback.from_user.id):
+            await callback.answer("Медиа может менять только администратор бота.", show_alert=True)
+            return
+
         await state.set_state(AdminInput.set_quiet_media)
         await state.update_data(chat_id=chat_id)
         await safe_edit(
@@ -1489,7 +2053,25 @@ async def cb_quiet(callback: CallbackQuery, state: FSMContext) -> None:
             "Отправь сюда гиф, голосовое или аудио. Бот сохранит его и будет отправлять после команды затихни.",
             reply_markup=back_to_chat_menu(chat_id),
         )
+    elif action == "manual":
+        await state.set_state(AdminInput.set_quiet_manual)
+        await state.update_data(chat_id=chat_id)
+        await safe_edit(
+            callback,
+            f"Группа: <b>{mention_chat(chat)}</b>\n\n"
+            "Кого замутить через бота?\n\n"
+            "Формат:\n"
+            "<code>@username 10 - причина</code>\n"
+            "или\n"
+            "<code>123456789 10 - причина</code>\n\n"
+            "Причина необязательна. Число - минуты.",
+            reply_markup=back_to_chat_menu(chat_id),
+        )
     elif action == "clear_media":
+        if not is_bot_admin(callback.from_user.id):
+            await callback.answer("Медиа может менять только администратор бота.", show_alert=True)
+            return
+
         db.clear_quiet_media(chat_id, callback.from_user.id)
         settings = db.get_quiet_settings(chat_id)
         await safe_edit(
@@ -1755,6 +2337,10 @@ async def ui_set_quiet_media(message: Message, state: FSMContext) -> None:
     chat_id = await require_state_admin(message, state)
     if chat_id is None:
         return
+    if not message.from_user or not is_bot_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("Медиа может менять только администратор бота.", reply_markup=main_menu())
+        return
 
     media = quiet_media_from_message(message)
     if not media:
@@ -1767,6 +2353,85 @@ async def ui_set_quiet_media(message: Message, state: FSMContext) -> None:
     await message.answer(
         f"Медиа для команды затихни сохранено: <code>{escape(media_type)}</code>.",
         reply_markup=quiet_menu(chat_id, True),
+    )
+
+
+@router.message(AdminInput.set_quiet_manual, F.chat.type == "private")
+async def ui_set_quiet_manual(message: Message, state: FSMContext) -> None:
+    chat_id = await require_state_admin(message, state)
+    if chat_id is None:
+        return
+
+    target, minutes, reason = parse_quiet_manual_payload(message.text)
+    if not target or not minutes:
+        await message.answer(
+            "Формат: <code>@username 10 - причина</code> или <code>123456789 10 - причина</code>."
+        )
+        return
+
+    target_id, target_name, error = await resolve_quiet_panel_target(message.bot, chat_id, target)
+    if error:
+        await message.answer(error)
+        return
+    if not target_id or not target_name:
+        return
+    if await is_chat_admin(message.bot, chat_id, target_id):
+        await message.answer("Администратора этой командой ограничивать нельзя.")
+        return
+
+    minutes = max(1, min(10080, minutes))
+    until_date = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    try:
+        await message.bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=target_id,
+            permissions=ChatPermissions(
+                can_send_messages=False,
+                can_send_audios=False,
+                can_send_documents=False,
+                can_send_photos=False,
+                can_send_videos=False,
+                can_send_video_notes=False,
+                can_send_voice_notes=False,
+                can_send_polls=False,
+                can_send_other_messages=False,
+                can_add_web_page_previews=False,
+                can_react_to_messages=False,
+            ),
+            until_date=until_date,
+            use_independent_chat_permissions=True,
+        )
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        await message.answer(
+            "Не получилось ограничить пользователя. Проверь, что бот админ и может ограничивать участников.\n"
+            f"<code>{escape(str(exc))}</code>",
+            reply_markup=quiet_menu(chat_id, bool(db.get_quiet_settings(chat_id).media_file_id)),
+        )
+        return
+
+    settings = db.get_quiet_settings(chat_id)
+    text = render_quiet_reply(settings.reply_text, target_name, minutes, reason)
+    try:
+        sent = await message.bot.send_message(chat_id, text, disable_web_page_preview=True)
+        await send_quiet_media_to_chat(
+            message.bot,
+            chat_id,
+            settings.media_type,
+            settings.media_file_id,
+            reply_to_message_id=sent.message_id,
+        )
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        await message.answer(
+            "Мут поставлен, но сообщение в чат отправить не получилось.\n"
+            f"<code>{escape(str(exc))}</code>",
+            reply_markup=quiet_menu(chat_id, bool(settings.media_file_id)),
+        )
+        return
+
+    await state.clear()
+    await message.answer(
+        f"Готово: {escape(target_name)} затих на <b>{minutes}</b> мин.",
+        reply_markup=quiet_menu(chat_id, bool(settings.media_file_id)),
     )
 
 
@@ -2007,7 +2672,10 @@ async def handle_alarm_mode(message: Message) -> bool:
                     db.save_alarm_reactions(message.chat.id, current_reactions)
             await set_chat_available_reactions(message.bot, message.chat.id, [])
         except (TelegramBadRequest, TelegramForbiddenError):
-            reaction_warning = "\n\nРеакции не удалось отключить. Проверь, что бот админ с правом менять настройки группы."
+            reaction_warning = (
+                "\n\nРеакции не удалось отключить настройкой группы. "
+                "Пока тревога включена, бот будет пытаться удалять новые реакции."
+            )
 
         await safe_reply(message, (settings.alarm_text or "Тревога включена: медиа и реакции отключены.") + reaction_warning)
         return True
@@ -2038,12 +2706,37 @@ async def handle_alarm_mode(message: Message) -> bool:
                 saved_reactions if saved_reactions is not None else DEFAULT_AVAILABLE_REACTIONS,
             )
         except (TelegramBadRequest, TelegramForbiddenError):
-            reaction_warning = "\n\nРеакции не удалось включить. Проверь права бота на изменение настроек группы."
+            reaction_warning = "\n\nРеакции не удалось вернуть настройкой группы."
 
         await safe_reply(message, (settings.clear_text or "Отбой: медиа и реакции снова включены.") + reaction_warning)
         return True
 
     return False
+
+
+@router.message_reaction()
+async def delete_reactions_during_alarm(event: MessageReactionUpdated, bot: Bot) -> None:
+    if event.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+
+    settings = db.get_alarm_settings(event.chat.id)
+    if not settings.enabled or not settings.permissions_json or not event.new_reaction:
+        return
+
+    user_id = event.user.id if event.user else None
+    actor_chat_id = event.actor_chat.id if event.actor_chat else None
+    if user_id is None and actor_chat_id is None:
+        return
+
+    try:
+        await bot.delete_message_reaction(
+            chat_id=event.chat.id,
+            message_id=event.message_id,
+            user_id=user_id,
+            actor_chat_id=actor_chat_id,
+        )
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+        return
 
 
 async def handle_birthdays(message: Message) -> None:
@@ -2284,7 +2977,13 @@ async def help_ru(message: Message) -> None:
         "/удалитьтригер слово\n"
         "/списоктригеров\n"
         "/участники\n"
-        "/каналы",
+        "/каналы\n"
+        "ролл орел / ролл решка\n"
+        "копай\n"
+        "сумка\n"
+        "достижения\n"
+        "топ копания\n"
+        "топ монет",
         reply_markup=main_menu() if message.chat.type == "private" else None,
     )
 
@@ -2341,6 +3040,301 @@ async def giveaway_top(message: Message) -> None:
     await safe_reply(message, "\n".join(lines))
 
 
+@router.message(F.text.casefold() == "копай")
+async def dig_command(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+    if not message.from_user:
+        return
+
+    await remember_sender(message)
+    player = db.get_dig_player(message.chat.id, message.from_user.id)
+    if player is None:
+        await temporary_reply(
+            message,
+            "Ты еще не зарегистрирован в раскопках. Нажми кнопку регистрации, потом снова напиши <code>копай</code>.",
+            reply_markup=dig_register_menu(),
+        )
+        return
+
+    now = datetime.now(timezone.utc)
+    if player.last_dig_at:
+        last_dig = datetime.fromisoformat(player.last_dig_at)
+        next_dig = last_dig + DIG_COOLDOWN
+        if now < next_dig:
+            remaining = int((next_dig - now).total_seconds() // 60) + 1
+            hours = remaining // 60
+            minutes = remaining % 60
+            await temporary_reply(message, f"Лопата отдыхает. До следующей раскопки: <b>{hours} ч {minutes} мин</b>.")
+            return
+
+    luck_before = refreshed_dig_luck(player.luck, player.last_luck_at, now)
+    luck_after = max(0, luck_before - DIG_LUCK_COST)
+    items = dig_items_map(message.chat.id, message.from_user.id)
+    used_effects: list[str] = []
+
+    helmet_used = items.get("helmet", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "helmet")
+    shovel_used = items.get("shovel", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "shovel")
+    flashlight_used = items.get("flashlight", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "flashlight")
+    bucket_used = items.get("bucket", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "bucket")
+    effective_luck = min(100, luck_before + (5 if helmet_used else 0))
+    if helmet_used:
+        used_effects.append("Каска шахтера: +5 удачи")
+    if shovel_used:
+        used_effects.append("Крепкая лопата: риск обвала снижен")
+    if flashlight_used:
+        used_effects.append("Фонарик: +10% к шансам раскопки")
+    if bucket_used:
+        used_effects.append("Премиум ведро: +25% котоинов")
+
+    dug = 0
+    stopped_by_stone = False
+    for meter, chance in enumerate(DIG_SUCCESS_CHANCES, start=1):
+        actual_chance = min(95, chance + (10 if flashlight_used else 0))
+        if secrets.randbelow(100) < actual_chance:
+            dug = meter
+            continue
+        stopped_by_stone = True
+        break
+
+    collapse_depth = 0
+    insurance_used = False
+    if stopped_by_stone and dug == 0 and items.get("insurance", 0) > 0:
+        if db.consume_dig_item(message.chat.id, message.from_user.id, "insurance"):
+            insurance_used = True
+            dug = 1
+            used_effects.append("Страховка: первый метр засчитан")
+
+    collapse_chance = max(0, 100 - effective_luck)
+    if shovel_used:
+        collapse_chance //= 2
+    if dug > 0 and collapse_chance and secrets.randbelow(100) < collapse_chance:
+        if items.get("safe", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "safe"):
+            used_effects.append("Сейф: обвал остановлен")
+        else:
+            collapse_depth = 1 + secrets.randbelow(dug)
+            dug = max(0, dug - collapse_depth)
+
+    coins = dig_coin_reward(dug)
+    if bucket_used:
+        coins = (coins * 125 + 99) // 100
+    db.update_dig_player_after_dig(
+        chat_id=message.chat.id,
+        user_id=message.from_user.id,
+        username=message.from_user.username,
+        full_name=message.from_user.full_name,
+        coins_delta=coins,
+        depth_delta=dug,
+        best_session_depth=dug,
+        luck=luck_after,
+        last_luck_at=now.isoformat(timespec="seconds"),
+        last_dig_at=now.isoformat(timespec="seconds"),
+    )
+
+    total_depth = player.total_depth + dug
+    achievements = check_dig_achievements(
+        message.chat.id,
+        message.from_user.id,
+        player,
+        dug,
+        coins,
+        collapse_depth,
+        stopped_by_stone,
+    )
+    lines = [f"<b>{escape(dig_display_name(message.chat.id, message.from_user.id, message.from_user.username, message.from_user.full_name))} копает...</b>"]
+    if stopped_by_stone and dug == 0 and collapse_depth == 0 and not insurance_used:
+        lines.append("Ты наткнулся на большой камень, попробуй в следующий раз.")
+    elif stopped_by_stone:
+        lines.append(f"Камень остановил раскопку. Удалось пройти <b>{dug}</b> м.")
+    else:
+        lines.append(f"Редкая удача: ты прошел все <b>{dug}</b> м за вылазку.")
+
+    if collapse_depth:
+        lines.append(f"Обвал срезал <b>{collapse_depth}</b> м прогресса этой раскопки.")
+    if used_effects:
+        lines.append("\n<b>Сработали эффекты:</b>")
+        lines.extend(escape(effect) for effect in used_effects)
+
+    lines.extend(
+        [
+            f"Получено: <b>{coins}</b> котоинов.",
+            f"Общая глубина: <b>{total_depth}</b> м.",
+            f"Удача: <b>{luck_before}</b> → <b>{luck_after}</b>.",
+        ]
+    )
+    if achievements:
+        lines.append("\n<b>Новые достижения:</b>")
+        lines.extend(escape(item) for item in achievements)
+    await temporary_reply(message, "\n".join(lines))
+
+
+@router.message(F.text.casefold() == "сумка")
+async def dig_bag(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+    if not message.from_user:
+        return
+
+    await remember_sender(message)
+    player = db.get_dig_player(message.chat.id, message.from_user.id)
+    if player is None:
+        await temporary_reply(
+            message,
+            "Ты еще не зарегистрирован в раскопках. Нажми кнопку регистрации, потом снова напиши <code>сумка</code>.",
+            reply_markup=dig_register_menu(),
+        )
+        return
+
+    now = datetime.now(timezone.utc)
+    luck = refreshed_dig_luck(player.luck, player.last_luck_at, now)
+    cooldown = "можно копать"
+    if player.last_dig_at:
+        next_dig = datetime.fromisoformat(player.last_dig_at) + DIG_COOLDOWN
+        if now < next_dig:
+            remaining = int((next_dig - now).total_seconds() // 60) + 1
+            cooldown = f"через {remaining // 60} ч {remaining % 60} мин"
+    items = dig_items_map(message.chat.id, message.from_user.id)
+
+    await temporary_reply(
+        message,
+        "<b>Сумка шахтера</b>\n"
+        f"Игрок: {escape(dig_display_name(player.chat_id, player.user_id, player.username, player.full_name))}\n"
+        f"Котоины: <b>{player.coins}</b>\n"
+        f"Общая глубина: <b>{player.total_depth}</b> м\n"
+        f"Лучшая раскопка: <b>{player.best_session_depth}</b> м\n"
+        f"Удача: <b>{luck}</b>/100\n"
+        f"Копать: <b>{escape(cooldown)}</b>\n\n"
+        f"<b>Активные эффекты:</b>\n{escape(dig_effects_text(items))}",
+        reply_markup=dig_bag_menu(message.from_user.id),
+    )
+
+
+@router.message(F.text.casefold() == "достижения")
+async def dig_achievements_command(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+    if not message.from_user:
+        return
+
+    await remember_sender(message)
+    player = db.get_dig_player(message.chat.id, message.from_user.id)
+    if player is None:
+        await temporary_reply(
+            message,
+            "Ты еще не зарегистрирован в раскопках. Нажми кнопку регистрации.",
+            reply_markup=dig_register_menu(),
+        )
+        return
+
+    await temporary_reply(
+        message,
+        dig_achievements_text(message.chat.id, message.from_user.id),
+        reply_markup=dig_bag_menu(message.from_user.id),
+    )
+
+
+@router.message(F.text.regexp(re.compile(r"^топ\s+(копания|комания)$", re.IGNORECASE)))
+async def dig_depth_top(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+
+    await remember_sender(message)
+    players = db.top_dig_depth(message.chat.id, limit=10)
+    if not players:
+        await safe_reply(message, "Топ копания пока пуст. Сначала зарегистрируйтесь и напишите: копай")
+        return
+
+    lines = ["<b>Топ копания:</b>"]
+    for index, player in enumerate(players, start=1):
+        lines.append(
+            f"{index}. {escape(dig_display_name(player.chat_id, player.user_id, player.username, player.full_name))} - "
+            f"<b>{player.total_depth}</b> м"
+        )
+    await safe_reply(message, "\n".join(lines))
+
+
+@router.message(F.text.casefold() == "топ монет")
+async def dig_coins_top(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+
+    await remember_sender(message)
+    players = db.top_dig_coins(message.chat.id, limit=10)
+    if not players:
+        await safe_reply(message, "Топ монет пока пуст. Сначала зарегистрируйтесь и напишите: копай")
+        return
+
+    lines = ["<b>Топ монет:</b>"]
+    for index, player in enumerate(players, start=1):
+        lines.append(
+            f"{index}. {escape(dig_display_name(player.chat_id, player.user_id, player.username, player.full_name))} - "
+            f"<b>{player.coins}</b> котоинов"
+        )
+    await safe_reply(message, "\n".join(lines))
+
+
+@router.message(F.text.regexp(re.compile(r"^(ролл|рол|roll)\s+(ор[её]л|решка)$", re.IGNORECASE)))
+async def coin_roll(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+    if not message.from_user:
+        return
+
+    await remember_sender(message)
+    parts = (message.text or "").strip().split()
+    if len(parts) != 2:
+        return
+
+    guess = parts[1].casefold().replace("ё", "е")
+    coin = secrets.choice(["орел", "решка"])
+    name = f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name
+
+    if guess == coin:
+        await safe_reply(
+            message,
+            f"Монета: <b>{coin}</b>.\n{escape(name)} угадал, красавчик.",
+        )
+        return
+
+    if await is_chat_admin(message.bot, message.chat.id, message.from_user.id):
+        await safe_reply(
+            message,
+            f"Монета: <b>{coin}</b>.\n{escape(name)} не угадал, но админов не мутим.",
+        )
+        return
+
+    player = db.get_dig_player(message.chat.id, message.from_user.id)
+    if player and db.consume_dig_item(message.chat.id, message.from_user.id, "cursed_pick"):
+        await safe_reply(
+            message,
+            f"Монета: <b>{coin}</b>.\n{escape(name)} не угадал, но проклятая кирка забрала мут на себя.",
+        )
+        return
+
+    until_date = datetime.now(timezone.utc) + timedelta(minutes=30)
+    try:
+        await message.bot.restrict_chat_member(
+            chat_id=message.chat.id,
+            user_id=message.from_user.id,
+            permissions=ChatPermissions(can_send_messages=False),
+            until_date=until_date,
+            use_independent_chat_permissions=True,
+        )
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        await safe_reply(
+            message,
+            f"Монета: <b>{coin}</b>.\n"
+            "Не угадал, но замутить не получилось. Проверь права бота.\n"
+            f"<code>{escape(str(exc))}</code>",
+        )
+        return
+
+    await safe_reply(
+        message,
+        f"Монета: <b>{coin}</b>.\n{escape(name)} не угадал. Мут на <b>30</b> мин.",
+    )
+
+
 @router.message(F.text.regexp(re.compile(r"^roll\s+mute$", re.IGNORECASE)))
 async def roll_mute(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
@@ -2365,21 +3359,57 @@ async def roll_mute(message: Message) -> None:
         await safe_reply(message, "Некого мутить: бот еще не видел участников с @username.")
         return
 
-    picked = random.choice(candidates)
+    random.shuffle(candidates)
     until_date = now + timedelta(minutes=settings.mute_minutes)
-    try:
-        await message.bot.restrict_chat_member(
-            chat_id=message.chat.id,
-            user_id=picked.user_id,
-            permissions=ChatPermissions(can_send_messages=False),
-            until_date=until_date,
-            use_independent_chat_permissions=True,
-        )
-    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+    picked = None
+    last_error = None
+    for candidate in candidates:
+        try:
+            member = await message.bot.get_chat_member(message.chat.id, candidate.user_id)
+        except (TelegramBadRequest, TelegramForbiddenError) as exc:
+            last_error = exc
+            continue
+
+        status = member_status_text(member.status)
+        if status in {"left", "kicked"} or member.status in ADMIN_STATUSES or status in ADMIN_STATUS_TEXTS:
+            continue
+
+        try:
+            await message.bot.restrict_chat_member(
+                chat_id=message.chat.id,
+                user_id=candidate.user_id,
+                permissions=ChatPermissions(can_send_messages=False),
+                until_date=until_date,
+                use_independent_chat_permissions=True,
+            )
+            picked = candidate
+            break
+        except TelegramBadRequest as exc:
+            last_error = exc
+            description = str(exc).casefold()
+            if "member not found" in description or "participant_id_invalid" in description:
+                continue
+            await safe_reply(
+                message,
+                "Не получилось замутить участника. Проверь, что бот админ и может ограничивать участников.\n"
+                f"<code>{escape(str(exc))}</code>",
+            )
+            return
+        except TelegramForbiddenError as exc:
+            last_error = exc
+            await safe_reply(
+                message,
+                "Не получилось замутить участника. Проверь, что бот админ и может ограничивать участников.\n"
+                f"<code>{escape(str(exc))}</code>",
+            )
+            return
+
+    if picked is None:
+        detail = f"\nПоследняя ошибка: <code>{escape(str(last_error))}</code>" if last_error else ""
         await safe_reply(
             message,
-            "Не получилось замутить участника. Проверь, что бот админ и может ограничивать участников.\n"
-            f"<code>{escape(str(exc))}</code>",
+            "Не нашел подходящего участника для roll mute: запомненные пользователи могли выйти из чата или оказаться админами."
+            f"{detail}",
         )
         return
 
@@ -2715,7 +3745,6 @@ async def auto_reply_message(message: Message) -> None:
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    acquire_single_instance_lock()
     config = load_config()
 
     global db
@@ -2723,6 +3752,9 @@ async def main() -> None:
     BOT_ADMIN_IDS = config.bot_admin_ids
     db = Database(config.db_path)
     db.init()
+    awarded = backfill_dig_achievements()
+    if awarded:
+        logging.info("Backfilled dig achievements: %s", awarded)
 
     bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher()
@@ -2731,7 +3763,8 @@ async def main() -> None:
 
     try:
         await bot.get_me()
-        await dispatcher.start_polling(bot, allowed_updates=["message", "callback_query"])
+        await send_restart_panel_if_needed(bot)
+        await dispatcher.start_polling(bot, allowed_updates=["message", "callback_query", "message_reaction"])
     except TelegramNotFound as exc:
         raise RuntimeError("Telegram rejected BOT_TOKEN. Check .env and paste the real token from BotFather.") from exc
     finally:
