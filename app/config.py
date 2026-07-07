@@ -10,8 +10,8 @@ class Config:
     bot_token: str
     db_path: str
     bot_admin_ids: set[int]
-    openai_api_key: str | None
-    openai_model: str
+    owner_id: int | None
+    alerts_api_token: str | None
 
 
 def load_config() -> Config:
@@ -30,10 +30,13 @@ def load_config() -> Config:
             if item:
                 admin_ids.add(int(item))
 
+    owner_id_raw = os.getenv("OWNER_ID", "").strip()
+    owner_id = int(owner_id_raw) if owner_id_raw else (min(admin_ids) if admin_ids else None)
+
     return Config(
         bot_token=token,
         db_path=os.getenv("DB_PATH", "bot.sqlite3").strip() or "bot.sqlite3",
         bot_admin_ids=admin_ids,
-        openai_api_key=os.getenv("OPENAI_API_KEY", "").strip() or None,
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip() or "gpt-4.1-mini",
+        owner_id=owner_id,
+        alerts_api_token=os.getenv("ALERTS_API_TOKEN", "").strip() or None,
     )

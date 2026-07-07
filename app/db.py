@@ -1,9 +1,13 @@
 import sqlite3
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 import json
+
+
+DIG_GLOBAL_CHAT_ID = 0
 
 
 def utc_now() -> str:
@@ -15,6 +19,8 @@ class AutoReply:
     chat_id: int
     username: str
     text: str
+    media_type: str | None
+    media_file_id: str | None
     updated_by: int | None
     updated_at: str
 
@@ -33,6 +39,8 @@ class TriggerReply:
     chat_id: int
     trigger: str
     text: str
+    media_type: str | None
+    media_file_id: str | None
     updated_by: int | None
     updated_at: str
 
@@ -48,11 +56,33 @@ class SeenUser:
 
 
 @dataclass(frozen=True)
+class ParticipantActivity:
+    chat_id: int
+    user_id: int
+    username: str | None
+    full_name: str
+    messages_count: int
+
+
+@dataclass(frozen=True)
 class ChatTopic:
     chat_id: int
     thread_id: int
     title: str
     updated_at: str
+
+
+@dataclass(frozen=True)
+class AuditLog:
+    id: int
+    chat_id: int | None
+    actor_id: int | None
+    actor_username: str | None
+    actor_name: str
+    source: str
+    action: str
+    details: str
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -100,6 +130,58 @@ class StarPayment:
 
 
 @dataclass(frozen=True)
+class PendingStarMessage:
+    payload: str
+    user_id: int
+    chat_id: int
+    text: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class UserLoginRequest:
+    login_id: str
+    secret_hash: str
+    user_id: int | None
+    username: str | None
+    full_name: str | None
+    created_at: str
+    expires_at: str
+    approved_at: str | None
+    consumed_at: str | None
+
+
+@dataclass(frozen=True)
+class UserSession:
+    token_hash: str
+    user_id: int
+    username: str | None
+    full_name: str
+    created_at: str
+    expires_at: str
+    revoked_at: str | None
+
+
+@dataclass(frozen=True)
+class UserSubscription:
+    user_id: int
+    status: str
+    expires_at: str | None
+    telegram_payment_charge_id: str | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class AdminFeaturePermission:
+    chat_id: int
+    user_id: int
+    feature: str
+    allowed: int
+    updated_by: int | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class Quote:
     id: int
     chat_id: int
@@ -118,6 +200,48 @@ class Birthday:
     text: str
     added_by: int | None
     created_at: str
+
+
+@dataclass(frozen=True)
+class Advertisement:
+    id: int
+    chat_id: int
+    text: str
+    enabled: int
+    start_time: str
+    interval_minutes: int
+    duration_type: str
+    start_mode: str
+    scheduled_at: str | None
+    topic_thread_id: int | None
+    first_sent_at: str | None
+    last_sent_at: str | None
+    last_error: str | None
+    created_by: int | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class AdvertisementAttachment:
+    id: int
+    advertisement_id: int
+    media_type: str
+    file_id: str
+    filename: str
+    position: int
+
+
+@dataclass(frozen=True)
+class AdvertisementSettings:
+    chat_id: int
+    enabled: int
+    start_time: str
+    interval_minutes: int
+    next_ad_index: int
+    last_sent_at: str | None
+    updated_by: int | None
+    updated_at: str
 
 
 @dataclass(frozen=True)
@@ -158,6 +282,18 @@ class QuietSettings:
 
 
 @dataclass(frozen=True)
+class QuietAdmin:
+    chat_id: int
+    user_id: int
+    username: str | None
+    full_name: str
+    reason: str
+    until_at: str
+    created_by: int | None
+    created_at: str
+
+
+@dataclass(frozen=True)
 class DigPlayer:
     chat_id: int
     user_id: int
@@ -194,8 +330,11 @@ class Database:
     def __init__(self, path: str) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path)
+        self._conn = sqlite3.connect(self.path, timeout=30)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("pragma journal_mode=WAL")
+        self._conn.execute("pragma busy_timeout=30000")
+        self._conn.execute("pragma synchronous=NORMAL")
 
     def close(self) -> None:
         self._conn.close()
@@ -215,6 +354,8 @@ class Database:
                 chat_id integer not null,
                 username text not null,
                 text text not null,
+                media_type text,
+                media_file_id text,
                 updated_by integer,
                 updated_at text not null,
                 primary key (chat_id, username),
@@ -225,6 +366,8 @@ class Database:
                 chat_id integer not null,
                 trigger text not null,
                 text text not null,
+                media_type text,
+                media_file_id text,
                 updated_by integer,
                 updated_at text not null,
                 primary key (chat_id, trigger),
@@ -240,6 +383,16 @@ class Database:
                 updated_at text not null,
                 primary key (chat_id, user_id),
                 foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists participant_activity_daily (
+                chat_id integer not null,
+                user_id integer not null,
+                activity_date text not null,
+                messages_count integer not null default 0,
+                updated_at text not null,
+                primary key (chat_id, user_id, activity_date),
+                foreign key (chat_id, user_id) references seen_users(chat_id, user_id) on delete cascade
             );
 
             create table if not exists daily_picks (
@@ -260,6 +413,47 @@ class Database:
                 primary key (chat_id, thread_id),
                 foreign key (chat_id) references chats(chat_id) on delete cascade
             );
+
+            create table if not exists audit_logs (
+                id integer primary key autoincrement,
+                chat_id integer,
+                actor_id integer,
+                actor_username text,
+                actor_name text not null default '',
+                source text not null,
+                action text not null,
+                details text not null default '',
+                created_at text not null
+            );
+
+            create table if not exists device_events (
+                id integer primary key autoincrement,
+                app text not null,
+                event_type text not null,
+                event_name text not null,
+                user_id integer,
+                device_id text,
+                app_version text,
+                android_version text,
+                sdk integer,
+                manufacturer text,
+                model text,
+                screen text,
+                density text,
+                locale text,
+                timezone text,
+                network_type text,
+                endpoint text,
+                status_code integer,
+                duration_ms integer,
+                error_type text,
+                message text,
+                metadata_json text,
+                created_at text not null
+            );
+
+            create index if not exists idx_device_events_created_at on device_events(created_at);
+            create index if not exists idx_device_events_app_type on device_events(app, event_type);
 
             create table if not exists giveaway_settings (
                 chat_id integer primary key,
@@ -289,6 +483,24 @@ class Database:
                 reactions_json text,
                 alarm_text text,
                 clear_text text,
+                updated_by integer,
+                updated_at text not null,
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists alarm_api_settings (
+                chat_id integer primary key,
+                enabled integer not null default 0,
+                last_status text,
+                last_notified_status text,
+                updated_by integer,
+                updated_at text not null,
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists alarm_restriction_settings (
+                chat_id integer primary key,
+                enabled integer not null default 1,
                 updated_by integer,
                 updated_at text not null,
                 foreign key (chat_id) references chats(chat_id) on delete cascade
@@ -324,6 +536,65 @@ class Database:
                 created_at text not null
             );
 
+            create table if not exists pending_star_messages (
+                payload text primary key,
+                user_id integer not null,
+                chat_id integer not null,
+                text text not null,
+                created_at text not null,
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists user_login_requests (
+                login_id text primary key,
+                secret_hash text not null,
+                user_id integer,
+                username text,
+                full_name text,
+                created_at text not null,
+                expires_at text not null,
+                approved_at text,
+                consumed_at text
+            );
+
+            create table if not exists user_sessions (
+                token_hash text primary key,
+                user_id integer not null,
+                username text,
+                full_name text not null,
+                created_at text not null,
+                expires_at text not null,
+                revoked_at text
+            );
+
+            create table if not exists user_subscriptions (
+                user_id integer primary key,
+                status text not null,
+                expires_at text,
+                telegram_payment_charge_id text,
+                updated_at text not null
+            );
+
+            create table if not exists admin_feature_permissions (
+                user_id integer not null,
+                feature text not null,
+                allowed integer not null default 0,
+                updated_by integer,
+                updated_at text not null,
+                primary key (user_id, feature)
+            );
+
+            create table if not exists chat_admin_feature_permissions (
+                chat_id integer not null,
+                user_id integer not null,
+                feature text not null,
+                allowed integer not null default 0,
+                updated_by integer,
+                updated_at text not null,
+                primary key (chat_id, user_id, feature),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
             create table if not exists quotes (
                 id integer primary key autoincrement,
                 chat_id integer not null,
@@ -343,6 +614,48 @@ class Database:
                 added_by integer,
                 created_at text not null,
                 foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists advertisements (
+                id integer primary key autoincrement,
+                chat_id integer not null,
+                text text not null,
+                enabled integer not null default 0,
+                start_time text not null default '09:00',
+                interval_minutes integer not null default 180,
+                duration_type text not null default 'unlimited',
+                start_mode text not null default 'scheduled',
+                scheduled_at text,
+                topic_thread_id integer,
+                first_sent_at text,
+                last_sent_at text,
+                last_error text,
+                created_by integer,
+                created_at text not null,
+                updated_at text not null,
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists advertisement_settings (
+                chat_id integer primary key,
+                enabled integer not null default 0,
+                start_time text not null default '09:00',
+                interval_minutes integer not null default 180,
+                next_ad_index integer not null default 0,
+                last_sent_at text,
+                updated_by integer,
+                updated_at text not null,
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists advertisement_attachments (
+                id integer primary key autoincrement,
+                advertisement_id integer not null,
+                media_type text not null,
+                file_id text not null,
+                filename text not null default '',
+                position integer not null default 0,
+                foreign key (advertisement_id) references advertisements(id) on delete cascade
             );
 
             create table if not exists birthday_sent (
@@ -391,6 +704,19 @@ class Database:
                 foreign key (chat_id) references chats(chat_id) on delete cascade
             );
 
+            create table if not exists quiet_admins (
+                chat_id integer not null,
+                user_id integer not null,
+                username text,
+                full_name text not null,
+                reason text not null default '',
+                until_at text not null,
+                created_by integer,
+                created_at text not null,
+                primary key (chat_id, user_id),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
             create table if not exists dig_players (
                 chat_id integer not null,
                 user_id integer not null,
@@ -426,10 +752,63 @@ class Database:
                 primary key (chat_id, user_id, achievement_key),
                 foreign key (chat_id, user_id) references dig_players(chat_id, user_id) on delete cascade
             );
+
+            create table if not exists dig_progress (
+                user_id integer primary key,
+                xp integer not null default 0,
+                level integer not null default 1,
+                streak integer not null default 0,
+                selected_route text not null default 'old_mine',
+                last_dig_date text,
+                updated_at text not null
+            );
+
+            create table if not exists dig_contracts (
+                user_id integer not null,
+                contract_date text not null,
+                contract_key text not null,
+                target integer not null,
+                progress integer not null default 0,
+                claimed integer not null default 0,
+                primary key (user_id, contract_date, contract_key)
+            );
+
+            create table if not exists dig_expeditions (
+                chat_id integer not null,
+                expedition_date text not null,
+                target integer not null,
+                progress integer not null default 0,
+                completed integer not null default 0,
+                primary key (chat_id, expedition_date)
+            );
+
+            create table if not exists dig_expedition_contributors (
+                chat_id integer not null,
+                expedition_date text not null,
+                user_id integer not null,
+                depth integer not null default 0,
+                rewarded integer not null default 0,
+                primary key (chat_id, expedition_date, user_id)
+            );
             """
         )
+        self._migrate_reply_media()
         self._migrate_alarm_settings()
+        self._migrate_alarm_api_settings()
+        self._migrate_advertisements()
+        self._migrate_global_dig_game()
         self._conn.commit()
+
+    def _migrate_reply_media(self) -> None:
+        for table in ("auto_replies", "trigger_replies"):
+            columns = {
+                row["name"]
+                for row in self._conn.execute(f"pragma table_info({table})").fetchall()
+            }
+            if "media_type" not in columns:
+                self._conn.execute(f"alter table {table} add column media_type text")
+            if "media_file_id" not in columns:
+                self._conn.execute(f"alter table {table} add column media_file_id text")
 
     def _migrate_alarm_settings(self) -> None:
         columns = {
@@ -442,6 +821,156 @@ class Database:
             self._conn.execute("alter table alarm_settings add column clear_text text")
         if "reactions_json" not in columns:
             self._conn.execute("alter table alarm_settings add column reactions_json text")
+
+    def _migrate_alarm_api_settings(self) -> None:
+        columns = {
+            row["name"]
+            for row in self._conn.execute("pragma table_info(alarm_api_settings)").fetchall()
+        }
+        if "last_notified_status" not in columns:
+            self._conn.execute("alter table alarm_api_settings add column last_notified_status text")
+
+    def _migrate_advertisements(self) -> None:
+        columns = {
+            row["name"]
+            for row in self._conn.execute("pragma table_info(advertisements)").fetchall()
+        }
+        additions = {
+            "enabled": "integer not null default 0",
+            "start_time": "text not null default '09:00'",
+            "interval_minutes": "integer not null default 180",
+            "duration_type": "text not null default 'unlimited'",
+            "start_mode": "text not null default 'scheduled'",
+            "scheduled_at": "text",
+            "topic_thread_id": "integer",
+            "first_sent_at": "text",
+            "last_sent_at": "text",
+            "last_error": "text",
+        }
+        added_schedule = False
+        for name, definition in additions.items():
+            if name not in columns:
+                self._conn.execute(f"alter table advertisements add column {name} {definition}")
+                added_schedule = True
+        if added_schedule:
+            self._conn.execute(
+                """
+                update advertisements
+                set enabled = coalesce((select enabled from advertisement_settings where chat_id = advertisements.chat_id), 0),
+                    start_time = coalesce((select start_time from advertisement_settings where chat_id = advertisements.chat_id), '09:00'),
+                    interval_minutes = coalesce((select interval_minutes from advertisement_settings where chat_id = advertisements.chat_id), 180),
+                    last_sent_at = (select last_sent_at from advertisement_settings where chat_id = advertisements.chat_id)
+                """
+            )
+
+    def _migrate_global_dig_game(self) -> None:
+        old_players = self._conn.execute(
+            """
+            select chat_id, user_id, username, full_name, coins, total_depth, best_session_depth,
+                   luck, last_luck_at, last_dig_at, created_at, updated_at
+            from dig_players
+            where chat_id != ?
+            """,
+            (DIG_GLOBAL_CHAT_ID,),
+        ).fetchall()
+        if not old_players:
+            return
+
+        players = self._conn.execute(
+            """
+            select chat_id, user_id, username, full_name, coins, total_depth, best_session_depth,
+                   luck, last_luck_at, last_dig_at, created_at, updated_at
+            from dig_players
+            order by updated_at
+            """
+        ).fetchall()
+        items = self._conn.execute(
+            "select user_id, item_key, quantity, updated_at from dig_items"
+        ).fetchall()
+        achievements = self._conn.execute(
+            "select user_id, achievement_key, created_at from dig_achievements"
+        ).fetchall()
+
+        merged_players: dict[int, dict] = {}
+        for row in players:
+            user_id = int(row["user_id"])
+            current = merged_players.get(user_id)
+            if current is None:
+                merged_players[user_id] = dict(row)
+                continue
+            current["coins"] += int(row["coins"])
+            current["total_depth"] += int(row["total_depth"])
+            current["best_session_depth"] = max(int(current["best_session_depth"]), int(row["best_session_depth"]))
+            current["created_at"] = min(current["created_at"], row["created_at"])
+            if row["updated_at"] >= current["updated_at"]:
+                current["username"] = row["username"]
+                current["full_name"] = row["full_name"]
+                current["luck"] = row["luck"]
+                current["last_luck_at"] = row["last_luck_at"]
+                current["updated_at"] = row["updated_at"]
+            if row["last_dig_at"] and (not current["last_dig_at"] or row["last_dig_at"] > current["last_dig_at"]):
+                current["last_dig_at"] = row["last_dig_at"]
+
+        merged_items: dict[tuple[int, str], dict] = {}
+        for row in items:
+            key = (int(row["user_id"]), row["item_key"])
+            current = merged_items.get(key)
+            if current is None:
+                merged_items[key] = dict(row)
+                continue
+            current["quantity"] += int(row["quantity"])
+            current["updated_at"] = max(current["updated_at"], row["updated_at"])
+
+        merged_achievements: dict[tuple[int, str], dict] = {}
+        for row in achievements:
+            key = (int(row["user_id"]), row["achievement_key"])
+            current = merged_achievements.get(key)
+            if current is None or row["created_at"] < current["created_at"]:
+                merged_achievements[key] = dict(row)
+
+        self._conn.execute("delete from dig_achievements")
+        self._conn.execute("delete from dig_items")
+        self._conn.execute("delete from dig_players")
+        for player in merged_players.values():
+            self._conn.execute(
+                """
+                insert into dig_players (
+                    chat_id, user_id, username, full_name, coins, total_depth, best_session_depth,
+                    luck, last_luck_at, last_dig_at, created_at, updated_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    DIG_GLOBAL_CHAT_ID,
+                    player["user_id"],
+                    player["username"],
+                    player["full_name"],
+                    player["coins"],
+                    player["total_depth"],
+                    player["best_session_depth"],
+                    player["luck"],
+                    player["last_luck_at"],
+                    player["last_dig_at"],
+                    player["created_at"],
+                    player["updated_at"],
+                ),
+            )
+        for item in merged_items.values():
+            self._conn.execute(
+                """
+                insert into dig_items (chat_id, user_id, item_key, quantity, updated_at)
+                values (?, ?, ?, ?, ?)
+                """,
+                (DIG_GLOBAL_CHAT_ID, item["user_id"], item["item_key"], item["quantity"], item["updated_at"]),
+            )
+        for achievement in merged_achievements.values():
+            self._conn.execute(
+                """
+                insert into dig_achievements (chat_id, user_id, achievement_key, created_at)
+                values (?, ?, ?, ?)
+                """,
+                (DIG_GLOBAL_CHAT_ID, achievement["user_id"], achievement["achievement_key"], achievement["created_at"]),
+            )
 
     def upsert_chat(self, chat_id: int, title: str, chat_type: str, username: str | None) -> None:
         self._conn.execute(
@@ -475,17 +1004,27 @@ class Database:
         self._conn.execute("delete from chats where chat_id = ?", (chat_id,))
         self._conn.commit()
 
-    def set_reply(self, chat_id: int, username: str, text: str, updated_by: int | None) -> None:
+    def set_reply(
+        self,
+        chat_id: int,
+        username: str,
+        text: str,
+        updated_by: int | None,
+        media_type: str | None = None,
+        media_file_id: str | None = None,
+    ) -> None:
         self._conn.execute(
             """
-            insert into auto_replies (chat_id, username, text, updated_by, updated_at)
-            values (?, ?, ?, ?, ?)
+            insert into auto_replies (chat_id, username, text, media_type, media_file_id, updated_by, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?)
             on conflict(chat_id, username) do update set
                 text = excluded.text,
+                media_type = excluded.media_type,
+                media_file_id = excluded.media_file_id,
                 updated_by = excluded.updated_by,
                 updated_at = excluded.updated_at
             """,
-            (chat_id, normalize_username(username), text.strip(), updated_by, utc_now()),
+            (chat_id, normalize_username(username), text.strip(), media_type, media_file_id, updated_by, utc_now()),
         )
         self._conn.commit()
 
@@ -500,7 +1039,7 @@ class Database:
     def get_reply(self, chat_id: int, username: str) -> AutoReply | None:
         row = self._conn.execute(
             """
-            select chat_id, username, text, updated_by, updated_at
+            select chat_id, username, text, media_type, media_file_id, updated_by, updated_at
             from auto_replies
             where chat_id = ? and username = ?
             """,
@@ -511,7 +1050,7 @@ class Database:
     def list_replies(self, chat_id: int) -> list[AutoReply]:
         rows = self._conn.execute(
             """
-            select chat_id, username, text, updated_by, updated_at
+            select chat_id, username, text, media_type, media_file_id, updated_by, updated_at
             from auto_replies
             where chat_id = ?
             order by username collate nocase
@@ -528,7 +1067,7 @@ class Database:
         placeholders = ",".join("?" for _ in normalized)
         rows = self._conn.execute(
             f"""
-            select chat_id, username, text, updated_by, updated_at
+            select chat_id, username, text, media_type, media_file_id, updated_by, updated_at
             from auto_replies
             where chat_id = ? and username in ({placeholders})
             order by username collate nocase
@@ -537,17 +1076,27 @@ class Database:
         ).fetchall()
         return [AutoReply(**dict(row)) for row in rows]
 
-    def set_trigger(self, chat_id: int, trigger: str, text: str, updated_by: int | None) -> None:
+    def set_trigger(
+        self,
+        chat_id: int,
+        trigger: str,
+        text: str,
+        updated_by: int | None,
+        media_type: str | None = None,
+        media_file_id: str | None = None,
+    ) -> None:
         self._conn.execute(
             """
-            insert into trigger_replies (chat_id, trigger, text, updated_by, updated_at)
-            values (?, ?, ?, ?, ?)
+            insert into trigger_replies (chat_id, trigger, text, media_type, media_file_id, updated_by, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?)
             on conflict(chat_id, trigger) do update set
                 text = excluded.text,
+                media_type = excluded.media_type,
+                media_file_id = excluded.media_file_id,
                 updated_by = excluded.updated_by,
                 updated_at = excluded.updated_at
             """,
-            (chat_id, normalize_trigger(trigger), text.strip(), updated_by, utc_now()),
+            (chat_id, normalize_trigger(trigger), text.strip(), media_type, media_file_id, updated_by, utc_now()),
         )
         self._conn.commit()
 
@@ -562,7 +1111,7 @@ class Database:
     def list_triggers(self, chat_id: int) -> list[TriggerReply]:
         rows = self._conn.execute(
             """
-            select chat_id, trigger, text, updated_by, updated_at
+            select chat_id, trigger, text, media_type, media_file_id, updated_by, updated_at
             from trigger_replies
             where chat_id = ?
             order by trigger collate nocase
@@ -605,6 +1154,142 @@ class Database:
         ).fetchall()
         return [SeenUser(**dict(row)) for row in rows]
 
+    def count_pickable_users_all(self) -> int:
+        row = self._conn.execute(
+            """
+            select count(*) as total
+            from seen_users
+            where is_bot = 0 and username is not null
+            """
+        ).fetchone()
+        return int(row["total"]) if row else 0
+
+    def increment_participant_activity(self, chat_id: int, user_id: int, activity_date: str | None = None) -> None:
+        day = activity_date or datetime.now(timezone.utc).date().isoformat()
+        self._conn.execute(
+            """
+            insert into participant_activity_daily (chat_id, user_id, activity_date, messages_count, updated_at)
+            values (?, ?, ?, 1, ?)
+            on conflict(chat_id, user_id, activity_date) do update set
+                messages_count = messages_count + 1,
+                updated_at = excluded.updated_at
+            """,
+            (chat_id, user_id, day, utc_now()),
+        )
+        self._conn.commit()
+
+    def top_participant_activity(
+        self,
+        chat_id: int,
+        since_date: str | None = None,
+        limit: int = 20,
+    ) -> list[ParticipantActivity]:
+        where = "where a.chat_id = ?"
+        params: list[object] = [chat_id]
+        if since_date is not None:
+            where += " and a.activity_date >= ?"
+            params.append(since_date)
+        params.append(limit)
+        rows = self._conn.execute(
+            f"""
+            select
+                a.chat_id,
+                a.user_id,
+                u.username,
+                coalesce(u.full_name, cast(a.user_id as text)) as full_name,
+                sum(a.messages_count) as messages_count
+            from participant_activity_daily a
+            left join seen_users u on u.chat_id = a.chat_id and u.user_id = a.user_id
+            {where}
+            group by a.chat_id, a.user_id
+            order by messages_count desc, u.full_name collate nocase
+            limit ?
+            """,
+            tuple(params),
+        ).fetchall()
+        return [ParticipantActivity(**dict(row)) for row in rows]
+
+    def list_admin_feature_permissions(self, chat_id: int, user_id: int | None = None) -> list[AdminFeaturePermission]:
+        if user_id is None:
+            rows = self._conn.execute(
+                """
+                select chat_id, user_id, feature, allowed, updated_by, updated_at
+                from chat_admin_feature_permissions
+                where chat_id = ?
+                order by user_id, feature
+                """,
+                (chat_id,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                select chat_id, user_id, feature, allowed, updated_by, updated_at
+                from chat_admin_feature_permissions
+                where chat_id = ? and user_id = ?
+                order by feature
+                """,
+                (chat_id, user_id),
+            ).fetchall()
+        return [AdminFeaturePermission(**dict(row)) for row in rows]
+
+    def admin_feature_allowed(self, chat_id: int, user_id: int, feature: str, default: bool = False) -> bool:
+        value = self.admin_feature_permission(chat_id, user_id, feature)
+        return value if value is not None else default
+
+    def admin_feature_permission(self, chat_id: int, user_id: int, feature: str) -> bool | None:
+        row = self._conn.execute(
+            """
+            select allowed
+            from chat_admin_feature_permissions
+            where chat_id = ? and user_id = ? and feature = ?
+            """,
+            (chat_id, user_id, feature),
+        ).fetchone()
+        return bool(row["allowed"]) if row else None
+
+    def has_admin_feature_permission(self, chat_id: int, user_id: int, feature: str) -> bool:
+        row = self._conn.execute(
+            """
+            select 1
+            from chat_admin_feature_permissions
+            where chat_id = ? and user_id = ? and feature = ?
+            """,
+            (chat_id, user_id, feature),
+        ).fetchone()
+        return row is not None
+
+    def set_admin_feature_permission(
+        self,
+        chat_id: int,
+        user_id: int,
+        feature: str,
+        allowed: bool,
+        updated_by: int | None,
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into chat_admin_feature_permissions (chat_id, user_id, feature, allowed, updated_by, updated_at)
+            values (?, ?, ?, ?, ?, ?)
+            on conflict(chat_id, user_id, feature) do update set
+                allowed = excluded.allowed,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (chat_id, user_id, feature, int(allowed), updated_by, utc_now()),
+        )
+        self._conn.commit()
+
+    def user_admin_chat_ids(self, user_id: int) -> set[int]:
+        rows = self._conn.execute(
+            """
+            select distinct chat_id
+            from chat_admin_feature_permissions
+            where user_id = ? and allowed = 1
+            """,
+            (user_id,),
+        ).fetchall()
+        return {int(row["chat_id"]) for row in rows}
+
     def get_seen_user_by_username(self, chat_id: int, username: str) -> SeenUser | None:
         row = self._conn.execute(
             """
@@ -638,7 +1323,15 @@ class Database:
         )
         self._conn.commit()
 
-    def upsert_topic(self, chat_id: int, thread_id: int, title: str) -> None:
+    def upsert_topic(self, chat_id: int, thread_id: int, title: str, preserve_existing: bool = False) -> None:
+        if preserve_existing:
+            existing = self._conn.execute(
+                "select 1 from chat_topics where chat_id = ? and thread_id = ?",
+                (chat_id, thread_id),
+            ).fetchone()
+            if existing:
+                return
+        title = re.sub(rf"\s*#{thread_id}\s*$", "", title).strip() or "Без названия"
         self._conn.execute(
             """
             insert into chat_topics (chat_id, thread_id, title, updated_at)
@@ -666,6 +1359,180 @@ class Database:
     def delete_topics(self, chat_id: int) -> None:
         self._conn.execute("delete from chat_topics where chat_id = ?", (chat_id,))
         self._conn.commit()
+
+    def add_audit_log(
+        self,
+        source: str,
+        action: str,
+        *,
+        chat_id: int | None = None,
+        actor_id: int | None = None,
+        actor_username: str | None = None,
+        actor_name: str = "",
+        details: str = "",
+    ) -> int:
+        cur = self._conn.execute(
+            """
+            insert into audit_logs
+                (chat_id, actor_id, actor_username, actor_name, source, action, details, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (chat_id, actor_id, actor_username, actor_name, source, action, details[:1000], utc_now()),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def list_audit_logs(self, chat_id: int | None = None, limit: int = 100) -> list[AuditLog]:
+        safe_limit = max(1, min(500, int(limit)))
+        if chat_id is None:
+            rows = self._conn.execute(
+                """
+                select id, chat_id, actor_id, actor_username, actor_name, source, action, details, created_at
+                from audit_logs order by id desc limit ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                select id, chat_id, actor_id, actor_username, actor_name, source, action, details, created_at
+                from audit_logs where chat_id = ? order by id desc limit ?
+                """,
+                (chat_id, safe_limit),
+            ).fetchall()
+        return [AuditLog(**dict(row)) for row in rows]
+
+    def add_device_event(
+        self,
+        *,
+        app: str,
+        event_type: str,
+        event_name: str,
+        user_id: int | None = None,
+        device_id: str | None = None,
+        app_version: str | None = None,
+        android_version: str | None = None,
+        sdk: int | None = None,
+        manufacturer: str | None = None,
+        model: str | None = None,
+        screen: str | None = None,
+        density: str | None = None,
+        locale: str | None = None,
+        timezone: str | None = None,
+        network_type: str | None = None,
+        endpoint: str | None = None,
+        status_code: int | None = None,
+        duration_ms: int | None = None,
+        error_type: str | None = None,
+        message: str | None = None,
+        metadata: dict | None = None,
+    ) -> int:
+        cur = self._conn.execute(
+            """
+            insert into device_events (
+                app, event_type, event_name, user_id, device_id, app_version,
+                android_version, sdk, manufacturer, model, screen, density,
+                locale, timezone, network_type, endpoint, status_code, duration_ms,
+                error_type, message, metadata_json, created_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                app[:64],
+                event_type[:64],
+                event_name[:128],
+                user_id,
+                (device_id or "")[:128] or None,
+                (app_version or "")[:64] or None,
+                (android_version or "")[:64] or None,
+                sdk,
+                (manufacturer or "")[:80] or None,
+                (model or "")[:120] or None,
+                (screen or "")[:64] or None,
+                (density or "")[:64] or None,
+                (locale or "")[:32] or None,
+                (timezone or "")[:80] or None,
+                (network_type or "")[:32] or None,
+                (endpoint or "")[:200] or None,
+                status_code,
+                duration_ms,
+                (error_type or "")[:80] or None,
+                (message or "")[:500] or None,
+                json.dumps(metadata or {}, ensure_ascii=False)[:4000],
+                utc_now(),
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def list_device_events(self, limit: int = 100, app: str | None = None, event_type: str | None = None) -> list[dict]:
+        safe_limit = max(1, min(500, int(limit)))
+        clauses: list[str] = []
+        params: list[object] = []
+        if app:
+            clauses.append("app = ?")
+            params.append(app[:64])
+        if event_type:
+            clauses.append("event_type = ?")
+            params.append(event_type[:64])
+        where = (" where " + " and ".join(clauses)) if clauses else ""
+        rows = self._conn.execute(
+            f"""
+            select id, app, event_type, event_name, user_id, device_id, app_version,
+                   android_version, sdk, manufacturer, model, screen, density,
+                   locale, timezone, network_type, endpoint, status_code, duration_ms,
+                   error_type, message, metadata_json, created_at
+            from device_events{where}
+            order by id desc limit ?
+            """,
+            (*params, safe_limit),
+        ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+            except json.JSONDecodeError:
+                item["metadata"] = {}
+            items.append(item)
+        return items
+
+    def device_events_summary(self) -> dict:
+        by_app = [
+            dict(row)
+            for row in self._conn.execute(
+                "select app, count(*) as total from device_events group by app order by total desc"
+            ).fetchall()
+        ]
+        by_type = [
+            dict(row)
+            for row in self._conn.execute(
+                "select event_type, count(*) as total from device_events group by event_type order by total desc"
+            ).fetchall()
+        ]
+        errors = [
+            dict(row)
+            for row in self._conn.execute(
+                """
+                select app, endpoint, error_type, count(*) as total, max(created_at) as last_at
+                from device_events
+                where event_type = 'error'
+                group by app, endpoint, error_type
+                order by total desc, last_at desc
+                limit 20
+                """
+            ).fetchall()
+        ]
+        devices = self._conn.execute(
+            "select count(distinct coalesce(device_id, app || ':' || ifnull(user_id, 'anonymous'))) as total from device_events"
+        ).fetchone()
+        return {
+            "total": int(self._conn.execute("select count(*) as total from device_events").fetchone()["total"]),
+            "devices": int(devices["total"] if devices else 0),
+            "byApp": by_app,
+            "byType": by_type,
+            "topErrors": errors,
+        }
 
     def get_giveaway_settings(self, chat_id: int) -> GiveawaySettings:
         row = self._conn.execute(
@@ -780,9 +1647,8 @@ class Database:
         self._conn.commit()
         return True
 
-    def top_giveaway_stats(self, chat_id: int, limit: int = 10) -> list[GiveawayStat]:
-        rows = self._conn.execute(
-            """
+    def top_giveaway_stats(self, chat_id: int, limit: int | None = 10) -> list[GiveawayStat]:
+        query = """
             select
                 s.chat_id,
                 s.user_id,
@@ -793,10 +1659,12 @@ class Database:
             left join seen_users u on u.chat_id = s.chat_id and u.user_id = s.user_id
             where s.chat_id = ?
             order by s.wins_count desc, u.username collate nocase
-            limit ?
-            """,
-            (chat_id, limit),
-        ).fetchall()
+        """
+        params: tuple = (chat_id,)
+        if limit is not None:
+            query += " limit ?"
+            params = (chat_id, limit)
+        rows = self._conn.execute(query, params).fetchall()
         return [GiveawayStat(**dict(row)) for row in rows]
 
     def get_alarm_settings(self, chat_id: int) -> AlarmSettings:
@@ -944,6 +1812,84 @@ class Database:
         self._conn.commit()
         return json.loads(current.permissions_json)
 
+    def alarm_api_enabled(self, chat_id: int) -> bool:
+        row = self._conn.execute(
+            "select enabled from alarm_api_settings where chat_id = ?",
+            (chat_id,),
+        ).fetchone()
+        return bool(row["enabled"]) if row else False
+
+    def set_alarm_api_enabled(self, chat_id: int, enabled: bool, updated_by: int | None) -> None:
+        self._conn.execute(
+            """
+            insert into alarm_api_settings (chat_id, enabled, last_status, last_notified_status, updated_by, updated_at)
+            values (?, ?, null, null, ?, ?)
+            on conflict(chat_id) do update set
+                enabled = excluded.enabled,
+                last_status = null,
+                last_notified_status = null,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (chat_id, int(enabled), updated_by, utc_now()),
+        )
+        self._conn.commit()
+
+    def list_alarm_api_chats(self) -> list[int]:
+        rows = self._conn.execute(
+            "select chat_id from alarm_api_settings where enabled = 1 order by chat_id"
+        ).fetchall()
+        return [int(row["chat_id"]) for row in rows]
+
+    def alarm_api_last_status(self, chat_id: int) -> str | None:
+        row = self._conn.execute(
+            "select last_status from alarm_api_settings where chat_id = ? and enabled = 1",
+            (chat_id,),
+        ).fetchone()
+        return row["last_status"] if row else None
+
+    def set_alarm_api_last_status(self, chat_id: int, status: str) -> None:
+        self._conn.execute(
+            "update alarm_api_settings set last_status = ?, updated_at = ? where chat_id = ? and enabled = 1",
+            (status, utc_now(), chat_id),
+        )
+        self._conn.commit()
+
+    def alarm_api_last_notified_status(self, chat_id: int) -> str | None:
+        row = self._conn.execute(
+            "select last_notified_status from alarm_api_settings where chat_id = ? and enabled = 1",
+            (chat_id,),
+        ).fetchone()
+        return row["last_notified_status"] if row else None
+
+    def set_alarm_api_last_notified_status(self, chat_id: int, status: str) -> None:
+        self._conn.execute(
+            "update alarm_api_settings set last_notified_status = ?, updated_at = ? where chat_id = ? and enabled = 1",
+            (status, utc_now(), chat_id),
+        )
+        self._conn.commit()
+
+    def alarm_restrictions_enabled(self, chat_id: int) -> bool:
+        row = self._conn.execute(
+            "select enabled from alarm_restriction_settings where chat_id = ?",
+            (chat_id,),
+        ).fetchone()
+        return bool(row["enabled"]) if row else True
+
+    def set_alarm_restrictions_enabled(self, chat_id: int, enabled: bool, updated_by: int | None) -> None:
+        self._conn.execute(
+            """
+            insert into alarm_restriction_settings (chat_id, enabled, updated_by, updated_at)
+            values (?, ?, ?, ?)
+            on conflict(chat_id) do update set
+                enabled = excluded.enabled,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (chat_id, int(enabled), updated_by, utc_now()),
+        )
+        self._conn.commit()
+
     def add_star_payment(
         self,
         user_id: int,
@@ -963,6 +1909,13 @@ class Database:
         )
         self._conn.commit()
 
+    def has_star_payment_charge(self, charge_id: str) -> bool:
+        row = self._conn.execute(
+            "select 1 from star_payments where charge_id = ? limit 1",
+            (charge_id,),
+        ).fetchone()
+        return row is not None
+
     def list_star_payments(self, limit: int = 25) -> list[StarPayment]:
         rows = self._conn.execute(
             """
@@ -974,6 +1927,151 @@ class Database:
             (limit,),
         ).fetchall()
         return [StarPayment(**dict(row)) for row in rows]
+
+    def save_pending_star_message(self, payload: str, user_id: int, chat_id: int, text: str) -> None:
+        self._conn.execute(
+            """
+            insert or replace into pending_star_messages (payload, user_id, chat_id, text, created_at)
+            values (?, ?, ?, ?, ?)
+            """,
+            (payload, user_id, chat_id, text, utc_now()),
+        )
+        self._conn.commit()
+
+    def get_pending_star_message(self, payload: str) -> PendingStarMessage | None:
+        row = self._conn.execute(
+            """
+            select payload, user_id, chat_id, text, created_at
+            from pending_star_messages
+            where payload = ?
+            """,
+            (payload,),
+        ).fetchone()
+        return PendingStarMessage(**dict(row)) if row else None
+
+    def delete_pending_star_message(self, payload: str) -> None:
+        self._conn.execute("delete from pending_star_messages where payload = ?", (payload,))
+        self._conn.commit()
+
+    def create_user_login_request(self, login_id: str, secret_hash: str, expires_at: str) -> None:
+        self._conn.execute(
+            """
+            insert into user_login_requests (login_id, secret_hash, created_at, expires_at)
+            values (?, ?, ?, ?)
+            """,
+            (login_id, secret_hash, utc_now(), expires_at),
+        )
+        self._conn.commit()
+
+    def get_user_login_request(self, login_id: str) -> UserLoginRequest | None:
+        row = self._conn.execute(
+            """
+            select login_id, secret_hash, user_id, username, full_name, created_at, expires_at, approved_at, consumed_at
+            from user_login_requests where login_id = ?
+            """,
+            (login_id,),
+        ).fetchone()
+        return UserLoginRequest(**dict(row)) if row else None
+
+    def approve_user_login(self, login_id: str, user_id: int, username: str | None, full_name: str) -> bool:
+        cur = self._conn.execute(
+            """
+            update user_login_requests
+            set user_id = ?, username = ?, full_name = ?, approved_at = ?
+            where login_id = ? and approved_at is null and consumed_at is null and expires_at > ?
+            """,
+            (user_id, normalize_username(username) if username else None, full_name, utc_now(), login_id, utc_now()),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def consume_user_login(self, login_id: str) -> bool:
+        cur = self._conn.execute(
+            "update user_login_requests set consumed_at = ? where login_id = ? and approved_at is not null and consumed_at is null",
+            (utc_now(), login_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def create_user_session(
+        self,
+        token_hash: str,
+        user_id: int,
+        username: str | None,
+        full_name: str,
+        expires_at: str,
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into user_sessions (token_hash, user_id, username, full_name, created_at, expires_at, revoked_at)
+            values (?, ?, ?, ?, ?, ?, null)
+            """,
+            (token_hash, user_id, normalize_username(username) if username else None, full_name, utc_now(), expires_at),
+        )
+        self._conn.commit()
+
+    def get_user_session(self, token_hash: str) -> UserSession | None:
+        row = self._conn.execute(
+            """
+            select token_hash, user_id, username, full_name, created_at, expires_at, revoked_at
+            from user_sessions where token_hash = ?
+            """,
+            (token_hash,),
+        ).fetchone()
+        return UserSession(**dict(row)) if row else None
+
+    def list_user_sessions(self, user_id: int) -> list[UserSession]:
+        rows = self._conn.execute(
+            """
+            select token_hash, user_id, username, full_name, created_at, expires_at, revoked_at
+            from user_sessions
+            where user_id = ?
+            order by created_at desc
+            """,
+            (user_id,),
+        ).fetchall()
+        return [UserSession(**dict(row)) for row in rows]
+
+    def revoke_user_session(self, token_hash: str) -> bool:
+        cur = self._conn.execute(
+            "update user_sessions set revoked_at = ? where token_hash = ? and revoked_at is null",
+            (utc_now(), token_hash),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def get_user_subscription(self, user_id: int) -> UserSubscription:
+        row = self._conn.execute(
+            """
+            select user_id, status, expires_at, telegram_payment_charge_id, updated_at
+            from user_subscriptions where user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if row:
+            return UserSubscription(**dict(row))
+        return UserSubscription(user_id=user_id, status="inactive", expires_at=None, telegram_payment_charge_id=None, updated_at=utc_now())
+
+    def set_user_subscription(
+        self,
+        user_id: int,
+        status: str,
+        expires_at: str | None,
+        charge_id: str | None,
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into user_subscriptions (user_id, status, expires_at, telegram_payment_charge_id, updated_at)
+            values (?, ?, ?, ?, ?)
+            on conflict(user_id) do update set
+                status = excluded.status,
+                expires_at = excluded.expires_at,
+                telegram_payment_charge_id = excluded.telegram_payment_charge_id,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, status, expires_at, charge_id, utc_now()),
+        )
+        self._conn.commit()
 
     def add_quote(self, chat_id: int, text: str, author_name: str | None, added_by: int | None) -> None:
         self._conn.execute(
@@ -998,6 +2096,26 @@ class Database:
         ).fetchone()
         return Quote(**dict(row)) if row else None
 
+    def list_quotes(self, chat_id: int) -> list[Quote]:
+        rows = self._conn.execute(
+            """
+            select id, chat_id, text, author_name, added_by, created_at
+            from quotes
+            where chat_id = ?
+            order by id
+            """,
+            (chat_id,),
+        ).fetchall()
+        return [Quote(**dict(row)) for row in rows]
+
+    def delete_quote(self, chat_id: int, quote_id: int) -> bool:
+        cur = self._conn.execute(
+            "delete from quotes where chat_id = ? and id = ?",
+            (chat_id, quote_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
     def add_birthday(self, chat_id: int, day: int, month: int, text: str, added_by: int | None) -> None:
         self._conn.execute(
             """
@@ -1019,6 +2137,208 @@ class Database:
             (chat_id,),
         ).fetchall()
         return [Birthday(**dict(row)) for row in rows]
+
+    def delete_birthday(self, chat_id: int, birthday_id: int) -> bool:
+        cur = self._conn.execute(
+            "delete from birthdays where chat_id = ? and id = ?",
+            (chat_id, birthday_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def list_advertisements(self, chat_id: int) -> list[Advertisement]:
+        rows = self._conn.execute(
+            """
+            select id, chat_id, text, enabled, start_time, interval_minutes, duration_type,
+                   start_mode, scheduled_at, topic_thread_id, first_sent_at, last_sent_at, created_by, created_at, updated_at
+                   , last_error
+            from advertisements
+            where chat_id = ?
+            order by id
+            """,
+            (chat_id,),
+        ).fetchall()
+        return [Advertisement(**dict(row)) for row in rows]
+
+    def add_advertisement(
+        self,
+        chat_id: int,
+        text: str,
+        enabled: bool,
+        start_time: str,
+        interval_minutes: int,
+        duration_type: str,
+        start_mode: str,
+        scheduled_at: str,
+        topic_thread_id: int | None,
+        created_by: int | None,
+    ) -> int:
+        now = utc_now()
+        cur = self._conn.execute(
+            """
+            insert into advertisements
+                (chat_id, text, enabled, start_time, interval_minutes, duration_type, start_mode, scheduled_at,
+                 topic_thread_id, created_by, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                chat_id, text.strip(), int(enabled), start_time, max(1, interval_minutes), duration_type,
+                start_mode, scheduled_at, topic_thread_id, created_by, now, now,
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def update_advertisement(
+        self,
+        chat_id: int,
+        ad_id: int,
+        text: str,
+        enabled: bool,
+        start_time: str,
+        interval_minutes: int,
+        duration_type: str,
+        start_mode: str,
+        scheduled_at: str,
+        topic_thread_id: int | None,
+    ) -> bool:
+        cur = self._conn.execute(
+            """
+            update advertisements
+            set text = ?, enabled = ?, start_time = ?, interval_minutes = ?, duration_type = ?,
+                start_mode = ?, scheduled_at = ?,
+                topic_thread_id = ?,
+                first_sent_at = null, last_sent_at = null, last_error = null, updated_at = ?
+            where chat_id = ? and id = ?
+            """,
+            (
+                text.strip(), int(enabled), start_time, max(1, interval_minutes), duration_type,
+                start_mode, scheduled_at, topic_thread_id, utc_now(), chat_id, ad_id,
+            ),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def mark_advertisement_sent(self, advertisement_id: int, sent_at: str) -> None:
+        self._conn.execute(
+            """
+            update advertisements
+            set first_sent_at = coalesce(first_sent_at, ?), last_sent_at = ?, last_error = null, updated_at = ?
+            where id = ?
+            """,
+            (sent_at, sent_at, utc_now(), advertisement_id),
+        )
+        self._conn.commit()
+
+    def mark_advertisement_failed(self, advertisement_id: int, error: str) -> None:
+        self._conn.execute(
+            "update advertisements set last_error = ?, updated_at = ? where id = ?",
+            (error[:500], utc_now(), advertisement_id),
+        )
+        self._conn.commit()
+
+    def list_advertisement_attachments(self, advertisement_id: int) -> list[AdvertisementAttachment]:
+        rows = self._conn.execute(
+            """
+            select id, advertisement_id, media_type, file_id, filename, position
+            from advertisement_attachments
+            where advertisement_id = ?
+            order by position, id
+            """,
+            (advertisement_id,),
+        ).fetchall()
+        return [AdvertisementAttachment(**dict(row)) for row in rows]
+
+    def replace_advertisement_attachments(
+        self,
+        advertisement_id: int,
+        attachments: list[tuple[str, str, str]],
+    ) -> None:
+        self._conn.execute("delete from advertisement_attachments where advertisement_id = ?", (advertisement_id,))
+        self._conn.executemany(
+            """
+            insert into advertisement_attachments (advertisement_id, media_type, file_id, filename, position)
+            values (?, ?, ?, ?, ?)
+            """,
+            [
+                (advertisement_id, media_type, file_id, filename, position)
+                for position, (media_type, file_id, filename) in enumerate(attachments)
+            ],
+        )
+        self._conn.commit()
+
+    def delete_advertisement(self, chat_id: int, ad_id: int) -> bool:
+        self._conn.execute("delete from advertisement_attachments where advertisement_id = ?", (ad_id,))
+        cur = self._conn.execute(
+            "delete from advertisements where chat_id = ? and id = ?",
+            (chat_id, ad_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def get_advertisement_settings(self, chat_id: int) -> AdvertisementSettings:
+        row = self._conn.execute(
+            """
+            select chat_id, enabled, start_time, interval_minutes, next_ad_index, last_sent_at, updated_by, updated_at
+            from advertisement_settings
+            where chat_id = ?
+            """,
+            (chat_id,),
+        ).fetchone()
+        if row:
+            return AdvertisementSettings(**dict(row))
+        return AdvertisementSettings(chat_id, 0, "09:00", 180, 0, None, None, utc_now())
+
+    def set_advertisement_settings(
+        self,
+        chat_id: int,
+        enabled: bool,
+        start_time: str,
+        interval_minutes: int,
+        updated_by: int | None,
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into advertisement_settings
+                (chat_id, enabled, start_time, interval_minutes, next_ad_index, last_sent_at, updated_by, updated_at)
+            values (?, ?, ?, ?, 0, null, ?, ?)
+            on conflict(chat_id) do update set
+                enabled = excluded.enabled,
+                start_time = excluded.start_time,
+                interval_minutes = excluded.interval_minutes,
+                next_ad_index = 0,
+                last_sent_at = null,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (chat_id, int(enabled), start_time, max(1, interval_minutes), updated_by, utc_now()),
+        )
+        self._conn.commit()
+
+    def mark_legacy_advertisement_sent(self, chat_id: int, next_ad_index: int, sent_at: str) -> None:
+        settings = self.get_advertisement_settings(chat_id)
+        self._conn.execute(
+            """
+            insert into advertisement_settings
+                (chat_id, enabled, start_time, interval_minutes, next_ad_index, last_sent_at, updated_by, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(chat_id) do update set
+                next_ad_index = excluded.next_ad_index,
+                last_sent_at = excluded.last_sent_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                chat_id,
+                settings.enabled,
+                settings.start_time,
+                settings.interval_minutes,
+                next_ad_index,
+                sent_at,
+                settings.updated_by,
+                utc_now(),
+            ),
+        )
+        self._conn.commit()
 
     def birthdays_for_date(self, chat_id: int, day: int, month: int, sent_date: str) -> list[Birthday]:
         rows = self._conn.execute(
@@ -1149,9 +2469,8 @@ class Database:
         )
         self._conn.commit()
 
-    def top_roll_mute_stats(self, chat_id: int, limit: int = 10) -> list[RollMuteStat]:
-        rows = self._conn.execute(
-            """
+    def top_roll_mute_stats(self, chat_id: int, limit: int | None = 10) -> list[RollMuteStat]:
+        query = """
             select
                 s.chat_id,
                 s.user_id,
@@ -1162,11 +2481,38 @@ class Database:
             left join seen_users u on u.chat_id = s.chat_id and u.user_id = s.user_id
             where s.chat_id = ?
             order by s.unlucky_count desc, u.username collate nocase
-            limit ?
-            """,
-            (chat_id, limit),
-        ).fetchall()
+        """
+        params: tuple = (chat_id,)
+        if limit is not None:
+            query += " limit ?"
+            params = (chat_id, limit)
+        rows = self._conn.execute(query, params).fetchall()
         return [RollMuteStat(**dict(row)) for row in rows]
+
+    def roll_mute_count_for_user(self, chat_id: int, user_id: int) -> int:
+        row = self._conn.execute(
+            "select unlucky_count from roll_mute_stats where chat_id = ? and user_id = ?",
+            (chat_id, user_id),
+        ).fetchone()
+        return int(row["unlucky_count"]) if row else 0
+
+    def giveaway_wins_for_user(self, chat_id: int, user_id: int) -> int:
+        row = self._conn.execute(
+            "select wins_count from giveaway_stats where chat_id = ? and user_id = ?",
+            (chat_id, user_id),
+        ).fetchone()
+        return int(row["wins_count"]) if row else 0
+
+    def message_count_for_user(self, chat_id: int, user_id: int) -> int:
+        row = self._conn.execute(
+            """
+            select coalesce(sum(messages_count), 0) as total
+            from participant_activity_daily
+            where chat_id = ? and user_id = ?
+            """,
+            (chat_id, user_id),
+        ).fetchone()
+        return int(row["total"]) if row else 0
 
     def get_quiet_settings(self, chat_id: int) -> QuietSettings:
         row = self._conn.execute(
@@ -1235,7 +2581,69 @@ class Database:
         )
         self._conn.commit()
 
+    def set_quiet_admin(
+        self,
+        chat_id: int,
+        user_id: int,
+        username: str | None,
+        full_name: str,
+        reason: str,
+        until_at: str,
+        created_by: int | None,
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into quiet_admins (chat_id, user_id, username, full_name, reason, until_at, created_by, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(chat_id, user_id) do update set
+                username = excluded.username,
+                full_name = excluded.full_name,
+                reason = excluded.reason,
+                until_at = excluded.until_at,
+                created_by = excluded.created_by,
+                created_at = excluded.created_at
+            """,
+            (
+                chat_id,
+                user_id,
+                normalize_username(username) if username else None,
+                full_name,
+                reason.strip(),
+                until_at,
+                created_by,
+                utc_now(),
+            ),
+        )
+        self._conn.commit()
+
+    def get_active_quiet_admin(self, chat_id: int, user_id: int, now: str | None = None) -> QuietAdmin | None:
+        now = now or utc_now()
+        row = self._conn.execute(
+            """
+            select chat_id, user_id, username, full_name, reason, until_at, created_by, created_at
+            from quiet_admins
+            where chat_id = ? and user_id = ?
+            """,
+            (chat_id, user_id),
+        ).fetchone()
+        if not row:
+            return None
+        if str(row["until_at"]) <= now:
+            self._conn.execute("delete from quiet_admins where chat_id = ? and user_id = ?", (chat_id, user_id))
+            self._conn.commit()
+            return None
+        return QuietAdmin(**dict(row))
+
+    def clear_quiet_admin(self, chat_id: int, user_id: int) -> bool:
+        cur = self._conn.execute(
+            "delete from quiet_admins where chat_id = ? and user_id = ?",
+            (chat_id, user_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
     def get_dig_player(self, chat_id: int, user_id: int) -> DigPlayer | None:
+        chat_id = DIG_GLOBAL_CHAT_ID
         row = self._conn.execute(
             """
             select chat_id, user_id, username, full_name, coins, total_depth, best_session_depth,
@@ -1248,6 +2656,7 @@ class Database:
         return DigPlayer(**dict(row)) if row else None
 
     def register_dig_player(self, chat_id: int, user_id: int, username: str | None, full_name: str) -> bool:
+        chat_id = DIG_GLOBAL_CHAT_ID
         now = utc_now()
         cur = self._conn.execute(
             """
@@ -1284,6 +2693,7 @@ class Database:
         last_luck_at: str,
         last_dig_at: str,
     ) -> None:
+        chat_id = DIG_GLOBAL_CHAT_ID
         self._conn.execute(
             """
             update dig_players
@@ -1314,32 +2724,36 @@ class Database:
         )
         self._conn.commit()
 
-    def top_dig_depth(self, chat_id: int, limit: int = 10) -> list[DigPlayer]:
-        rows = self._conn.execute(
-            """
+    def top_dig_depth(self, chat_id: int, limit: int | None = 10) -> list[DigPlayer]:
+        chat_id = DIG_GLOBAL_CHAT_ID
+        query = """
             select chat_id, user_id, username, full_name, coins, total_depth, best_session_depth,
                    luck, last_luck_at, last_dig_at, created_at, updated_at
             from dig_players
             where chat_id = ?
             order by total_depth desc, best_session_depth desc, coins desc
-            limit ?
-            """,
-            (chat_id, limit),
-        ).fetchall()
+        """
+        params: tuple = (chat_id,)
+        if limit is not None:
+            query += " limit ?"
+            params = (chat_id, limit)
+        rows = self._conn.execute(query, params).fetchall()
         return [DigPlayer(**dict(row)) for row in rows]
 
-    def top_dig_coins(self, chat_id: int, limit: int = 10) -> list[DigPlayer]:
-        rows = self._conn.execute(
-            """
+    def top_dig_coins(self, chat_id: int, limit: int | None = 10) -> list[DigPlayer]:
+        chat_id = DIG_GLOBAL_CHAT_ID
+        query = """
             select chat_id, user_id, username, full_name, coins, total_depth, best_session_depth,
                    luck, last_luck_at, last_dig_at, created_at, updated_at
             from dig_players
             where chat_id = ?
             order by coins desc, total_depth desc
-            limit ?
-            """,
-            (chat_id, limit),
-        ).fetchall()
+        """
+        params: tuple = (chat_id,)
+        if limit is not None:
+            query += " limit ?"
+            params = (chat_id, limit)
+        rows = self._conn.execute(query, params).fetchall()
         return [DigPlayer(**dict(row)) for row in rows]
 
     def list_all_dig_players(self) -> list[DigPlayer]:
@@ -1353,7 +2767,25 @@ class Database:
         ).fetchall()
         return [DigPlayer(**dict(row)) for row in rows]
 
+    def count_dig_players(self) -> int:
+        row = self._conn.execute("select count(*) as total from dig_players").fetchone()
+        return int(row["total"]) if row else 0
+
+    def list_dig_players_page(self, limit: int = 20, offset: int = 0) -> list[DigPlayer]:
+        rows = self._conn.execute(
+            """
+            select chat_id, user_id, username, full_name, coins, total_depth, best_session_depth,
+                   luck, last_luck_at, last_dig_at, created_at, updated_at
+            from dig_players
+            order by total_depth desc, best_session_depth desc, coins desc, full_name collate nocase
+            limit ? offset ?
+            """,
+            (max(1, int(limit)), max(0, int(offset))),
+        ).fetchall()
+        return [DigPlayer(**dict(row)) for row in rows]
+
     def list_dig_items(self, chat_id: int, user_id: int) -> list[DigItem]:
+        chat_id = DIG_GLOBAL_CHAT_ID
         rows = self._conn.execute(
             """
             select chat_id, user_id, item_key, quantity, updated_at
@@ -1366,6 +2798,7 @@ class Database:
         return [DigItem(**dict(row)) for row in rows]
 
     def get_dig_item_quantity(self, chat_id: int, user_id: int, item_key: str) -> int:
+        chat_id = DIG_GLOBAL_CHAT_ID
         row = self._conn.execute(
             """
             select quantity from dig_items
@@ -1376,6 +2809,7 @@ class Database:
         return int(row["quantity"]) if row else 0
 
     def add_dig_item(self, chat_id: int, user_id: int, item_key: str, quantity: int = 1) -> None:
+        chat_id = DIG_GLOBAL_CHAT_ID
         self._conn.execute(
             """
             insert into dig_items (chat_id, user_id, item_key, quantity, updated_at)
@@ -1389,6 +2823,7 @@ class Database:
         self._conn.commit()
 
     def consume_dig_item(self, chat_id: int, user_id: int, item_key: str) -> bool:
+        chat_id = DIG_GLOBAL_CHAT_ID
         cur = self._conn.execute(
             """
             update dig_items
@@ -1401,6 +2836,7 @@ class Database:
         return cur.rowcount > 0
 
     def spend_dig_coins(self, chat_id: int, user_id: int, amount: int) -> bool:
+        chat_id = DIG_GLOBAL_CHAT_ID
         cur = self._conn.execute(
             """
             update dig_players
@@ -1413,13 +2849,30 @@ class Database:
         return cur.rowcount > 0
 
     def add_dig_coins(self, chat_id: int, user_id: int, amount: int) -> None:
+        chat_id = DIG_GLOBAL_CHAT_ID
         self._conn.execute(
             """
             update dig_players
-            set coins = coins + ?, updated_at = ?
+            set coins = max(0, coins + ?), updated_at = ?
             where chat_id = ? and user_id = ?
             """,
-            (max(0, int(amount)), utc_now(), chat_id, user_id),
+            (int(amount), utc_now(), chat_id, user_id),
+        )
+        self._conn.commit()
+
+    def adjust_dig_item(self, chat_id: int, user_id: int, item_key: str, quantity_delta: int) -> None:
+        chat_id = DIG_GLOBAL_CHAT_ID
+        current = self.get_dig_item_quantity(chat_id, user_id, item_key)
+        next_quantity = max(0, current + int(quantity_delta))
+        self._conn.execute(
+            """
+            insert into dig_items (chat_id, user_id, item_key, quantity, updated_at)
+            values (?, ?, ?, ?, ?)
+            on conflict(chat_id, user_id, item_key) do update set
+                quantity = excluded.quantity,
+                updated_at = excluded.updated_at
+            """,
+            (chat_id, user_id, item_key, next_quantity, utc_now()),
         )
         self._conn.commit()
 
@@ -1432,6 +2885,7 @@ class Database:
         quantity: int = 1,
         unique: bool = False,
     ) -> str:
+        chat_id = DIG_GLOBAL_CHAT_ID
         now = utc_now()
         try:
             self._conn.execute("begin immediate")
@@ -1476,6 +2930,7 @@ class Database:
             raise
 
     def set_dig_luck(self, chat_id: int, user_id: int, luck: int, last_luck_at: str) -> None:
+        chat_id = DIG_GLOBAL_CHAT_ID
         self._conn.execute(
             """
             update dig_players
@@ -1486,7 +2941,20 @@ class Database:
         )
         self._conn.commit()
 
+    def clear_dig_cooldown(self, chat_id: int, user_id: int) -> None:
+        chat_id = DIG_GLOBAL_CHAT_ID
+        self._conn.execute(
+            """
+            update dig_players
+            set last_dig_at = null, updated_at = ?
+            where chat_id = ? and user_id = ?
+            """,
+            (utc_now(), chat_id, user_id),
+        )
+        self._conn.commit()
+
     def add_dig_achievement(self, chat_id: int, user_id: int, achievement_key: str) -> bool:
+        chat_id = DIG_GLOBAL_CHAT_ID
         cur = self._conn.execute(
             """
             insert or ignore into dig_achievements (chat_id, user_id, achievement_key, created_at)
@@ -1498,6 +2966,7 @@ class Database:
         return cur.rowcount > 0
 
     def list_dig_achievements(self, chat_id: int, user_id: int) -> list[DigAchievement]:
+        chat_id = DIG_GLOBAL_CHAT_ID
         rows = self._conn.execute(
             """
             select chat_id, user_id, achievement_key, created_at
@@ -1508,6 +2977,167 @@ class Database:
             (chat_id, user_id),
         ).fetchall()
         return [DigAchievement(**dict(row)) for row in rows]
+
+    def get_dig_progress(self, user_id: int) -> dict:
+        row = self._conn.execute(
+            "select xp, level, streak, selected_route, last_dig_date, updated_at from dig_progress where user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            player = self.get_dig_player(DIG_GLOBAL_CHAT_ID, user_id)
+            xp = max(0, (player.total_depth if player else 0) * 10)
+            level = min(50, 1 + xp // 250)
+            now = utc_now()
+            self._conn.execute(
+                "insert into dig_progress(user_id, xp, level, streak, selected_route, updated_at) values (?, ?, ?, 0, 'old_mine', ?)",
+                (user_id, xp, level, now),
+            )
+            self._conn.commit()
+            row = self._conn.execute(
+                "select xp, level, streak, selected_route, last_dig_date, updated_at from dig_progress where user_id = ?",
+                (user_id,),
+            ).fetchone()
+        return dict(row)
+
+    def update_dig_progress(self, user_id: int, xp_delta: int, success: bool, route: str | None = None) -> dict:
+        current = self.get_dig_progress(user_id)
+        xp = max(0, int(current["xp"]) + max(0, int(xp_delta)))
+        level = min(50, 1 + xp // 250)
+        streak = int(current["streak"]) + 1 if success else 0
+        selected_route = route or str(current["selected_route"])
+        today = datetime.now(timezone.utc).date().isoformat()
+        self._conn.execute(
+            """
+            update dig_progress
+            set xp = ?, level = ?, streak = ?, selected_route = ?, last_dig_date = ?, updated_at = ?
+            where user_id = ?
+            """,
+            (xp, level, streak, selected_route, today, utc_now(), user_id),
+        )
+        self._conn.commit()
+        return self.get_dig_progress(user_id)
+
+    def set_dig_route(self, user_id: int, route: str) -> None:
+        self.get_dig_progress(user_id)
+        self._conn.execute(
+            "update dig_progress set selected_route = ?, updated_at = ? where user_id = ?",
+            (route, utc_now(), user_id),
+        )
+        self._conn.commit()
+
+    def ensure_dig_contracts(self, user_id: int, contract_date: str, contracts: list[tuple[str, int]]) -> None:
+        self._conn.executemany(
+            """
+            insert or ignore into dig_contracts(user_id, contract_date, contract_key, target, progress, claimed)
+            values (?, ?, ?, ?, 0, 0)
+            """,
+            [(user_id, contract_date, key, target) for key, target in contracts],
+        )
+        self._conn.commit()
+
+    def list_dig_contracts(self, user_id: int, contract_date: str) -> list[dict]:
+        return [
+            dict(row)
+            for row in self._conn.execute(
+                """
+                select contract_key, target, progress, claimed
+                from dig_contracts where user_id = ? and contract_date = ? order by contract_key
+                """,
+                (user_id, contract_date),
+            ).fetchall()
+        ]
+
+    def add_dig_contract_progress(self, user_id: int, contract_date: str, values: dict[str, int]) -> None:
+        for key, amount in values.items():
+            if amount <= 0:
+                continue
+            self._conn.execute(
+                """
+                update dig_contracts set progress = min(target, progress + ?)
+                where user_id = ? and contract_date = ? and contract_key = ? and claimed = 0
+                """,
+                (int(amount), user_id, contract_date, key),
+            )
+        self._conn.commit()
+
+    def claim_ready_dig_contracts(self, user_id: int, contract_date: str) -> list[str]:
+        rows = self._conn.execute(
+            """
+            select contract_key from dig_contracts
+            where user_id = ? and contract_date = ? and claimed = 0 and progress >= target
+            """,
+            (user_id, contract_date),
+        ).fetchall()
+        keys = [str(row["contract_key"]) for row in rows]
+        if keys:
+            self._conn.executemany(
+                "update dig_contracts set claimed = 1 where user_id = ? and contract_date = ? and contract_key = ?",
+                [(user_id, contract_date, key) for key in keys],
+            )
+            self._conn.commit()
+        return keys
+
+    def add_dig_expedition_progress(self, chat_id: int, user_id: int, expedition_date: str, depth: int, target: int = 50) -> dict:
+        self._conn.execute(
+            "insert or ignore into dig_expeditions(chat_id, expedition_date, target) values (?, ?, ?)",
+            (chat_id, expedition_date, target),
+        )
+        self._conn.execute(
+            """
+            insert into dig_expedition_contributors(chat_id, expedition_date, user_id, depth)
+            values (?, ?, ?, ?)
+            on conflict(chat_id, expedition_date, user_id) do update set depth = depth + excluded.depth
+            """,
+            (chat_id, expedition_date, user_id, max(0, int(depth))),
+        )
+        self._conn.execute(
+            """
+            update dig_expeditions
+            set progress = min(target, progress + ?), completed = case when progress + ? >= target then 1 else completed end
+            where chat_id = ? and expedition_date = ?
+            """,
+            (max(0, int(depth)), max(0, int(depth)), chat_id, expedition_date),
+        )
+        self._conn.commit()
+        return self.get_dig_expedition(chat_id, expedition_date)
+
+    def get_dig_expedition(self, chat_id: int, expedition_date: str) -> dict:
+        row = self._conn.execute(
+            "select target, progress, completed from dig_expeditions where chat_id = ? and expedition_date = ?",
+            (chat_id, expedition_date),
+        ).fetchone()
+        contributors = self._conn.execute(
+            """
+            select user_id, depth, rewarded from dig_expedition_contributors
+            where chat_id = ? and expedition_date = ? order by depth desc
+            """,
+            (chat_id, expedition_date),
+        ).fetchall()
+        return {
+            "target": int(row["target"]) if row else 50,
+            "progress": int(row["progress"]) if row else 0,
+            "completed": bool(row["completed"]) if row else False,
+            "contributors": [dict(item) for item in contributors],
+        }
+
+    def reward_dig_expedition(self, chat_id: int, expedition_date: str, reward: int) -> list[int]:
+        rows = self._conn.execute(
+            """
+            select user_id from dig_expedition_contributors
+            where chat_id = ? and expedition_date = ? and rewarded = 0 and depth > 0
+            """,
+            (chat_id, expedition_date),
+        ).fetchall()
+        user_ids = [int(row["user_id"]) for row in rows]
+        for user_id in user_ids:
+            self.add_dig_coins(DIG_GLOBAL_CHAT_ID, user_id, reward)
+        if user_ids:
+            self._conn.execute(
+                "update dig_expedition_contributors set rewarded = 1 where chat_id = ? and expedition_date = ?",
+                (chat_id, expedition_date),
+            )
+            self._conn.commit()
+        return user_ids
 
 
 def normalize_username(username: str) -> str:

@@ -1,3 +1,55 @@
 services:
   bot:
-    build: .
+    build:
+      context: .
+    image: otveto4ka-bot:latest
+    command: ["python", "-m", "app.bot"]
+    env_file:
+      - .env
+    environment:
+      DB_PATH: /data/bot.sqlite3
+      ADMIN_ACCESS_KEYS_FILE: /data/admin_access_keys.json
+      FFMPEG_PATH: /usr/bin/ffmpeg
+      TZ: Europe/Kiev
+    volumes:
+      - bot_data:/data
+      - bot_downloads:/app/downloads
+      - bot_logs:/app/logs
+      - bot_media:/app/media_storage
+    restart: unless-stopped
+
+  api:
+    image: otveto4ka-bot:latest
+    build:
+      context: .
+    command: ["python", "-m", "uvicorn", "app.admin_api:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - .env
+    environment:
+      DB_PATH: /data/bot.sqlite3
+      ADMIN_ACCESS_KEYS_FILE: /data/admin_access_keys.json
+      FFMPEG_PATH: /usr/bin/ffmpeg
+      TZ: Europe/Kiev
+    ports:
+      - "8000:8000"
+      - "50000:8000"
+    volumes:
+      - bot_data:/data
+      - bot_downloads:/app/downloads
+      - bot_logs:/app/logs
+      - bot_media:/app/media_storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      - bot
+
+volumes:
+  bot_data:
+  bot_downloads:
+  bot_logs:
+  bot_media:

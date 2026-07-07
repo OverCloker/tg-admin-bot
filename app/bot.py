@@ -1,14 +1,23 @@
-import asyncio
+﻿import asyncio
+import json
 import logging
+import math
 import os
 import random
 import re
 import secrets
+import socket
 import sys
+import time
+from contextlib import suppress
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from datetime import timedelta
 from html import escape, unescape
+from ipaddress import ip_address
+from pathlib import Path
 from urllib.parse import quote
+from uuid import uuid4
 
 import aiohttp
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
@@ -18,51 +27,129 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Chat, ChatPermissions, LabeledPrice, Message, MessageReactionUpdated, PreCheckoutQuery
+from aiogram.types import CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, LabeledPrice, Message, MessageReactionUpdated, PreCheckoutQuery, SuccessfulPayment, User
 
 from .config import load_config
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
+from .premium import PLANS, PREMIUM_PERIOD_DAYS, PremiumLimitError, PremiumRequiredError, PremiumService, plan_public_dict
+from .media_processor import TASK_TITLES, ffmpeg_available, process_media, whisper_available
+from .media_tasks import MediaTaskService
+from .youtube_media import (
+    DOWNLOAD_TYPES,
+    SUPPORTED_MEDIA_URL_RE,
+    YOUTUBE_URL_RE,
+    YoutubeMediaError,
+    cleanup_youtube_file,
+    download_youtube,
+    extract_instagram_url,
+    extract_supported_media_url,
+    extract_youtube_url,
+    inspect_youtube,
+    media_output_filename,
+)
+from .staff import StaffService
+from .staff_handlers import configure_staff, staff_error_handler, staff_router
+from .user_profile import build_user_profile, profile_chat_text
 from .keyboards import (
+    QUOTES_PAGE_SIZE,
+    TOP_PAGE_SIZE,
     TRIGGERS_PAGE_SIZE,
+    admin_back_menu,
+    admin_menu,
     alarm_menu,
     back_to_chat_menu,
+    blacklist_menu,
     chat_admin_menu,
     chat_select_menu,
+    chat_top_page_menu,
     dig_bag_menu,
     dig_buy_confirm_menu,
     dig_register_menu,
+    dig_routes_menu,
+    dig_section_back_menu,
+    dig_shop_categories_menu,
+    dig_shop_items_menu,
     dig_shop_menu,
+    birthday_menu,
     feedback_reply_menu,
+    giveaway_menu,
+    instagram_download_menu,
     leave_confirm_menu,
     main_menu,
+    media_cancel_menu,
+    media_tools_menu,
     paid_chat_select_menu,
+    participant_top_menu,
+    premium_menu,
+    quotes_menu,
     quiet_menu,
     restart_confirm_menu,
     stars_menu,
     topic_select_menu,
     trigger_list_menu,
+    user_bag_menu,
+    user_buy_confirm_menu,
+    user_chat_select_menu,
+    user_donate_menu,
+    user_mine_menu,
+    user_menu,
+    user_routes_menu,
+    user_shop_categories_menu,
+    user_shop_items_menu,
+    user_shop_menu,
+    youtube_download_menu,
 )
 
 
 MENTION_RE = re.compile(r"(?<![\w@])@([A-Za-z0-9_]{5,32})")
 ADMIN_STATUSES = {ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR}
 ADMIN_STATUS_TEXTS = {"creator", "administrator"}
+ACTIVE_MEMBER_STATUS_TEXTS = {"creator", "administrator", "member", "restricted"}
 SUPPORTED_CHAT_TYPES = {"group", "supergroup"}
 DAY_PICK_KEY = "day_pick"
 DAY_QUERY_TEXT = "кто пидор"
 DAY_REPLY_TEMPLATE = "Пидор дня: {user}"
 WEATHER_RE = re.compile(r"^погода\s+(.+)$", re.IGNORECASE)
-ALARM_ON_RE = re.compile(r"(?<!\w)тревога(?!\w)", re.IGNORECASE)
-ALARM_OFF_RE = re.compile(r"(?<!\w)отбой(?!\w)", re.IGNORECASE)
+ALARM_STATUS_QUERY_RE = re.compile(r"^\s*тревога[?!.]?\s*$", re.IGNORECASE)
+ALARM_CLEAR_QUERY_RE = re.compile(r"^\s*отбой[?!.]?\s*$", re.IGNORECASE)
+ALARM_STATUS_COMMAND_RE = re.compile(r"^\s*состояние\s+тревоги[?!.]?\s*$", re.IGNORECASE)
+ALERTS_LOCATION_UID = "46"
+ALERTS_LOCATION_TITLE = "Криворізький район"
+ALERTS_POLL_INTERVAL_SECONDS = 60
 GIVEAWAY_TOP_RE = re.compile(r"^топ\s+пидоров[?!.]?$", re.IGNORECASE)
+EMOJI_BASE_RE = (
+    r"(?:[\u00a9\u00ae\u203c\u2049\u2122\u2139\u2194-\u21ff\u2300-\u23ff"
+    r"\u24c2\u25aa-\u27bf\u2934\u2935\u2b00-\u2bff\u3030\u303d\u3297\u3299]"
+    r"|[\U0001f000-\U0001faff])"
+)
+EMOJI_MODIFIER_RE = r"(?:\ufe0e|\ufe0f)?(?:[\U0001f3fb-\U0001f3ff])?"
+EMOJI_ELEMENT_RE = rf"{EMOJI_BASE_RE}{EMOJI_MODIFIER_RE}"
+SINGLE_EMOJI_RE = re.compile(
+    rf"^(?:"
+    rf"[\U0001f1e6-\U0001f1ff]{{2}}"
+    rf"|[#*0-9]\ufe0f?\u20e3"
+    rf"|{EMOJI_ELEMENT_RE}(?:\u200d{EMOJI_ELEMENT_RE})*(?:[\U000e0020-\U000e007e]*\U000e007f)?"
+    rf")$"
+)
 DEFAULT_AVAILABLE_REACTIONS = [
     {"type": "emoji", "emoji": emoji}
-    for emoji in ["👍", "👎", "❤", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "🤬", "😢", "🎉", "🤩", "🤮", "💩"]
+    for emoji in ["рџ‘Ќ", "рџ‘Ћ", "вќ¤", "рџ”Ґ", "рџҐ°", "рџ‘Џ", "рџЃ", "рџ¤”", "рџ¤Ї", "рџ±", "рџ¤¬", "рџў", "рџЋ‰", "рџ¤©", "рџ¤®", "рџ’©"]
 ]
-DIG_COOLDOWN = timedelta(hours=4)
+DIG_COOLDOWN = timedelta(hours=3)
 DIG_LUCK_COST = 33
-DIG_LUCK_REGEN_PER_HOUR = 5
-DIG_SUCCESS_CHANCES = [90, 80, 70, 60, 50, 41, 31, 21, 11, 1]
+DIG_LUCK_REGEN_PER_HOUR = 7
+DIG_STAR_LUCK_PRICE = 3
+DIG_STAR_COOLDOWN_PRICE = 1
+DIG_STAR_ACTIONS = {
+    "luck": ("Восстановить удачу", "Удача в раскопках станет 100/100.", DIG_STAR_LUCK_PRICE, None, 0),
+    "cooldown": ("Сбросить ожидание копай", "Команду копай можно будет использовать сразу после оплаты.", DIG_STAR_COOLDOWN_PRICE, None, 0),
+    "digs3": ("Копать 3 раза", "Три дополнительные раскопки без ожидания между попытками.", 3, "star_dig", 3),
+    "lucky_digs3": ("Копать 3 раза со 100 удачей", "Три дополнительные раскопки без ожидания. В каждой действует 100 удачи.", 10, "star_lucky_dig", 3),
+    "digs5": ("Копать 5 раз", "Пять дополнительных раскопок без ожидания между попытками.", 5, "star_dig", 5),
+    "lucky_digs5": ("Копать 5 раз со 100 удачей", "Пять дополнительных раскопок без ожидания. В каждой действует 100 удачи.", 15, "star_lucky_dig", 5),
+    "depth10": ("Прокопать 10 м", "Следующая раскопка гарантированно пройдет все 10 метров без ожидания.", 50, "star_depth_10", 1),
+}
+DIG_SUCCESS_CHANCES = [90.0, 88.89, 87.5, 85.71, 83.33, 82.0, 75.61, 67.74, 52.38, 9.09]
 DIG_REWARDS = {
     0: (1, 5),
     1: (5, 10),
@@ -76,19 +163,233 @@ DIG_REWARDS = {
     9: (80, 90),
     10: (90, 100),
 }
+DIG_ROUTES = {
+    "old_mine": ("Старая шахта", 8, 0.85, 0.8, 0.7, 1),
+    "gold_vein": ("Золотая жила", -5, 1.5, 1.0, 1.25, 3),
+    "abandoned_tunnel": ("Заброшенный тоннель", 0, 1.0, 2.0, 1.0, 5),
+    "deep_zone": ("Глубинная зона", -8, 2.0, 1.5, 1.5, 10),
+}
+DIG_CONTRACTS = {
+    "depth": ("Прокопать 12 метров", 12),
+    "coins": ("Заработать 120 котоинов", 120),
+    "artifact": ("Найти артефакт", 1),
+    "success": ("Три успешные раскопки", 3),
+}
+DIG_CONTRACT_REWARD_COINS = 60
+DIG_CONTRACT_REWARD_XP = 40
+DIG_EXPEDITION_TARGET = 50
+DIG_EXPEDITION_REWARD = 75
 DIG_SHOP_ITEMS = {
-    "helmet": ("Каска шахтера", 40, "Даёт +5 удачи на следующую раскопку."),
-    "shovel": ("Крепкая лопата", 70, "Снижает шанс обвала на 50% в следующей раскопке."),
-    "flashlight": ("Фонарик", 90, "Даёт +10% к шансам пройти метры в следующей раскопке."),
-    "insurance": ("Страховка", 120, "Если раскопка провалилась на первом метре, засчитает 1 метр."),
+    "helmet": ("Каска шахтера", 40, "Старый расходник: +5 удачи на следующую раскопку."),
+    "shovel": ("Крепкая лопата", 70, "Старый расходник: снижает шанс обвала на 50% в следующей раскопке."),
+    "flashlight": ("Фонарик", 90, "Старый расходник: +10% к шансам следующей раскопки."),
+    "bucket": ("Премиум ведро", 100, "Старый расходник: +25% котоинов в следующей раскопке."),
+    "prank": ("Подстава", 200, "Старая шуточная шахтерская проверка."),
+    "shovel_1": ("Лопата I", 250, "Постоянно добавляет +2% к шансу пройти каждый метр."),
+    "shovel_2": ("Лопата II", 700, "Улучшает постоянный бонус лопаты до +4%. Требуется Лопата I."),
+    "shovel_3": ("Лопата III", 1500, "Улучшает постоянный бонус лопаты до +6%. Требуется Лопата II."),
+    "cart": ("Вагонетка", 800, "Постоянно увеличивает награду каждой раскопки на 10%."),
+    "helmet_1": ("Каска I", 300, "Постоянно снижает риск обвала на 10%."),
+    "helmet_2": ("Каска II", 800, "Снижает риск обвала на 20%. Требуется Каска I."),
+    "helmet_3": ("Каска III", 1700, "Снижает риск обвала на 30%. Требуется Каска II."),
+    "flashlight_1": ("Фонарь I", 350, "Постоянно повышает шанс артефакта на 3%."),
+    "flashlight_2": ("Фонарь II", 900, "Повышает шанс артефакта на 6%. Требуется Фонарь I."),
+    "flashlight_3": ("Фонарь III", 1900, "Повышает шанс артефакта на 10%. Требуется Фонарь II."),
+    "cart_2": ("Вагонетка II", 1600, "Улучшает постоянный бонус котоинов до 20%. Требуется Вагонетка."),
+    "cart_3": ("Вагонетка III", 3500, "Улучшает постоянный бонус котоинов до 35%. Требуется Вагонетка II."),
+    "backpack_1": ("Рюкзак I", 800, "Постоянно добавляет 5% к найденным котоинам."),
+    "backpack_2": ("Рюкзак II", 1800, "Улучшает бонус добычи до 10%. Требуется Рюкзак I."),
+    "backpack_3": ("Рюкзак III", 4000, "Улучшает бонус добычи до 15%. Требуется Рюкзак II."),
+    "compass": ("Компас", 250, "Усиливает бонус выбранного маршрута в следующей раскопке."),
+    "scanner": ("Сканер породы", 180, "Снижает риск следующего обвала на 30%."),
+    "drill": ("Бур", 400, "Гарантированно пробивает один неудачный метр."),
+    "medkit": ("Аптечка", 120, "Отменяет следующую потерю котоинов от случайного события."),
+    "map": ("Карта тоннелей", 300, "Добавляет 15% к шансу артефакта в следующей раскопке."),
+    "talisman": ("Талисман", 500, "Удваивает котоины следующей раскопки."),
+    "camp": ("Переносной лагерь", 1200, "Один раз сокращает ожидание раскопки на 50%."),
+    "repair_kit": ("Ремонтный набор", 200, "После раскопки возвращает один использованный расходник."),
+    "mystery_chest": ("Таинственный сундук", 350, "В следующей раскопке даёт случайную награду или пустышку."),
+    "dynamite": ("Динамит", 150, "Один раз пробивает метр, на котором раскопка должна была остановиться."),
+    "insurance": ("Страховка", 60, "Если раскопка провалилась на первом метре, засчитает 1 метр."),
     "title_badge": ("Кличка в шахте", 150, "Добавляет титул 'Шахтер' в сумку и топы."),
     "cursed_pick": ("Проклятая кирка", 60, "Один раз спасает от мута при проигрыше в монетку."),
-    "prank": ("Подстава", 200, "Покупает шуточную шахтерскую проверку в чат."),
-    "tea": ("Чай перед сменой", 80, "Сразу восстанавливает +20 удачи."),
-    "bucket": ("Премиум ведро", 100, "Увеличивает награду за следующую раскопку на 25%."),
-    "safe": ("Сейф", 130, "Один раз защищает от потери глубины при обвале."),
+    "tea": ("Чай перед сменой", 40, "Сразу восстанавливает +35 удачи."),
+    "safe": ("Сейф", 100, "Один раз защищает от потери глубины при обвале."),
+    "rank_1": ("Ранг: Проходчик", 500, "Постоянный ранг, отображается в сумке и топах."),
+    "rank_2": ("Ранг: Бригадир", 1200, "Следующий постоянный ранг. Требуется Проходчик."),
+    "rank_3": ("Ранг: Шахтерный барон", 2500, "Высокий постоянный ранг. Требуется Бригадир."),
+    "rank_4": ("Ранг: Хозяин глубин", 5000, "Высший постоянный ранг. Требуется Шахтерный барон."),
+    "star_dig": ("Дополнительная раскопка", 0, "Позволяет копать без ожидания между попытками."),
+    "star_lucky_dig": ("Раскопка со 100 удачей", 0, "Позволяет копать без ожидания и защищает от обвала за счет 100 удачи."),
+    "star_depth_10": ("Гарантированная раскопка 10 м", 0, "Следующая раскопка гарантированно пройдет 10 метров без ожидания."),
 }
-DIG_ITEM_ORDER = ["helmet", "shovel", "flashlight", "insurance", "title_badge", "cursed_pick", "prank", "tea", "bucket", "safe"]
+DIG_ITEM_ORDER = [
+    "tea", "insurance", "dynamite", "safe", "compass", "scanner", "drill", "medkit", "map", "talisman", "camp", "repair_kit", "mystery_chest",
+    "shovel_1", "shovel_2", "shovel_3", "helmet_1", "helmet_2", "helmet_3",
+    "flashlight_1", "flashlight_2", "flashlight_3", "cart", "cart_2", "cart_3", "backpack_1", "backpack_2", "backpack_3",
+    "cursed_pick", "title_badge",
+    "rank_1", "rank_2", "rank_3", "rank_4",
+]
+DIG_SHOP_PAGE_SIZE = 6
+DIG_SHOP_CATEGORIES = {
+    "consumables": (
+        "Расходники",
+        ["tea", "insurance", "dynamite", "medkit", "repair_kit", "cursed_pick"],
+    ),
+    "gear": (
+        "Снаряжение",
+        ["safe", "compass", "scanner", "drill", "map", "talisman", "camp", "mystery_chest", "prank", "title_badge"],
+    ),
+    "upgrades": (
+        "Улучшения",
+        [
+            "shovel_1", "shovel_2", "shovel_3",
+            "helmet_1", "helmet_2", "helmet_3",
+            "flashlight_1", "flashlight_2", "flashlight_3",
+            "cart", "cart_2", "cart_3",
+            "backpack_1", "backpack_2", "backpack_3",
+        ],
+    ),
+    "ranks": (
+        "Ранги",
+        ["rank_1", "rank_2", "rank_3", "rank_4"],
+    ),
+}
+DIG_SHOP_CATEGORY_ORDER = ["consumables", "gear", "upgrades", "ranks"]
+DIG_SHOP_UPGRADE_CHAINS = [
+    ["shovel_1", "shovel_2", "shovel_3"],
+    ["helmet_1", "helmet_2", "helmet_3"],
+    ["flashlight_1", "flashlight_2", "flashlight_3"],
+    ["cart", "cart_2", "cart_3"],
+    ["backpack_1", "backpack_2", "backpack_3"],
+    ["rank_1", "rank_2", "rank_3", "rank_4"],
+]
+DIG_SHOP_ITEM_CATEGORY = {
+    item_key: category_key
+    for category_key, (_, item_keys) in DIG_SHOP_CATEGORIES.items()
+    for item_key in item_keys
+}
+DIG_PERMANENT_ITEMS = {
+    "title_badge", "shovel_1", "shovel_2", "shovel_3", "helmet_1", "helmet_2", "helmet_3",
+    "flashlight_1", "flashlight_2", "flashlight_3", "cart", "cart_2", "cart_3",
+    "backpack_1", "backpack_2", "backpack_3", "rank_1", "rank_2", "rank_3", "rank_4",
+}
+DIG_ITEM_REQUIREMENTS = {
+    "shovel_2": "shovel_1",
+    "shovel_3": "shovel_2",
+    "helmet_2": "helmet_1",
+    "helmet_3": "helmet_2",
+    "flashlight_2": "flashlight_1",
+    "flashlight_3": "flashlight_2",
+    "cart_2": "cart",
+    "cart_3": "cart_2",
+    "backpack_2": "backpack_1",
+    "backpack_3": "backpack_2",
+    "rank_2": "rank_1",
+    "rank_3": "rank_2",
+    "rank_4": "rank_3",
+}
+DIG_ARTIFACTS = {
+    "artifact_coin": "Старая монета",
+    "artifact_fossil": "Окаменелость",
+    "artifact_crystal": "Подземный кристалл",
+    "artifact_tool": "Ржавый шахтёрский инструмент",
+    "artifact_gem": "Необработанный самоцвет",
+    "artifact_badge": "Знак старой бригады",
+}
+DIG_RANKS = [
+    ("rank_4", "Хозяин глубин"),
+    ("rank_3", "Шахтерный барон"),
+    ("rank_2", "Бригадир"),
+    ("rank_1", "Проходчик"),
+]
+ADMIN_FEATURES = [
+    ("addReply", "Добавить @ответ"),
+    ("deleteReply", "Удалить @ответ"),
+    ("triggers", "Список триггеров"),
+    ("participants", "Топ участников"),
+    ("checkAccess", "Проверить доступ"),
+    ("giveaway", "Настроить розыгрыш"),
+    ("restart", "Перезагрузка"),
+    ("alarm", "Режим тревоги"),
+    ("rollMute", "Roll mute"),
+    ("quiet", "Затихни"),
+    ("blacklist", "Черный список слов"),
+    ("quotes", "Цитаты"),
+    ("send", "Написать в чат"),
+    ("feedback", "Обратная связь"),
+    ("ads", "Реклама"),
+    ("stars", "Звезды"),
+    ("mine", "Шахта"),
+    ("logs", "Логи"),
+]
+ADMIN_FEATURE_IDS = {feature_id for feature_id, _ in ADMIN_FEATURES}
+ADMIN_SUBFEATURES = {
+    "triggers": [("triggers.add", "Добавить слово"), ("triggers.delete", "Удалить слово")],
+    "blacklist": [("blacklist.add", "Добавить слово"), ("blacklist.delete", "Удалить слово")],
+    "quotes": [("quotes.add", "Добавить цитату"), ("quotes.delete", "Удалить цитату")],
+    "send": [("send.text", "Отправить текст"), ("send.media", "Отправить медиа"), ("send.voice", "Отправить голосовое")],
+    "giveaway": [("giveaway.settings", "Настройки розыгрыша"), ("giveaway.birthdays", "Дни рождения")],
+    "alarm": [
+        ("alarm.toggle", "Включить/выключить"),
+        ("alarm.api", "Автотревога Alerts.in.ua"),
+        ("alarm.restrictions", "Ограничения медиа и реакций"),
+        ("alarm.text", "Тексты тревоги"),
+    ],
+    "rollMute": [("rollMute.settings", "Настройки строк")],
+    "quiet": [
+        ("quiet.manual", "Замутить"),
+        ("quiet.text", "Текст ответа"),
+        ("quiet.mediaSave", "Сохранить медиа"),
+        ("quiet.mediaDelete", "Удалить медиа"),
+    ],
+    "mine": [("mine.grant", "Начислить/забрать ресурсы")],
+    "feedback": [("feedback.send", "Отправить сообщение")],
+    "ads": [
+        ("ads.add", "Добавить рекламу"),
+        ("ads.edit", "Редактировать рекламу"),
+        ("ads.delete", "Удалить рекламу"),
+        ("ads.settings", "Настройки рекламы"),
+    ],
+}
+ADMIN_PERMISSION_IDS = ADMIN_FEATURE_IDS | {item_id for items in ADMIN_SUBFEATURES.values() for item_id, _ in items}
+ACTION_FEATURES = {
+    "set_reply": "addReply",
+    "del_reply": "deleteReply",
+    "set_trigger": "triggers",
+    "del_trigger": "triggers",
+    "list": "triggers",
+    "participants": "participants",
+    "giveaway": "giveaway",
+    "alarm": "alarm",
+    "roll_mute": "rollMute",
+    "quiet": "quiet",
+    "blacklist": "blacklist",
+    "quotes": "quotes",
+    "send_message": "send",
+    "check": "checkAccess",
+    "logs": "logs",
+}
+STATE_FEATURES = {
+    "set_reply": "addReply",
+    "set_reply_media": "addReply",
+    "del_reply": "deleteReply",
+    "set_trigger": "triggers.add",
+    "set_trigger_media": "triggers.add",
+    "del_trigger": "triggers.delete",
+    "send_message": "send.text",
+    "set_giveaway": "giveaway.settings",
+    "add_birthday": "giveaway.birthdays",
+    "set_alarm_text": "alarm.text",
+    "set_clear_text": "alarm.text",
+    "set_roll_mute": "rollMute.settings",
+    "set_quiet_text": "quiet.text",
+    "set_quiet_media": "quiet.mediaSave",
+    "set_quiet_manual": "quiet.manual",
+    "add_blacklist_word": "blacklist.add",
+    "delete_blacklist_word": "blacklist.delete",
+    "delete_quote": "quotes.delete",
+}
 DIG_ACHIEVEMENTS = {
     "first_dig": ("Первый спуск", "Сделать первую раскопку.", 10, None),
     "first_meter": ("Первый метр", "Прокопать хотя бы 1 метр за вылазку.", 15, None),
@@ -100,15 +401,98 @@ DIG_ACHIEVEMENTS = {
     "stone_zero": ("Каменная встреча", "Упереться в камень на нулевой глубине.", 20, None),
     "collapse_survive": ("Не завалило", "Пережить обвал и продолжить.", 40, "shovel"),
     "first_purchase": ("Покупатель", "Купить первый предмет в магазине.", 30, None),
+    "level_5": ("Опытный проходчик", "Достичь 5 уровня шахтёра.", 100, None),
+    "level_10": ("Доступ в глубины", "Достичь 10 уровня шахтёра.", 200, "map"),
+    "streak_3": ("На волне", "Сделать 3 успешные раскопки подряд.", 40, None),
+    "streak_5": ("Стабильная смена", "Сделать 5 успешных раскопок подряд.", 80, "mystery_chest"),
+    "streak_10": ("Не остановить", "Сделать 10 успешных раскопок подряд.", 180, "artifact_gem"),
+    "collector_3": ("Археолог", "Найти 3 разных артефакта.", 120, None),
+    "collector_all": ("Коллекционер глубин", "Собрать всю коллекцию артефактов.", 300, "talisman"),
+    "low_luck": ("На волоске", "Завершить раскопку с удачей ниже 10.", 70, None),
+    "route_master": ("Картограф", "Побывать на особом маршруте.", 50, None),
+    "expedition": ("Бригада", "Завершить групповую экспедицию.", 100, None),
+    "coins_10000": ("Крупный вклад", "Накопить 10000 котоинов.", 500, None),
 }
 
 router = Router()
 db: Database
 BOT_ADMIN_IDS: set[int] = set()
-OPENAI_API_KEY: str | None = None
-OPENAI_MODEL = "gpt-4.1-mini"
+ALERTS_API_TOKEN: str | None = None
+staff_service: StaffService | None = None
+premium_service: PremiumService
 BOT_STARTED_AT = datetime.now(timezone.utc)
 DIG_PURCHASE_GUARD: dict[tuple[int, int, str, int], datetime] = {}
+SENDER_CACHE_SECONDS = 300
+ACTIVITY_CACHE_SECONDS = 30
+RUNTIME_CACHE_SECONDS = 10
+ALARM_RUNTIME_CACHE_SECONDS = 3
+REMEMBERED_CHATS: dict[int, float] = {}
+REMEMBERED_USERS: dict[tuple[int, int, str | None, str, bool], float] = {}
+PARTICIPANT_ACTIVITY_TOUCHES: dict[tuple[int, int], float] = {}
+KNOWN_TOPICS: set[tuple[int, int]] = set()
+TRIGGER_CACHE: dict[int, tuple[float, list]] = {}
+REPLY_CACHE: dict[int, tuple[float, dict[str, object]]] = {}
+BLACKLIST_CACHE: dict[int, tuple[float, list]] = {}
+ALARM_RUNTIME_CACHE: dict[int, tuple[float, object]] = {}
+BIRTHDAY_CHECK_CACHE: dict[tuple[int, str], float] = {}
+
+
+async def notify_staff_autoreply_change(bot: Bot, description: str) -> None:
+    if staff_service:
+        await staff_service.auto_reply_changed(bot, description)
+
+
+def invalidate_chat_runtime_cache(chat_id: int) -> None:
+    TRIGGER_CACHE.pop(chat_id, None)
+    REPLY_CACHE.pop(chat_id, None)
+    BLACKLIST_CACHE.pop(chat_id, None)
+    ALARM_RUNTIME_CACHE.pop(chat_id, None)
+
+
+def cached_triggers(chat_id: int):
+    now = time.monotonic()
+    cached = TRIGGER_CACHE.get(chat_id)
+    if cached and now - cached[0] < RUNTIME_CACHE_SECONDS:
+        return cached[1]
+    items = db.list_triggers(chat_id)
+    TRIGGER_CACHE[chat_id] = (now, items)
+    return items
+
+
+def cached_replies_map(chat_id: int) -> dict[str, object]:
+    now = time.monotonic()
+    cached = REPLY_CACHE.get(chat_id)
+    if cached and now - cached[0] < RUNTIME_CACHE_SECONDS:
+        return cached[1]
+    items = {item.username: item for item in db.list_replies(chat_id)}
+    REPLY_CACHE[chat_id] = (now, items)
+    return items
+
+
+def cached_blacklist_words(chat_id: int):
+    now = time.monotonic()
+    cached = BLACKLIST_CACHE.get(chat_id)
+    if cached and now - cached[0] < RUNTIME_CACHE_SECONDS:
+        return cached[1]
+    items = db.list_blacklist_words(chat_id)
+    BLACKLIST_CACHE[chat_id] = (now, items)
+    return items
+
+
+def cached_alarm_runtime(chat_id: int) -> tuple[bool, bool, str | None, bool]:
+    now = time.monotonic()
+    cached = ALARM_RUNTIME_CACHE.get(chat_id)
+    if cached and now - cached[0] < ALARM_RUNTIME_CACHE_SECONDS:
+        return cached[1]
+    settings = db.get_alarm_settings(chat_id)
+    state = (
+        db.alarm_restrictions_enabled(chat_id),
+        db.alarm_api_enabled(chat_id),
+        db.alarm_api_last_status(chat_id),
+        bool(settings.permissions_json),
+    )
+    ALARM_RUNTIME_CACHE[chat_id] = (now, state)
+    return state
 
 
 class DropStaleMessagesMiddleware(BaseMiddleware):
@@ -118,13 +502,119 @@ class DropStaleMessagesMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
+class StaffTopicMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        if isinstance(event, Message) and staff_service:
+            staff_service.observe_message(event)
+        return await handler(event, data)
+
+
+class BlacklistMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        if (
+            isinstance(event, Message)
+            and event.chat.type in SUPPORTED_CHAT_TYPES
+            and (event.text or event.caption)
+            and await handle_blacklist(event)
+        ):
+            return None
+        return await handler(event, data)
+
+
+class QuietAdminMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        if (
+            isinstance(event, Message)
+            and event.chat.type in SUPPORTED_CHAT_TYPES
+            and event.from_user
+            and db.get_active_quiet_admin(
+                event.chat.id,
+                event.from_user.id,
+                datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            )
+        ):
+            with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+                await event.delete()
+            return None
+        return await handler(event, data)
+
+
+class AlarmEmojiMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        if (
+            isinstance(event, Message)
+            and event.chat.type in SUPPORTED_CHAT_TYPES
+            and is_single_emoji_message(event)
+            and await delete_single_emoji_during_alarm(event)
+        ):
+            return None
+        return await handler(event, data)
+
+
+class StaleCallbackQueryMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        try:
+            return await handler(event, data)
+        except TelegramBadRequest as exc:
+            if isinstance(event, CallbackQuery) and callback_query_is_stale(exc):
+                return None
+            raise
+
+
+class AuditCallbackMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        result = await handler(event, data)
+        if not isinstance(event, CallbackQuery) or not event.from_user or not event.data:
+            return result
+        prefixes = (
+            "act:", "alarm:", "quiet:", "giveaway:", "blacklist:", "quotes:",
+            "access:", "leave:", "restart:",
+        )
+        if not event.data.startswith(prefixes) or event.data.startswith("act:logs:"):
+            return result
+        chat_match = re.search(r":(-100\d+)", event.data)
+        chat_id = int(chat_match.group(1)) if chat_match else None
+        db.add_audit_log(
+            "Telegram-бот",
+            "Нажал административную кнопку",
+            chat_id=chat_id,
+            actor_id=event.from_user.id,
+            actor_username=event.from_user.username,
+            actor_name=event.from_user.full_name,
+            details=event.data,
+        )
+        return result
+
+
+class AuditAdminStateMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        state = data.get("state")
+        state_name = await state.get_state() if state and isinstance(event, Message) and event.chat.type == "private" else None
+        state_data = await state.get_data() if state_name else {}
+        result = await handler(event, data)
+        if state_name and event.from_user:
+            db.add_audit_log(
+                "Telegram-бот",
+                "Завершил административное действие",
+                chat_id=state_data.get("chat_id"),
+                actor_id=event.from_user.id,
+                actor_username=event.from_user.username,
+                actor_name=event.from_user.full_name,
+                details=state_name,
+            )
+        return result
+
+
 class AdminInput(StatesGroup):
     set_reply = State()
+    set_reply_media = State()
     del_reply = State()
     set_trigger = State()
+    set_trigger_media = State()
     del_trigger = State()
     send_message = State()
     set_giveaway = State()
+    add_birthday = State()
     set_alarm_text = State()
     set_clear_text = State()
     paid_message = State()
@@ -134,6 +624,14 @@ class AdminInput(StatesGroup):
     set_quiet_media = State()
     set_quiet_manual = State()
     feedback_reply = State()
+    add_blacklist_word = State()
+    delete_blacklist_word = State()
+    delete_quote = State()
+    set_access_user = State()
+
+
+class MediaInput(StatesGroup):
+    waiting_file = State()
 
 
 def chat_title(chat: Chat) -> str:
@@ -149,6 +647,10 @@ def extract_mentions(text: str | None) -> set[str]:
 def has_trigger(text: str, trigger: str) -> bool:
     normalized_text = normalize_trigger(text)
     normalized_trigger = normalize_trigger(trigger)
+    return has_normalized_trigger(normalized_text, normalized_trigger)
+
+
+def has_normalized_trigger(normalized_text: str, normalized_trigger: str) -> bool:
     if not normalized_text or not normalized_trigger:
         return False
 
@@ -167,8 +669,17 @@ def message_html_text(message: Message) -> str:
     return (message.html_text or message.text or "").strip()
 
 
+def message_html_content(message: Message) -> str:
+    return (message.html_text or getattr(message, "html_caption", None) or message.text or message.caption or "").strip()
+
+
 def strip_html(value: str) -> str:
     return re.sub(r"<[^>]+>", "", value)
+
+
+def callback_query_is_stale(exc: TelegramBadRequest) -> bool:
+    message = str(exc).casefold()
+    return "query is too old" in message or "response timeout expired" in message or "query id is invalid" in message
 
 
 def preview_html(value: str, limit: int = 140) -> str:
@@ -191,11 +702,76 @@ def split_text_command(text: str | None) -> tuple[str, str]:
     return command, payload
 
 
+def donate_start_payload(chat_id: int) -> str:
+    return f"donate_{'n' if chat_id < 0 else 'p'}{abs(chat_id)}"
+
+
+def parse_donate_start_payload(text: str | None) -> int | None:
+    if not text:
+        return None
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) != 2:
+        return None
+    match = re.fullmatch(r"donate_([np])(\d+)", parts[1])
+    if not match:
+        return None
+    chat_id = int(match.group(2))
+    return -chat_id if match.group(1) == "n" else chat_id
+
+
+def parse_app_login_start_payload(text: str | None) -> str | None:
+    if not text:
+        return None
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) != 2:
+        return None
+    match = re.fullmatch(r"app_([A-Za-z0-9_-]+)", parts[1])
+    return match.group(1) if match else None
+
+
+def parse_user_subscription_payload(payload: str) -> int | None:
+    match = re.fullmatch(r"user_subscription:(\d+):[0-9a-f]+", payload)
+    return int(match.group(1)) if match else None
+
+
+def premium_payment_payload(plan: str, user_id: int) -> str:
+    return f"premium_plan:{plan}:{user_id}:{secrets.token_hex(8)}"
+
+
+def parse_premium_payment_payload(payload: str) -> tuple[str, int] | None:
+    match = re.fullmatch(r"premium_plan:(basic|extended):(\d+):[0-9a-f]+", payload)
+    return (match.group(1), int(match.group(2))) if match else None
+
+
+def user_subscription_stars() -> int:
+    try:
+        return max(1, int(os.getenv("USER_SUBSCRIPTION_STARS", "100")))
+    except ValueError:
+        return 100
+
+
 def split_trigger_payload(payload: str) -> tuple[str, str]:
-    trigger, sep, reply_text = payload.partition(" - ")
+    match = re.match(r"^\s*(.+?)\s+(?:-|–|—)\s*(.*?)\s*$", payload, flags=re.DOTALL)
+    if match:
+        return match.group(1).strip(), match.group(2).strip()
+
+    parts = re.split(r"\s*[–—]\s*", payload, maxsplit=1)
+    if len(parts) == 1 and payload.count("-") == 1:
+        parts = payload.split("-", maxsplit=1)
+    if len(parts) != 2:
+        return "", ""
+    return parts[0].strip(), parts[1].strip()
+
+
+def split_reply_payload(payload: str) -> tuple[str, str]:
+    username, reply_text = split_trigger_payload(payload)
+    if username:
+        return username, reply_text
+
+    username, sep, reply_text = payload.partition(" ")
     if not sep:
         return "", ""
-    return trigger.strip(), reply_text.strip()
+    return username.strip(), reply_text.strip()
 
 
 def split_giveaway_payload(payload: str) -> tuple[str, int, str]:
@@ -320,6 +896,22 @@ def parse_unquiet_payload(text: str | None) -> str | None:
     return ""
 
 
+def parse_quiet_admin_payload(text: str | None) -> tuple[str | None, int, str] | None:
+    if not text:
+        return None
+    match = re.fullmatch(
+        r"(?:(@[A-Za-z0-9_]{5,32})\s+)?затихни\s+админ(?:\s+(\d+))?(?:\s+-\s*(.*))?",
+        text.strip(),
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    username = normalize_username(match.group(1)) if match.group(1) else None
+    minutes = int(match.group(2)) if match.group(2) else 60
+    reason = (match.group(3) or "").strip()
+    return username, max(1, min(10080, minutes)), reason
+
+
 def parse_quiet_manual_payload(text: str | None) -> tuple[str | None, int | None, str]:
     if not text:
         return None, None, ""
@@ -334,13 +926,14 @@ def parse_quiet_manual_payload(text: str | None) -> tuple[str | None, int | None
     return parts[0].strip(), int(parts[1]), reason
 
 
-def refreshed_dig_luck(luck: int, last_luck_at: str, now: datetime) -> int:
+def refreshed_dig_luck(user_id: int, luck: int, last_luck_at: str, now: datetime) -> int:
     try:
         last = datetime.fromisoformat(last_luck_at)
     except ValueError:
         return max(0, min(100, luck))
     elapsed = max(0, (now - last).total_seconds())
-    restored = int(elapsed // 3600) * DIG_LUCK_REGEN_PER_HOUR
+    multiplier = float(premium_service.get_mine_bonuses(user_id)["luck_regen_multiplier"])
+    restored = int((elapsed / 3600) * DIG_LUCK_REGEN_PER_HOUR * multiplier)
     return max(0, min(100, luck + restored))
 
 
@@ -349,33 +942,682 @@ def dig_coin_reward(depth: int) -> int:
     return low + secrets.randbelow(high - low + 1)
 
 
+def dig_random_event(depth: int, coins: int) -> tuple[int, str | None]:
+    if secrets.randbelow(100) >= 55:
+        return coins, None
+
+    depth = max(0, min(10, depth))
+    event = secrets.randbelow(100)
+    if event < 4:
+        return coins, "Событие: копал, нашёл в пещере бутылку, пошёл за ней — нашёл Богдана в говно."
+    if event < 25:
+        bonus = 4 + depth * 2 + secrets.randbelow(7)
+        return coins + bonus, f"Событие: нашлась старая монета. Коллекционер купил ее за <b>{bonus}</b> котоинов."
+    if event < 42:
+        bonus = 2 + depth + secrets.randbelow(5)
+        return coins + bonus, f"Событие: в земле блеснул забытый кошелек. Внутри было <b>{bonus}</b> котоинов."
+    if event < 62:
+        loss = min(coins, 1 + secrets.randbelow(max(1, 3 + depth)))
+        return coins - loss, f"Событие: камень упал на ногу. На перевязку ушло <b>{loss}</b> котоинов."
+    if event < 78:
+        loss = min(coins, 1 + secrets.randbelow(max(1, 2 + depth)))
+        return coins - loss, f"Событие: погнулась ручка лопаты. Мелкий ремонт обошелся в <b>{loss}</b> котоинов."
+    if event < 90:
+        return coins, "Событие: за стеной послышался глухой стук. Ты решил не проверять."
+    return coins, "Событие: попалась старая табличка с надписью «Не копать». Разумеется, ты копнул рядом."
+
+
 def dig_player_name(username: str | None, full_name: str) -> str:
     return f"@{username}" if username else full_name
+
+
+def profile_link(user_id: int, username: str | None, full_name: str, suffix: str = "") -> str:
+    label = username or full_name
+    href = f"https://t.me/{quote(username)}" if username else f"tg://openmessage?user_id={user_id}"
+    return f'<a href="{href}">{escape(label)}</a>{escape(suffix)}'
+
+
+async def current_profile_link(
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    username: str | None,
+    full_name: str,
+    suffix: str = "",
+) -> str:
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        return profile_link(user_id, username, full_name, suffix)
+    return profile_link(user_id, member.user.username, member.user.full_name, suffix)
+
+
+async def get_active_chat_member(bot: Bot, chat_id: int, user_id: int):
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        return None
+    status = member_status_text(member.status)
+    if status not in ACTIVE_MEMBER_STATUS_TEXTS:
+        return None
+    if member.user.is_bot:
+        return None
+    return member
+
+
+def is_deleted_or_empty_user(user: User) -> bool:
+    if getattr(user, "is_deleted", False):
+        return True
+    first_name = (getattr(user, "first_name", None) or "").strip()
+    last_name = (getattr(user, "last_name", None) or "").strip()
+    full_name = (getattr(user, "full_name", None) or "").strip()
+    username = (getattr(user, "username", None) or "").strip()
+    normalized_name = " ".join(part for part in (first_name, last_name) if part).casefold()
+    normalized_full = full_name.casefold()
+    deleted_names = {"deleted account", "удаленный аккаунт", "удалённый аккаунт"}
+    if normalized_name in deleted_names or normalized_full in deleted_names:
+        return True
+    return not username and not first_name and not last_name
+
+
+async def is_valid_giveaway_user(bot: Bot, chat_id: int, user_id: int) -> bool:
+    member = await get_active_chat_member(bot, chat_id, user_id)
+    if member is None:
+        return False
+    if is_deleted_or_empty_user(member.user):
+        return False
+    return True
+
+
+async def is_valid_roll_mute_target(bot: Bot, chat_id: int, user_id: int) -> bool:
+    member = await get_active_chat_member(bot, chat_id, user_id)
+    if member is None:
+        return False
+    if is_deleted_or_empty_user(member.user):
+        return False
+    status = member_status_text(member.status)
+    return member.status not in ADMIN_STATUSES and status not in ADMIN_STATUS_TEXTS
 
 
 def dig_items_map(chat_id: int, user_id: int) -> dict[str, int]:
     return {item.item_key: item.quantity for item in db.list_dig_items(chat_id, user_id)}
 
 
+def dig_rank_name(items: dict[str, int]) -> str:
+    for key, name in DIG_RANKS:
+        if items.get(key, 0) > 0:
+            return name
+    return "Новичок"
+
+
+def dig_permanent_shovel_bonus(items: dict[str, int]) -> int:
+    if items.get("shovel_3", 0) > 0:
+        return 6
+    if items.get("shovel_2", 0) > 0:
+        return 4
+    if items.get("shovel_1", 0) > 0:
+        return 2
+    return 0
+
+
+def dig_equipment_level(items: dict[str, int], keys: tuple[str, ...]) -> int:
+    for level, key in reversed(list(enumerate(keys, start=1))):
+        if items.get(key, 0) > 0:
+            return level
+    return 0
+
+
+def dig_helmet_reduction(items: dict[str, int]) -> int:
+    return (0, 10, 20, 30)[dig_equipment_level(items, ("helmet_1", "helmet_2", "helmet_3"))]
+
+
+def dig_flashlight_artifact_bonus(items: dict[str, int]) -> int:
+    return (0, 3, 6, 10)[dig_equipment_level(items, ("flashlight_1", "flashlight_2", "flashlight_3"))]
+
+
+def dig_cart_bonus(items: dict[str, int]) -> int:
+    if items.get("cart_3", 0) > 0:
+        return 35
+    if items.get("cart_2", 0) > 0:
+        return 20
+    return 10 if items.get("cart", 0) > 0 else 0
+
+
+def dig_backpack_bonus(items: dict[str, int]) -> int:
+    return (0, 5, 10, 15)[dig_equipment_level(items, ("backpack_1", "backpack_2", "backpack_3"))]
+
+
+def dig_route(user_id: int) -> tuple[str, tuple[str, int, float, float, float, int]]:
+    progress = db.get_dig_progress(user_id)
+    key = str(progress.get("selected_route") or "old_mine")
+    return (key, DIG_ROUTES[key]) if key in DIG_ROUTES else ("old_mine", DIG_ROUTES["old_mine"])
+
+
+def ensure_daily_dig_contracts(user_id: int) -> tuple[str, list[dict]]:
+    today = datetime.now(timezone.utc).date().isoformat()
+    existing = db.list_dig_contracts(user_id, today)
+    if not existing:
+        rng = random.Random(f"{today}:{user_id}:contracts")
+        keys = rng.sample(list(DIG_CONTRACTS), 3)
+        db.ensure_dig_contracts(user_id, today, [(key, DIG_CONTRACTS[key][1]) for key in keys])
+    return today, db.list_dig_contracts(user_id, today)
+
+
+def dig_contracts_text(user_id: int) -> str:
+    today, contracts = ensure_daily_dig_contracts(user_id)
+    lines = [f"<b>Контракты на {today}</b>", f"Награда: <b>{DIG_CONTRACT_REWARD_COINS}</b> котоинов и <b>{DIG_CONTRACT_REWARD_XP}</b> XP за каждый.", ""]
+    for item in contracts:
+        name = DIG_CONTRACTS[item["contract_key"]][0]
+        mark = "✓" if item["claimed"] else "•"
+        lines.append(f"{mark} {escape(name)}: <b>{item['progress']}/{item['target']}</b>")
+    return "\n".join(lines)
+
+
+def update_dig_contracts(user_id: int, dug: int, coins: int, artifact_found: bool) -> list[str]:
+    today, _ = ensure_daily_dig_contracts(user_id)
+    db.add_dig_contract_progress(user_id, today, {
+        "depth": dug, "coins": coins, "artifact": 1 if artifact_found else 0, "success": 1 if dug > 0 else 0,
+    })
+    claimed = db.claim_ready_dig_contracts(user_id, today)
+    for _ in claimed:
+        db.add_dig_coins(0, user_id, DIG_CONTRACT_REWARD_COINS)
+    return [f"Контракт «{DIG_CONTRACTS[key][0]}» выполнен: +{DIG_CONTRACT_REWARD_COINS} котоинов, +{DIG_CONTRACT_REWARD_XP} XP" for key in claimed]
+
+
+def dig_routes_text(user_id: int) -> str:
+    progress = db.get_dig_progress(user_id)
+    lines = ["<b>Маршруты шахты</b>", f"Уровень шахтёра: <b>{progress['level']}</b>", ""]
+    for key, (name, chance, coins, artifacts, collapse, required_level) in DIG_ROUTES.items():
+        mark = "✓" if key == progress["selected_route"] else "•"
+        lock = f" (с {required_level} уровня)" if progress["level"] < required_level else ""
+        lines.append(f"{mark} <b>{name}</b>{lock}: метр {chance:+d}%, награда x{coins:g}, артефакты x{artifacts:g}, риск x{collapse:g}.")
+    return "\n".join(lines)
+
+
+def dig_expedition_text(chat_id: int) -> str:
+    today = datetime.now(timezone.utc).date().isoformat()
+    expedition = db.get_dig_expedition(chat_id, today)
+    lines = ["<b>Групповая экспедиция</b>", f"Прогресс: <b>{expedition['progress']}/{expedition['target']}</b> м.", f"Награда каждому участнику: <b>{DIG_EXPEDITION_REWARD}</b> котоинов."]
+    lines.append("Экспедиция завершена." if expedition["completed"] else f"Участников: <b>{len(expedition['contributors'])}</b>.")
+    return "\n".join(lines)
+
+
+def dig_artifact_text(items: dict[str, int]) -> str:
+    found = [name for key, name in DIG_ARTIFACTS.items() if items.get(key, 0) > 0]
+    return ", ".join(found) if found else "пока нет"
+
+
+def find_dig_artifact(
+    chat_id: int,
+    user_id: int,
+    depth: int,
+    items: dict[str, int],
+    chance_bonus: int = 0,
+) -> tuple[int, str | None]:
+    if depth <= 0 or secrets.randbelow(100) >= min(60, 5 + depth + chance_bonus):
+        return 0, None
+    key = list(DIG_ARTIFACTS)[secrets.randbelow(len(DIG_ARTIFACTS))]
+    name = DIG_ARTIFACTS[key]
+    if items.get(key, 0) > 0:
+        bonus = 20 + depth * 3
+        return bonus, f"Артефакт: снова найден «{name}». Дубликат продан за <b>{bonus}</b> котоинов."
+
+    db.add_dig_item(chat_id, user_id, key, 1)
+    items[key] = 1
+    text = f"Артефакт: найден «{name}» и добавлен в коллекцию."
+    if all(items.get(artifact_key, 0) > 0 for artifact_key in DIG_ARTIFACTS) and items.get("artifact_set_reward", 0) <= 0:
+        db.add_dig_item(chat_id, user_id, "artifact_set_reward", 1)
+        items["artifact_set_reward"] = 1
+        return 250, text + " Коллекция собрана: <b>+250</b> котоинов и постоянный бонус +5% к наградам."
+    return 0, text
+
+
 def dig_display_name(chat_id: int, user_id: int, username: str | None, full_name: str) -> str:
     name = dig_player_name(username, full_name)
-    if db.get_dig_item_quantity(chat_id, user_id, "title_badge") > 0:
-        return f"{name} [Шахтер]"
-    return name
+    items = dig_items_map(chat_id, user_id)
+    return f"{name}{dig_title_suffix(items)}"
+
+
+def dig_title_suffix(items: dict[str, int]) -> str:
+    rank = dig_rank_name(items)
+    if rank != "Новичок":
+        return f" [{rank}]"
+    return " [Шахтер]" if items.get("title_badge", 0) > 0 else ""
 
 
 def dig_effects_text(items: dict[str, int]) -> str:
-    active = []
-    for key, count in items.items():
-        if count <= 0:
+    hidden_keys = set(DIG_ARTIFACTS) | {"artifact_set_reward"}
+    best_chain_keys: set[str] = set()
+    chain_keys = {key for chain in DIG_SHOP_UPGRADE_CHAINS for key in chain}
+    for chain in DIG_SHOP_UPGRADE_CHAINS:
+        owned = [key for key in chain if items.get(key, 0) > 0]
+        if owned:
+            best_chain_keys.add(owned[-1])
+
+    groups = {
+        "Постоянные": [],
+        "Расходники": [],
+        "Оплаченные": [],
+        "Прочее": [],
+    }
+    paid_keys = {"star_dig", "star_lucky_dig", "star_depth_10"}
+
+    for key in DIG_ITEM_ORDER + list(paid_keys):
+        count = items.get(key, 0)
+        if count <= 0 or key in hidden_keys:
             continue
+        if key in chain_keys and key not in best_chain_keys:
+            continue
+
         name = DIG_SHOP_ITEMS.get(key, (key, 0, ""))[0]
-        active.append(f"{name} x{count}")
-    return "\n".join(active) if active else "Нет активных эффектов."
+        if key in paid_keys:
+            groups["Оплаченные"].append(f"{name} x{count}")
+        elif key in DIG_PERMANENT_ITEMS:
+            groups["Постоянные"].append(name if count == 1 else f"{name} x{count}")
+        elif key in DIG_SHOP_CATEGORIES["consumables"][1] or key in DIG_SHOP_CATEGORIES["gear"][1]:
+            groups["Расходники"].append(f"{name} x{count}")
+        else:
+            groups["Прочее"].append(f"{name} x{count}")
+
+    lines = []
+    for title, values in groups.items():
+        if values:
+            lines.append(f"{title}: {', '.join(values)}")
+    return "\n".join(lines) if lines else "Нет активных эффектов."
+
+
+def user_dig_cooldown(user_id: int) -> timedelta:
+    multiplier = float(premium_service.get_mine_bonuses(user_id)["cooldown_multiplier"])
+    return timedelta(seconds=DIG_COOLDOWN.total_seconds() * multiplier)
+
+
+def apply_premium_coin_bonus(user_id: int, coins: int, used_effects: list[str]) -> int:
+    multiplier = float(premium_service.get_mine_bonuses(user_id)["coins_multiplier"])
+    if multiplier <= 1:
+        return coins
+    used_effects.append(f"Premium: +{round((multiplier - 1) * 100)}% котоинов")
+    return max(1, int(coins * multiplier + 0.9999))
+
+
+def dig_bag_text(chat_id: int, user_id: int) -> str | None:
+    player = db.get_dig_player(chat_id, user_id)
+    if player is None:
+        return None
+
+    now = datetime.now(timezone.utc)
+    luck = refreshed_dig_luck(user_id, player.luck, player.last_luck_at, now)
+    items = dig_items_map(chat_id, user_id)
+    progress = db.get_dig_progress(user_id)
+    _, route_data = dig_route(user_id)
+    cooldown = "можно копать"
+    star_digs = items.get("star_dig", 0) + items.get("star_lucky_dig", 0) + items.get("star_depth_10", 0)
+    if star_digs:
+        cooldown = f"можно копать, оплаченных попыток: {star_digs}"
+    elif player.last_dig_at:
+        next_dig = datetime.fromisoformat(player.last_dig_at) + user_dig_cooldown(user_id)
+        if now < next_dig:
+            remaining = int((next_dig - now).total_seconds() // 60) + 1
+            cooldown = f"через {remaining // 60} ч {remaining % 60} мин"
+
+    return (
+        "<b>Сумка шахтера</b>\n"
+        f"{escape(dig_display_name(player.chat_id, player.user_id, player.username, player.full_name))}\n\n"
+        f"Котоины: <b>{player.coins}</b> | Удача: <b>{luck}</b>/100\n"
+        f"Глубина: <b>{player.total_depth}</b> м | Рекорд: <b>{player.best_session_depth}</b> м\n"
+        f"Ур. <b>{progress['level']}</b> | XP <b>{progress['xp']}</b> | Серия <b>{progress['streak']}</b>\n"
+        f"Маршрут: <b>{escape(route_data[0])}</b>\n"
+        f"Копать: <b>{escape(cooldown)}</b>\n"
+        f"Артефакты: <b>{escape(dig_artifact_text(items))}</b>\n\n"
+        f"<b>Эффекты:</b>\n{escape(dig_effects_text(items))}"
+    )
+
+
+def consume_star_dig(chat_id: int, user_id: int, items: dict[str, int]) -> tuple[bool, bool, bool]:
+    if items.get("star_depth_10", 0) > 0 and db.consume_dig_item(chat_id, user_id, "star_depth_10"):
+        return True, True, True
+    if items.get("star_lucky_dig", 0) > 0 and db.consume_dig_item(chat_id, user_id, "star_lucky_dig"):
+        return True, True, False
+    if items.get("star_dig", 0) > 0 and db.consume_dig_item(chat_id, user_id, "star_dig"):
+        return True, False, False
+    return False, False, False
+
+
+def run_private_dig(chat_id: int, user: User) -> str:
+    player = db.get_dig_player(chat_id, user.id)
+    if player is None:
+        return "Ты еще не зарегистрирован в раскопках. Сначала напиши <code>копай</code> внутри выбранной группы и нажми кнопку регистрации."
+
+    now = datetime.now(timezone.utc)
+    items = dig_items_map(chat_id, user.id)
+    camp_used = False
+    star_dig_used, forced_luck, forced_depth = consume_star_dig(chat_id, user.id, items)
+    if player.last_dig_at and not star_dig_used:
+        last_dig = datetime.fromisoformat(player.last_dig_at)
+        cooldown = user_dig_cooldown(user.id)
+        next_dig = last_dig + cooldown
+        if now < next_dig and items.get("camp", 0) > 0 and now >= last_dig + cooldown / 2:
+            camp_used = db.consume_dig_item(chat_id, user.id, "camp")
+            if camp_used:
+                next_dig = now
+        if now < next_dig:
+            remaining = int((next_dig - now).total_seconds() // 60) + 1
+            return f"Лопата отдыхает. До следующей раскопки: <b>{remaining // 60} ч {remaining % 60} мин</b>."
+
+    route_key, route_data = dig_route(user.id)
+    route_name, route_chance, route_coins, route_artifacts, route_collapse, _ = route_data
+    luck_before = refreshed_dig_luck(user.id, player.luck, player.last_luck_at, now)
+    luck_after = luck_before if forced_luck else max(0, luck_before - DIG_LUCK_COST)
+    used_effects: list[str] = []
+    if star_dig_used:
+        if forced_depth:
+            used_effects.append("Оплаченная раскопка: гарантированно пройдено 10 м")
+        elif forced_luck:
+            used_effects.append("Оплаченная раскопка: ожидание пропущено, действует 100 удачи")
+        else:
+            used_effects.append("Оплаченная раскопка: ожидание пропущено")
+    helmet_used = not forced_luck and items.get("helmet", 0) > 0 and db.consume_dig_item(chat_id, user.id, "helmet")
+    shovel_used = not forced_luck and items.get("shovel", 0) > 0 and db.consume_dig_item(chat_id, user.id, "shovel")
+    flashlight_used = not forced_depth and items.get("flashlight", 0) > 0 and db.consume_dig_item(chat_id, user.id, "flashlight")
+    bucket_used = items.get("bucket", 0) > 0 and db.consume_dig_item(chat_id, user.id, "bucket")
+    compass_used = items.get("compass", 0) > 0 and db.consume_dig_item(chat_id, user.id, "compass")
+    scanner_used = items.get("scanner", 0) > 0 and db.consume_dig_item(chat_id, user.id, "scanner")
+    drill_used = items.get("drill", 0) > 0
+    map_used = items.get("map", 0) > 0 and db.consume_dig_item(chat_id, user.id, "map")
+    talisman_used = items.get("talisman", 0) > 0 and db.consume_dig_item(chat_id, user.id, "talisman")
+    medkit_available = items.get("medkit", 0) > 0
+    repair_used = items.get("repair_kit", 0) > 0 and db.consume_dig_item(chat_id, user.id, "repair_kit")
+    chest_used = items.get("mystery_chest", 0) > 0 and db.consume_dig_item(chat_id, user.id, "mystery_chest")
+    shovel_bonus = dig_permanent_shovel_bonus(items)
+    cart_bonus = dig_cart_bonus(items)
+    backpack_bonus = dig_backpack_bonus(items)
+    helmet_reduction = dig_helmet_reduction(items)
+    collection_bonus = items.get("artifact_set_reward", 0) > 0
+    effective_luck = 100 if forced_luck else min(100, luck_before + (5 if helmet_used else 0))
+    if helmet_used:
+        used_effects.append("Каска шахтера: +5 удачи")
+    if shovel_used:
+        used_effects.append("Крепкая лопата: риск обвала снижен")
+    if flashlight_used:
+        used_effects.append("Фонарик: +10% к шансам раскопки")
+    if bucket_used:
+        used_effects.append("Премиум ведро: +25% котоинов")
+    if shovel_bonus:
+        used_effects.append(f"Постоянная лопата: +{shovel_bonus}% к шансам раскопки")
+    if cart_bonus:
+        used_effects.append(f"Вагонетка: +{cart_bonus}% котоинов")
+    if backpack_bonus:
+        used_effects.append(f"Рюкзак: +{backpack_bonus}% котоинов")
+    if compass_used:
+        route_chance = round(route_chance * 1.25)
+        route_coins *= 1.15
+        used_effects.append("Компас: маршрут усилен")
+    if collection_bonus:
+        used_effects.append("Коллекция артефактов: +5% котоинов")
+
+    dug = 10 if forced_depth else 0
+    stopped_by_stone = False
+    if not forced_depth:
+        for meter, chance in enumerate(DIG_SUCCESS_CHANCES, start=1):
+            actual_chance = min(95.0, chance + route_chance + (10 if flashlight_used else 0) + shovel_bonus)
+            if secrets.randbelow(10000) < int(actual_chance * 100):
+                dug = meter
+                continue
+            if drill_used and db.consume_dig_item(chat_id, user.id, "drill"):
+                drill_used = False
+                dug = meter
+                used_effects.append(f"Бур: пробит {meter}-й метр")
+                continue
+            if items.get("dynamite", 0) > 0 and db.consume_dig_item(chat_id, user.id, "dynamite"):
+                items["dynamite"] -= 1
+                dug = meter
+                used_effects.append(f"Динамит: пробит {meter}-й метр")
+                continue
+            stopped_by_stone = True
+            break
+
+    collapse_depth = 0
+    insurance_used = False
+    if stopped_by_stone and dug == 0 and items.get("insurance", 0) > 0 and db.consume_dig_item(chat_id, user.id, "insurance"):
+        insurance_used = True
+        dug = 1
+        used_effects.append("Страховка: первый метр засчитан")
+
+    collapse_chance = max(0, int(max(0, 100 - effective_luck) * route_collapse) - helmet_reduction)
+    if scanner_used:
+        collapse_chance = collapse_chance * 70 // 100
+    if shovel_used:
+        collapse_chance //= 2
+    if dug > 0 and collapse_chance and secrets.randbelow(100) < collapse_chance:
+        if items.get("safe", 0) > 0 and db.consume_dig_item(chat_id, user.id, "safe"):
+            used_effects.append("Сейф: обвал остановлен")
+        else:
+            collapse_depth = 1 + secrets.randbelow(dug)
+            dug = max(0, dug - collapse_depth)
+
+    coins = max(1, int(dig_coin_reward(dug) * route_coins + 0.9999))
+    if bucket_used:
+        coins = (coins * 125 + 99) // 100
+    if cart_bonus:
+        coins = (coins * (100 + cart_bonus) + 99) // 100
+    if backpack_bonus:
+        coins = (coins * (100 + backpack_bonus) + 99) // 100
+    if collection_bonus:
+        coins = (coins * 105 + 99) // 100
+    coins_before_event = coins
+    coins, event_text = dig_random_event(dug, coins)
+    if coins < coins_before_event and medkit_available and db.consume_dig_item(chat_id, user.id, "medkit"):
+        coins = coins_before_event
+        used_effects.append("Аптечка: потеря котоинов отменена")
+    artifact_bonus, artifact_text = find_dig_artifact(
+        chat_id, user.id, dug, items,
+        max(0, int((route_artifacts - 1) * 10)) + dig_flashlight_artifact_bonus(items) + (15 if map_used else 0),
+    )
+    coins += artifact_bonus
+    if talisman_used:
+        coins *= 2
+        used_effects.append("Талисман: котоины удвоены")
+    if chest_used:
+        chest_roll = secrets.randbelow(3)
+        if chest_roll == 0:
+            used_effects.append("Таинственный сундук оказался пуст")
+        elif chest_roll == 1:
+            bonus = 25 + secrets.randbelow(51)
+            coins += bonus
+            used_effects.append(f"Таинственный сундук: +{bonus} котоинов")
+        else:
+            db.add_dig_item(chat_id, user.id, "insurance", 1)
+            used_effects.append("Таинственный сундук: найдена страховка")
+    if repair_used:
+        restored = "bucket" if bucket_used else "flashlight" if flashlight_used else "helmet" if helmet_used else "shovel" if shovel_used else None
+        if restored:
+            db.add_dig_item(chat_id, user.id, restored, 1)
+            used_effects.append(f"Ремонтный набор восстановил: {DIG_SHOP_ITEMS[restored][0]}")
+        else:
+            db.add_dig_item(chat_id, user.id, "repair_kit", 1)
+    coins = apply_premium_coin_bonus(user.id, coins, used_effects)
+    db.update_dig_player_after_dig(
+        chat_id=chat_id,
+        user_id=user.id,
+        username=user.username,
+        full_name=user.full_name,
+        coins_delta=coins,
+        depth_delta=dug,
+        best_session_depth=dug,
+        luck=luck_after,
+        last_luck_at=now.isoformat(timespec="seconds"),
+        last_dig_at=now.isoformat(timespec="seconds"),
+    )
+
+    contract_updates = update_dig_contracts(user.id, dug, coins, artifact_text is not None)
+    progress = db.update_dig_progress(
+        user.id,
+        xp_delta=5 + dug * 10 + len(contract_updates) * DIG_CONTRACT_REWARD_XP,
+        success=dug > 0,
+        route=route_key,
+    )
+    streak_rewards: list[str] = []
+    if progress["streak"] == 3:
+        db.add_dig_coins(chat_id, user.id, 10)
+        streak_rewards.append("Серия 3: +10 котоинов")
+    elif progress["streak"] == 5:
+        db.add_dig_item(chat_id, user.id, "mystery_chest", 1)
+        streak_rewards.append("Серия 5: таинственный сундук")
+    elif progress["streak"] == 10:
+        db.add_dig_item(chat_id, user.id, "artifact_gem", 1)
+        streak_rewards.append("Серия 10: редкий самоцвет")
+
+    today = now.date().isoformat()
+    expedition = db.add_dig_expedition_progress(
+        chat_id,
+        user.id,
+        today,
+        dug,
+        DIG_EXPEDITION_TARGET,
+    )
+    expedition_rewarded = db.reward_dig_expedition(chat_id, today, DIG_EXPEDITION_REWARD) if expedition["completed"] else []
+
+    achievements = check_dig_achievements(chat_id, user.id, player, dug, coins, collapse_depth, stopped_by_stone)
+    lines = [f"<b>{escape(dig_display_name(chat_id, user.id, user.username, user.full_name))} копает...</b>"]
+    if stopped_by_stone and dug == 0 and collapse_depth == 0 and not insurance_used:
+        lines.append("Ты наткнулся на большой камень, попробуй в следующий раз.")
+    elif stopped_by_stone:
+        lines.append(f"Камень остановил раскопку. Удалось пройти <b>{dug}</b> м.")
+    else:
+        lines.append(f"Редкая удача: ты прошел все <b>{dug}</b> м за вылазку.")
+    if collapse_depth:
+        lines.append(f"Обвал срезал <b>{collapse_depth}</b> м прогресса этой раскопки.")
+    if event_text:
+        lines.append(event_text)
+    if artifact_text:
+        lines.append(artifact_text)
+    lines.append(f"Маршрут: <b>{escape(route_name)}</b>. Уровень: <b>{progress['level']}</b>, XP: <b>{progress['xp']}</b>, серия: <b>{progress['streak']}</b>.")
+    lines.append(f"Экспедиция группы: <b>{expedition['progress']}/{expedition['target']}</b> м.")
+    if contract_updates:
+        lines.append("\n<b>Контракты:</b>")
+        lines.extend(escape(item) for item in contract_updates)
+    if streak_rewards:
+        lines.append("\n<b>Награды серии:</b>")
+        lines.extend(escape(item) for item in streak_rewards)
+    if used_effects:
+        lines.append("\n<b>Сработали эффекты:</b>")
+        lines.extend(escape(effect) for effect in used_effects)
+    lines.extend(
+        [
+            f"Получено: <b>{coins}</b> котоинов.",
+            f"Общая глубина: <b>{player.total_depth + dug}</b> м.",
+            (
+                f"Удача в раскопке: <b>100</b>/100. Обычная удача сохранена: <b>{luck_before}</b>/100."
+                if forced_luck
+                else f"Удача: <b>{luck_before}</b> → <b>{luck_after}</b>."
+            ),
+        ]
+    )
+    if achievements:
+        lines.append("\n<b>Новые достижения:</b>")
+        lines.extend(escape(item) for item in achievements)
+    return "\n".join(lines)
+
+
+def dig_star_payload(action: str, user_id: int, chat_id: int) -> str:
+    return f"dig_star:{action}:{user_id}:{chat_id}:{uuid4().hex}"
+
+
+def parse_dig_star_payload(payload: str) -> tuple[str, int, int] | None:
+    parts = payload.split(":", 4)
+    if len(parts) != 5 or parts[0] != "dig_star" or parts[1] not in DIG_STAR_ACTIONS:
+        return None
+    try:
+        return parts[1], int(parts[2]), int(parts[3])
+    except ValueError:
+        return None
+
+
+def dig_star_price(action: str) -> int:
+    return DIG_STAR_ACTIONS[action][2]
+
+
+def dig_star_invoice(action: str) -> tuple[str, str, int]:
+    title, description, price, _, _ = DIG_STAR_ACTIONS[action]
+    return title, description, price
 
 
 def dig_shop_items_for_keyboard() -> list[tuple[str, str, int]]:
     return [(key, DIG_SHOP_ITEMS[key][0], DIG_SHOP_ITEMS[key][1]) for key in DIG_ITEM_ORDER]
+
+
+def dig_shop_categories_for_keyboard() -> list[tuple[str, str]]:
+    return [(key, DIG_SHOP_CATEGORIES[key][0]) for key in DIG_SHOP_CATEGORY_ORDER]
+
+
+def dig_shop_category_title(category: str) -> str:
+    return DIG_SHOP_CATEGORIES.get(category, DIG_SHOP_CATEGORIES["consumables"])[0]
+
+
+def dig_shop_category_items(category: str, items: dict[str, int]) -> list[tuple[str, str, int]]:
+    if category not in DIG_SHOP_CATEGORIES:
+        category = "consumables"
+
+    item_keys = DIG_SHOP_CATEGORIES[category][1]
+    visible_keys: list[str] = []
+    handled_keys: set[str] = set()
+
+    for chain in DIG_SHOP_UPGRADE_CHAINS:
+        chain_in_category = [key for key in chain if key in item_keys]
+        if not chain_in_category:
+            continue
+        handled_keys.update(chain_in_category)
+        for key in chain_in_category:
+            if items.get(key, 0) <= 0:
+                visible_keys.append(key)
+                break
+
+    for key in item_keys:
+        if key in handled_keys:
+            continue
+        if key in DIG_PERMANENT_ITEMS and items.get(key, 0) > 0:
+            continue
+        visible_keys.append(key)
+
+    return [(key, DIG_SHOP_ITEMS[key][0], DIG_SHOP_ITEMS[key][1]) for key in visible_keys if key in DIG_SHOP_ITEMS]
+
+
+def dig_shop_page_items(category: str, items: dict[str, int], page: int) -> tuple[list[tuple[str, str, int]], int, int]:
+    category_items = dig_shop_category_items(category, items)
+    total_pages = max(1, math.ceil(len(category_items) / DIG_SHOP_PAGE_SIZE))
+    page = max(0, min(page, total_pages - 1))
+    start = page * DIG_SHOP_PAGE_SIZE
+    return category_items[start:start + DIG_SHOP_PAGE_SIZE], page, total_pages
+
+
+def dig_shop_category_for_item(item_key: str) -> str:
+    return DIG_SHOP_ITEM_CATEGORY.get(item_key, "consumables")
+
+
+def dig_shop_overview_text(coins: int, items: dict[str, int]) -> str:
+    return (
+        "<b>Магазин раскопок</b>\n"
+        f"Котоины: <b>{coins}</b>\n\n"
+        f"<b>Активные эффекты:</b>\n{escape(dig_effects_text(items))}\n\n"
+        "Выбери раздел магазина."
+    )
+
+
+def dig_shop_category_text(coins: int, category: str, page: int, total_pages: int) -> str:
+    page_text = f"\nСтраница: <b>{page + 1}/{total_pages}</b>" if total_pages > 1 else ""
+    return (
+        f"<b>{escape(dig_shop_category_title(category))}</b>\n"
+        f"Котоины: <b>{coins}</b>{page_text}\n\n"
+        "Нажми на товар, чтобы открыть описание и покупку."
+    )
+
+
+def dig_purchase_error(items: dict[str, int], item_key: str) -> str | None:
+    if item_key in DIG_PERMANENT_ITEMS and items.get(item_key, 0) > 0:
+        return "Это постоянное улучшение уже куплено."
+    required = DIG_ITEM_REQUIREMENTS.get(item_key)
+    if required and items.get(required, 0) <= 0:
+        return f"Сначала купи: {DIG_SHOP_ITEMS[required][0]}."
+    return None
 
 
 def dig_purchase_is_duplicate(chat_id: int, user_id: int, item_key: str, message_id: int) -> bool:
@@ -393,6 +1635,15 @@ def dig_purchase_is_duplicate(chat_id: int, user_id: int, item_key: str, message
         return True
     DIG_PURCHASE_GUARD[key] = now
     return False
+
+
+def blacklist_text(chat_id: int) -> str:
+    words = db.list_blacklist_words(chat_id)
+    if not words:
+        return "<b>Черный список слов</b>\n\nСписок пока пуст."
+    lines = ["<b>Черный список слов</b>"]
+    lines.extend(f"{index}. {escape(item.word)}" for index, item in enumerate(words, start=1))
+    return "\n".join(lines)
 
 
 def award_dig_achievement(chat_id: int, user_id: int, achievement_key: str) -> str | None:
@@ -480,8 +1731,21 @@ def backfill_dig_achievements() -> int:
             checks.append("total_100")
         if player.coins >= 500:
             checks.append("coins_500")
-        if db.list_dig_items(player.chat_id, player.user_id):
+        items = {item.item_key: item.quantity for item in db.list_dig_items(player.chat_id, player.user_id)}
+        if items:
             checks.append("first_purchase")
+        progress = db.get_dig_progress(player.user_id)
+        if progress["level"] >= 5:
+            checks.append("level_5")
+        if progress["level"] >= 10:
+            checks.append("level_10")
+        artifact_count = sum(1 for key in DIG_ARTIFACTS if items.get(key, 0) > 0)
+        if artifact_count >= 3:
+            checks.append("collector_3")
+        if artifact_count == len(DIG_ARTIFACTS):
+            checks.append("collector_all")
+        if player.coins >= 10000:
+            checks.append("coins_10000")
 
         for key in checks:
             if award_dig_achievement(player.chat_id, player.user_id, key):
@@ -494,18 +1758,6 @@ async def require_dig_button_owner(callback: CallbackQuery, owner_id: int) -> bo
         await callback.answer("Это не твой магазин.", show_alert=True)
         return False
     return True
-
-
-def extract_ai_prompt(text: str | None) -> str | None:
-    if not text:
-        return None
-    stripped = text.strip()
-    lowered = stripped.casefold()
-    prefixes = ["бот, ", "бот "]
-    for prefix in prefixes:
-        if lowered.startswith(prefix):
-            return stripped[len(prefix) :].strip() or None
-    return None
 
 
 WEATHER_CODES = {
@@ -538,38 +1790,180 @@ WEATHER_CODES = {
 }
 
 
+@dataclass(frozen=True)
+class WeatherPlace:
+    latitude: float
+    longitude: float
+    label: str
+    source: str
+    score: int
+
+
+WEATHER_UA_HINT_RE = re.compile(
+    r"\b(укра[иї]на|украине|україні|область|обл\.?|район|р-н|крив|киев|київ|днепр|дніпр|одесс|одес|харьк|харків|льв[іо]в)\b",
+    re.IGNORECASE,
+)
+WEATHER_STOP_WORDS = {
+    "село",
+    "села",
+    "поселок",
+    "посёлок",
+    "смт",
+    "пгт",
+    "город",
+    "місто",
+    "район",
+    "область",
+    "обл",
+    "украина",
+    "україна",
+}
+WEATHER_KRYVYI_RIH_FALLBACKS = {
+    "авангард": WeatherPlace(
+        latitude=47.9105,
+        longitude=33.3918,
+        label="Авангард, Кривий Ріг, Дніпропетровська область, Україна",
+        source="local",
+        score=1000,
+    ),
+    "марьяновка": WeatherPlace(
+        latitude=47.9105,
+        longitude=33.3918,
+        label="Марьяновка, Криворожский район, Днепропетровская область, Украина",
+        source="local",
+        score=1000,
+    ),
+    "мар'янівка": WeatherPlace(
+        latitude=47.9105,
+        longitude=33.3918,
+        label="Мар'янівка, Криворізький район, Дніпропетровська область, Україна",
+        source="local",
+        score=1000,
+    ),
+    "марянівка": WeatherPlace(
+        latitude=47.9105,
+        longitude=33.3918,
+        label="Мар'янівка, Криворізький район, Дніпропетровська область, Україна",
+        source="local",
+        score=1000,
+    ),
+}
+
+
 def weather_description(code: int | None) -> str:
     if code is None:
         return "Нет данных"
     return WEATHER_CODES.get(code, f"Код погоды {code}")
 
 
-async def fetch_weather(city: str, period: str) -> str:
-    timeout = aiohttp.ClientTimeout(total=8)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        geocode_url = (
-            "https://geocoding-api.open-meteo.com/v1/search"
-            f"?name={quote(city)}&count=1&language=ru&format=json"
+def weather_query_tokens(query: str) -> list[str]:
+    normalized = re.sub(r"[^\wа-яА-ЯіїєґІЇЄҐ]+", " ", query.casefold())
+    return [
+        token
+        for token in normalized.split()
+        if len(token) > 2 and token not in WEATHER_STOP_WORDS
+    ]
+
+
+def weather_place_score(query: str, label: str, country_code: str | None = None) -> int:
+    tokens = weather_query_tokens(query)
+    normalized_label = label.casefold()
+    score = 0
+    if country_code and country_code.casefold() == "ua":
+        score += 30 if WEATHER_UA_HINT_RE.search(query) else 12
+    for token in tokens:
+        if token in normalized_label:
+            score += 12
+        elif token.startswith("крив") and ("крив" in normalized_label or "kryv" in normalized_label):
+            score += 20
+        elif token.startswith("дніпр") and ("дніпр" in normalized_label or "днепр" in normalized_label or "dnipr" in normalized_label):
+            score += 16
+        else:
+            score -= 2
+    if tokens and normalized_label.startswith(tokens[0]):
+        score += 10
+    return score
+
+
+def format_open_meteo_place(place: dict, fallback: str) -> str:
+    parts = [str(place.get("name") or fallback)]
+    for key in ("admin3", "admin2", "admin1", "country"):
+        value = place.get(key)
+        if value and str(value) not in parts:
+            parts.append(str(value))
+    return ", ".join(parts)
+
+
+async def geocode_open_meteo(session: aiohttp.ClientSession, query: str) -> list[WeatherPlace]:
+    geocode_url = (
+        "https://geocoding-api.open-meteo.com/v1/search"
+        f"?name={quote(query)}&count=10&language=ru&format=json"
+    )
+    async with session.get(geocode_url, headers={"User-Agent": "telegram-autoreply-bot"}) as response:
+        if response.status != 200:
+            raise RuntimeError(f"geocoding service returned {response.status}")
+        data = await response.json(content_type=None)
+
+    places: list[WeatherPlace] = []
+    for item in data.get("results") or []:
+        label = format_open_meteo_place(item, query)
+        places.append(
+            WeatherPlace(
+                latitude=float(item["latitude"]),
+                longitude=float(item["longitude"]),
+                label=label,
+                source="open-meteo",
+                score=weather_place_score(query, label, item.get("country_code")),
+            )
         )
-        async with session.get(geocode_url, headers={"User-Agent": "telegram-autoreply-bot"}) as response:
-            if response.status != 200:
-                raise RuntimeError(f"geocoding service returned {response.status}")
-            data = await response.json(content_type=None)
+    return places
 
-        results = data.get("results") or []
-        if not results:
-            raise RuntimeError("city not found")
 
-        place = results[0]
-        latitude = place["latitude"]
-        longitude = place["longitude"]
-        location = place.get("name", city)
-        country = place.get("country")
-        admin = place.get("admin1")
-        if admin and admin != location:
-            location = f"{location}, {admin}"
-        if country:
-            location = f"{location}, {country}"
+async def geocode_nominatim(session: aiohttp.ClientSession, query: str) -> list[WeatherPlace]:
+    url = (
+        "https://nominatim.openstreetmap.org/search"
+        f"?q={quote(query)}&format=jsonv2&addressdetails=1&limit=8&accept-language=ru,uk,en"
+    )
+    async with session.get(url, headers={"User-Agent": "telegram-autoreply-bot/1.0"}) as response:
+        if response.status != 200:
+            return []
+        data = await response.json(content_type=None)
+
+    places: list[WeatherPlace] = []
+    for item in data if isinstance(data, list) else []:
+        display = str(item.get("display_name") or item.get("name") or query)
+        country_code = str(item.get("address", {}).get("country_code", ""))
+        places.append(
+            WeatherPlace(
+                latitude=float(item["lat"]),
+                longitude=float(item["lon"]),
+                label=display,
+                source="osm",
+                score=weather_place_score(query, display, country_code) + 8,
+            )
+        )
+    return places
+
+
+async def resolve_weather_place(session: aiohttp.ClientSession, query: str) -> WeatherPlace:
+    candidates: list[WeatherPlace] = []
+    candidates.extend(await geocode_nominatim(session, query))
+    candidates.extend(await geocode_open_meteo(session, query))
+
+    if not candidates:
+        raise RuntimeError("city not found")
+
+    candidates.sort(key=lambda item: item.score, reverse=True)
+    return candidates[0]
+
+
+async def fetch_weather(city: str, period: str) -> str:
+    timeout = aiohttp.ClientTimeout(total=12)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        place = await resolve_weather_place(session, city)
+        latitude = place.latitude
+        longitude = place.longitude
+        location = place.label
 
         forecast_url = (
             "https://api.open-meteo.com/v1/forecast"
@@ -611,43 +2005,6 @@ async def fetch_weather(city: str, period: str) -> str:
         )
 
     return "\n".join(lines)
-
-
-async def fetch_ai_answer(prompt: str) -> str:
-    if not OPENAI_API_KEY:
-        return "AI-ответчик не настроен. Добавь OPENAI_API_KEY в .env."
-
-    timeout = aiohttp.ClientTimeout(total=20)
-    payload = {
-        "model": OPENAI_MODEL,
-        "input": [
-            {
-                "role": "system",
-                "content": "Отвечай кратко, по-русски, в стиле дружелюбного Telegram-бота для группового чата.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        "max_output_tokens": 300,
-    }
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post("https://api.openai.com/v1/responses", json=payload, headers=headers) as response:
-            data = await response.json(content_type=None)
-            if response.status >= 400:
-                raise RuntimeError(data.get("error", {}).get("message", "OpenAI API error"))
-
-    if data.get("output_text"):
-        return str(data["output_text"]).strip()
-
-    chunks: list[str] = []
-    for item in data.get("output", []):
-        for content in item.get("content", []):
-            if content.get("type") in {"output_text", "text"} and content.get("text"):
-                chunks.append(content["text"])
-    return "\n".join(chunks).strip() or "AI не вернул текстовый ответ."
 
 
 def mention_chat(chat: RegisteredChat) -> str:
@@ -735,6 +2092,30 @@ def quiet_media_from_message(message: Message) -> tuple[str, str] | None:
     return None
 
 
+def reply_media_from_message(message: Message) -> tuple[str, str] | None:
+    if message.animation:
+        return "animation", message.animation.file_id
+    if message.voice:
+        return "voice", message.voice.file_id
+    if message.audio:
+        return "audio", message.audio.file_id
+    if message.video:
+        return "video", message.video.file_id
+    if message.video_note:
+        return "video_note", message.video_note.file_id
+    if message.document:
+        mime_type = (message.document.mime_type or "").casefold()
+        file_name = (message.document.file_name or "").casefold()
+        supported_extensions = (".ogg", ".oga", ".opus", ".mp3", ".wav", ".m4a", ".aac", ".mp4", ".mov", ".webm", ".gif")
+        if (
+            mime_type.startswith(("audio/", "video/"))
+            or mime_type in {"image/gif", "application/ogg", "application/octet-stream"}
+            or file_name.endswith(supported_extensions)
+        ):
+            return "document", message.document.file_id
+    return None
+
+
 async def send_quiet_media(message: Message, media_type: str | None, file_id: str | None) -> None:
     if not media_type or not file_id:
         return
@@ -810,6 +2191,13 @@ async def set_chat_available_reactions(bot: Bot, chat_id: int, reactions: list) 
 
 
 async def safe_edit(callback: CallbackQuery, text: str, **kwargs) -> None:
+    if not callback.message:
+        return
+    if callback.message.text is None:
+        with suppress(TelegramBadRequest, TelegramForbiddenError):
+            await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(text, **kwargs)
+        return
     try:
         await callback.message.edit_text(text, **kwargs)
     except TelegramBadRequest as exc:
@@ -835,6 +2223,49 @@ async def safe_reply(message: Message, text: str, **kwargs) -> None:
         return
 
 
+async def send_auto_reply_item(message: Message, item) -> None:
+    text = (getattr(item, "text", "") or "").strip()
+    media_type = getattr(item, "media_type", None)
+    media_file_id = getattr(item, "media_file_id", None)
+    if not media_type or not media_file_id:
+        if text:
+            await safe_reply(message, text, disable_web_page_preview=True)
+        return
+
+    caption = text or None
+    kwargs = {
+        "chat_id": message.chat.id,
+        "reply_to_message_id": message.message_id,
+    }
+    for attempt in range(2):
+        try:
+            if media_type == "animation":
+                await message.bot.send_animation(**kwargs, animation=media_file_id, caption=caption)
+            elif media_type == "voice":
+                await message.bot.send_voice(**kwargs, voice=media_file_id, caption=caption)
+            elif media_type == "audio":
+                await message.bot.send_audio(**kwargs, audio=media_file_id, caption=caption)
+            elif media_type == "video":
+                await message.bot.send_video(**kwargs, video=media_file_id, caption=caption)
+            elif media_type == "video_note":
+                await message.bot.send_video_note(**kwargs, video_note=media_file_id)
+                if text:
+                    await safe_reply(message, text, disable_web_page_preview=True)
+            elif media_type == "document":
+                await message.bot.send_document(**kwargs, document=media_file_id, caption=caption)
+            elif text:
+                await safe_reply(message, text, disable_web_page_preview=True)
+            return
+        except TelegramRetryAfter as exc:
+            if attempt:
+                return
+            await asyncio.sleep(int(getattr(exc, "retry_after", 3)) + 1)
+        except (TelegramBadRequest, TelegramForbiddenError):
+            if text:
+                await safe_reply(message, text, disable_web_page_preview=True)
+            return
+
+
 async def delete_message_later(bot: Bot, chat_id: int, message_id: int, delay_seconds: int = 60) -> None:
     await asyncio.sleep(delay_seconds)
     try:
@@ -856,6 +2287,21 @@ async def temporary_reply(message: Message, text: str, delay_seconds: int = 60, 
         return
 
     asyncio.create_task(delete_message_later(message.bot, sent.chat.id, sent.message_id, delay_seconds))
+
+
+async def safe_reply_chunks(message: Message, lines: list[str], limit: int = 3800, **kwargs) -> None:
+    chunk: list[str] = []
+    size = 0
+    for line in lines:
+        line_size = len(line) + 1
+        if chunk and size + line_size > limit:
+            await safe_reply(message, "\n".join(chunk), **kwargs)
+            chunk = []
+            size = 0
+        chunk.append(line)
+        size += line_size
+    if chunk:
+        await safe_reply(message, "\n".join(chunk), **kwargs)
 
 
 async def restart_process(delay_seconds: float = 1.0) -> None:
@@ -995,13 +2441,157 @@ def is_bot_admin(user_id: int | None) -> bool:
     return user_id is not None and user_id in BOT_ADMIN_IDS
 
 
-async def admin_chats_for_user(bot: Bot, user_id: int) -> list[RegisteredChat]:
-    if is_bot_admin(user_id):
-        return db.list_chats()
+def admin_permission_key(feature: str, mode: str) -> str:
+    normalized_mode = mode if mode in {"view", "write"} else "write"
+    return f"{feature}.{normalized_mode}"
 
+
+def bot_admin_feature_allowed(chat_id: int, user_id: int | None, feature: str, mode: str = "write", default: bool = True) -> bool:
+    if user_id is None:
+        return False
+    if is_bot_admin(user_id):
+        return True
+    if feature not in ADMIN_PERMISSION_IDS:
+        return False
+    mode_value = db.admin_feature_permission(chat_id, user_id, admin_permission_key(feature, mode))
+    if mode_value is not None:
+        return mode_value
+    if db.has_admin_feature_permission(chat_id, user_id, admin_permission_key(feature, "view")) or db.has_admin_feature_permission(
+        chat_id, user_id, admin_permission_key(feature, "write")
+    ):
+        return False
+    legacy_value = db.admin_feature_permission(chat_id, user_id, feature)
+    if legacy_value is not None:
+        return legacy_value
+    if "." not in feature:
+        return default
+    parent = feature.split(".", 1)[0]
+    parent_mode_value = db.admin_feature_permission(chat_id, user_id, admin_permission_key(parent, mode))
+    if parent_mode_value is not None:
+        return parent_mode_value
+    if db.has_admin_feature_permission(chat_id, user_id, admin_permission_key(parent, "view")) or db.has_admin_feature_permission(
+        chat_id, user_id, admin_permission_key(parent, "write")
+    ):
+        return False
+    return db.admin_feature_allowed(chat_id, user_id, parent, default=default)
+
+
+async def require_callback_feature(
+    callback: CallbackQuery,
+    feature: str,
+    mode: str = "write",
+    default: bool = True,
+    chat_id: int | None = None,
+) -> bool:
+    scoped_chat_id = chat_id
+    if scoped_chat_id is None:
+        scoped_chat_id = next((int(part) for part in callback.data.split(":") if part.startswith("-") and part[1:].isdigit()), None)
+    if scoped_chat_id is not None and bot_admin_feature_allowed(scoped_chat_id, callback.from_user.id, feature, mode=mode, default=default):
+        return True
+    await callback.answer("Нет доступа к этой функции.", show_alert=True)
+    return False
+
+
+def access_permissions_menu(chat_id: int, user_id: int, page: int = 0) -> InlineKeyboardMarkup:
+    page_size = 7
+    permissions: list[tuple[str, str, bool]] = []
+    for feature_id, title in ADMIN_FEATURES:
+        permissions.append((feature_id, title, False))
+        permissions.extend((child_id, child_title, True) for child_id, child_title in ADMIN_SUBFEATURES.get(feature_id, []))
+
+    max_page = max(0, (len(permissions) - 1) // page_size)
+    page = max(0, min(page, max_page))
+    start = page * page_size
+    rows: list[list[InlineKeyboardButton]] = []
+    for feature_id, title, is_child in permissions[start : start + page_size]:
+        view_allowed = bot_admin_feature_allowed(chat_id, user_id, feature_id, mode="view", default=False)
+        write_allowed = bot_admin_feature_allowed(chat_id, user_id, feature_id, mode="write", default=False)
+        view_mark = "вњ…" if view_allowed else "вќЊ"
+        write_mark = "вњ…" if write_allowed else "вќЊ"
+        title_prefix = "в†і " if is_child else ""
+        write_title = "нажимать" if is_child else "менять"
+        rows.append(
+            [
+                InlineKeyboardButton(text=f"{title_prefix}{title}", callback_data=f"access:noop:{chat_id}:{user_id}"),
+                InlineKeyboardButton(text=f"{view_mark} читать", callback_data=f"access:set:{chat_id}:{user_id}:{feature_id}:view:{page}"),
+                InlineKeyboardButton(text=f"{write_mark} {write_title}", callback_data=f"access:set:{chat_id}:{user_id}:{feature_id}:write:{page}"),
+            ]
+        )
+    if max_page > 0:
+        rows.append(
+            [
+                InlineKeyboardButton(text="в†ђ", callback_data=f"access:page:{chat_id}:{user_id}:{max(0, page - 1)}"),
+                InlineKeyboardButton(text=f"{page + 1}/{max_page + 1}", callback_data=f"access:noop:{chat_id}:{user_id}"),
+                InlineKeyboardButton(text="в†’", callback_data=f"access:page:{chat_id}:{user_id}:{min(max_page, page + 1)}"),
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="Админы группы", callback_data=f"act:access:{chat_id}")])
+    rows.append([InlineKeyboardButton(text="Назад к настройкам", callback_data=f"chat:{chat_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def access_admins_menu(bot: Bot, chat_id: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    try:
+        members = await bot.get_chat_administrators(chat_id)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        members = []
+    for member in members:
+        user = member.user
+        if user.is_bot:
+            continue
+        title = user.full_name
+        if user.username:
+            title = f"{title} (@{user.username})"
+        rows.append([InlineKeyboardButton(text=title, callback_data=f"access:user:{chat_id}:{user.id}")])
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Не удалось прочитать админов", callback_data=f"chat:{chat_id}")])
+    rows.append([InlineKeyboardButton(text="Назад к настройкам", callback_data=f"chat:{chat_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def participant_since_date(period: str) -> str | None:
+    today = datetime.now(timezone.utc).date()
+    if period == "day":
+        return today.isoformat()
+    if period == "week":
+        return (today - timedelta(days=6)).isoformat()
+    if period == "month":
+        return (today - timedelta(days=29)).isoformat()
+    if period == "all":
+        return None
+    return today.isoformat()
+
+
+def participant_top_text(chat_id: int, period: str) -> str:
+    labels = {"day": "день", "week": "неделю", "month": "месяц", "all": "все время"}
+    items = db.top_participant_activity(chat_id, since_date=participant_since_date(period), limit=20)
+    lines = [f"<b>Топ участников за {escape(labels.get(period, period))}</b>"]
+    if not items:
+        lines.append("\nПока нет данных. Топ начнет заполняться с новых сообщений после обновления.")
+        return "\n".join(lines)
+    for index, item in enumerate(items, start=1):
+        name = f"@{item.username}" if item.username else item.full_name
+        lines.append(f"{index}. {escape(name)} - <b>{item.messages_count}</b> сообщений")
+    return "\n".join(lines)
+
+
+async def admin_chats_for_user(bot: Bot, user_id: int) -> list[RegisteredChat]:
+    return db.list_chats() if is_bot_admin(user_id) else []
+
+
+async def is_chat_member(bot: Bot, chat_id: int, user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        return False
+    return member_status_text(member.status) not in {"left", "kicked"}
+
+
+async def paid_chats_for_user(bot: Bot, user_id: int) -> list[RegisteredChat]:
     chats: list[RegisteredChat] = []
     for chat in db.list_chats():
-        if await is_chat_admin(bot, chat.chat_id, user_id):
+        if await is_chat_member(bot, chat.chat_id, user_id):
             chats.append(chat)
     return chats
 
@@ -1021,6 +2611,115 @@ async def user_admin_roles(bot: Bot, user_id: int) -> list[tuple[RegisteredChat,
     return roles
 
 
+def configured_server_urls() -> list[str]:
+    urls: list[str] = []
+    for key in (
+        "APP_SERVER_URL",
+        "APP_PUBLIC_URL",
+        "PUBLIC_BASE_URL",
+        "ADMIN_PUBLIC_URL",
+        "SERVER_PUBLIC_URL",
+    ):
+        value = os.getenv(key, "").strip().rstrip("/")
+        if value and value not in urls:
+            urls.append(value)
+    return urls
+
+
+def local_ipv4_addresses() -> list[str]:
+    addresses: list[str] = []
+
+    def add_ip(ip: str) -> None:
+        if ip and not ip.startswith("127.") and ip not in addresses:
+            addresses.append(ip)
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(0.5)
+            sock.connect(("8.8.8.8", 80))
+            add_ip(sock.getsockname()[0])
+    except OSError:
+        pass
+
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            add_ip(info[4][0])
+    except OSError:
+        pass
+
+    return addresses
+
+
+def is_private_or_local_ip(ip: str) -> bool:
+    try:
+        parsed = ip_address(ip)
+    except ValueError:
+        return True
+    return parsed.is_private or parsed.is_loopback or parsed.is_link_local or parsed.is_reserved or parsed.is_multicast
+
+
+async def detect_public_ip() -> str | None:
+    try:
+        timeout = aiohttp.ClientTimeout(total=4)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get("https://api.ipify.org?format=json") as response:
+                if response.status != 200:
+                    return None
+                data = await response.json(content_type=None)
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, OSError):
+        return None
+    ip = str(data.get("ip") or "").strip()
+    return ip or None
+
+
+def server_address_text(public_ip: str | None = None) -> str:
+    lines = ["<b>Адрес сервера для приложения</b>"]
+    configured_urls = configured_server_urls()
+    if configured_urls:
+        lines.append("\n<b>Из настроек:</b>")
+        lines.extend(f"<code>{escape(url)}</code>" for url in configured_urls)
+
+    public_hosts: list[str] = []
+    if public_ip and not is_private_or_local_ip(public_ip):
+        public_hosts.append(public_ip)
+
+    if public_hosts:
+        lines.append("\n<b>Пробуй в приложении:</b>")
+        for host in public_hosts:
+            safe_host = escape(host)
+            lines.append(f"<code>http://{safe_host}:50000</code>")
+            lines.append(f"<code>http://{safe_host}:8000</code>")
+    elif not configured_urls:
+        lines.append("\nВнешний IP не удалось определить автоматически.")
+
+    local_hosts: list[str] = []
+    if public_ip and is_private_or_local_ip(public_ip):
+        local_hosts.append(public_ip)
+    for ip in local_ipv4_addresses():
+        if ip not in local_hosts:
+            local_hosts.append(ip)
+
+    if not public_hosts and local_hosts:
+        lines.append("\n<b>Локальные адреса для диагностики:</b>")
+        for host in local_hosts[:3]:
+            lines.append(f"<code>{escape(host)}</code>")
+
+    lines.append("\nОбычно для приложения нужен внешний адрес и порт <b>50000</b>. Если не открылся, попробуй <b>8000</b>.")
+    return "\n".join(lines)
+
+
+async def can_view_server_address(bot: Bot, user_id: int | None) -> bool:
+    if user_id is None:
+        return False
+    if is_bot_admin(user_id):
+        return True
+    return bool(await user_admin_roles(bot, user_id))
+
+
+async def main_menu_for_user(bot: Bot, user_id: int | None) -> InlineKeyboardMarkup:
+    return main_menu(show_server_address=await can_view_server_address(bot, user_id))
+
+
 async def chat_is_forum(bot: Bot, chat_id: int) -> bool:
     try:
         chat = await bot.get_chat(chat_id)
@@ -1038,8 +2737,8 @@ async def require_admin(message: Message) -> bool:
         await message.answer("Эту команду нужно выполнить внутри группы или группы обсуждений, прикрепленной к каналу.")
         return False
 
-    if not await is_chat_admin(message.bot, message.chat.id, message.from_user.id):
-        await message.answer("Настройки может менять только администрация этого чата.")
+    if not is_bot_admin(message.from_user.id):
+        await message.answer("Административные команды Telegram-бота доступны только владельцу. Используй приложение.")
         return False
 
     return True
@@ -1051,8 +2750,8 @@ async def require_selected_admin(callback: CallbackQuery, chat_id: int) -> Regis
         await callback.answer("Группа не найдена. Сначала зарегистрируйте ее.", show_alert=True)
         return None
 
-    if not is_bot_admin(callback.from_user.id) and not await is_chat_admin(callback.bot, chat_id, callback.from_user.id):
-        await callback.answer("Ты не админ в этой группе.", show_alert=True)
+    if not is_bot_admin(callback.from_user.id):
+        await callback.answer("Админ-панель Telegram-бота доступна только владельцу.", show_alert=True)
         return None
 
     return chat
@@ -1066,12 +2765,17 @@ async def require_state_admin(message: Message, state: FSMContext) -> int | None
         await message.answer("Группа не выбрана. Открой /start и выбери группу.", reply_markup=main_menu())
         return None
 
-    if not message.from_user or (
-        not is_bot_admin(message.from_user.id)
-        and not await is_chat_admin(message.bot, chat_id, message.from_user.id)
-    ):
+    if not message.from_user or not is_bot_admin(message.from_user.id):
         await state.clear()
-        await message.answer("Настройка отменена: у тебя нет прав администратора в выбранной группе.")
+        await message.answer("Настройка отменена: админ-панель Telegram-бота доступна только владельцу.")
+        return None
+
+    state_name = await state.get_state()
+    state_key = state_name.rsplit(":", 1)[-1] if state_name else ""
+    feature = STATE_FEATURES.get(state_key)
+    if feature and not bot_admin_feature_allowed(chat_id, message.from_user.id, feature, default=True):
+        await state.clear()
+        await message.answer("Настройка отменена: у тебя нет доступа к этой функции.")
         return None
 
     return chat_id
@@ -1090,24 +2794,75 @@ async def remember_sender(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
         return
 
-    await register_current_chat(message)
-    db.upsert_seen_user(
-        chat_id=message.chat.id,
-        user_id=message.from_user.id,
-        username=message.from_user.username,
-        full_name=message.from_user.full_name,
-        is_bot=message.from_user.is_bot,
+    now = time.monotonic()
+    chat_id = message.chat.id
+    chat_seen_at = REMEMBERED_CHATS.get(chat_id, 0)
+    if now - chat_seen_at >= SENDER_CACHE_SECONDS:
+        await register_current_chat(message)
+        REMEMBERED_CHATS[chat_id] = now
+
+    user_key = (
+        chat_id,
+        message.from_user.id,
+        message.from_user.username,
+        message.from_user.full_name,
+        message.from_user.is_bot,
     )
+    user_seen_at = REMEMBERED_USERS.get(user_key, 0)
+    if now - user_seen_at >= SENDER_CACHE_SECONDS:
+        db.upsert_seen_user(
+            chat_id=chat_id,
+            user_id=message.from_user.id,
+            username=message.from_user.username,
+            full_name=message.from_user.full_name,
+            is_bot=message.from_user.is_bot,
+        )
+        REMEMBERED_USERS[user_key] = now
+
+    activity_key = (chat_id, message.from_user.id)
+    activity_seen_at = PARTICIPANT_ACTIVITY_TOUCHES.get(activity_key, 0)
+    if not message.from_user.is_bot and now - activity_seen_at >= ACTIVITY_CACHE_SECONDS:
+        db.increment_participant_activity(chat_id, message.from_user.id)
+        PARTICIPANT_ACTIVITY_TOUCHES[activity_key] = now
 
     thread_id = message.message_thread_id
     is_real_topic = bool(getattr(message.chat, "is_forum", False) and getattr(message, "is_topic_message", False))
-    if thread_id is not None and is_real_topic:
-        topic_name = "Тема"
+    if thread_id is not None and is_real_topic and (chat_id, thread_id) not in KNOWN_TOPICS:
+        topic_name = None
         if message.reply_to_message and message.reply_to_message.forum_topic_created:
             topic_name = message.reply_to_message.forum_topic_created.name
         elif message.forum_topic_created:
             topic_name = message.forum_topic_created.name
-        db.upsert_topic(message.chat.id, thread_id, f"{topic_name} #{thread_id}")
+        elif message.forum_topic_edited and message.forum_topic_edited.name:
+            topic_name = message.forum_topic_edited.name
+        if topic_name:
+            db.upsert_topic(message.chat.id, thread_id, topic_name)
+        else:
+            db.upsert_topic(message.chat.id, thread_id, "Без названия", preserve_existing=True)
+        KNOWN_TOPICS.add((chat_id, thread_id))
+
+
+@router.my_chat_member()
+async def bot_membership_changed(event: ChatMemberUpdated) -> None:
+    old_status = member_status_text(event.old_chat_member.status)
+    new_status = member_status_text(event.new_chat_member.status)
+    active_statuses = {"member", "administrator", "creator"}
+    if old_status not in active_statuses and new_status in active_statuses:
+        db.upsert_chat(event.chat.id, event.chat.title or "Без названия", event.chat.type, event.chat.username)
+        action = "Добавил бота в чат"
+    elif old_status in active_statuses and new_status not in active_statuses:
+        action = "Удалил бота из чата"
+    else:
+        action = "Изменил права бота в чате"
+    db.add_audit_log(
+        "Telegram",
+        action,
+        chat_id=event.chat.id,
+        actor_id=event.from_user.id,
+        actor_username=event.from_user.username,
+        actor_name=event.from_user.full_name,
+        details=f"{old_status} в†’ {new_status}",
+    )
 
 
 def replies_text(chat_id: int) -> str:
@@ -1120,12 +2875,14 @@ def replies_text(chat_id: int) -> str:
     if replies:
         lines.append("\n<b>Ответы на @username:</b>")
         for item in replies:
-            lines.append(f"@{escape(item.username)} - {preview_html(item.text)}")
+            media = f" [{escape(item.media_type)}]" if item.media_type else ""
+            lines.append(f"@{escape(item.username)}{media} - {preview_html(item.text)}")
 
     if triggers:
         lines.append("\n<b>Фиксированные ответы:</b>")
         for item in triggers:
-            lines.append(f"{escape(item.trigger)} - {preview_html(item.text)}")
+            media = f" [{escape(item.media_type)}]" if item.media_type else ""
+            lines.append(f"{escape(item.trigger)}{media} - {preview_html(item.text)}")
 
     return "\n".join(lines)
 
@@ -1144,23 +2901,101 @@ def trigger_page_text(chat_id: int, page: int) -> tuple[str, int, int]:
     else:
         lines.append(f"Страница {page + 1}/{max_page + 1}. Всего: {total}.")
         for offset, item in enumerate(page_items, start=start + 1):
-            lines.append(f"{offset}. <b>{escape(item.trigger)}</b> - {preview_html(item.text)}")
+            media = f" [{escape(item.media_type)}]" if item.media_type else ""
+            lines.append(f"{offset}. <b>{escape(item.trigger)}</b>{media} - {preview_html(item.text)}")
+
+    return "\n".join(lines), page, total
+
+
+def quote_page_text(chat_id: int, page: int) -> tuple[str, int, int]:
+    quotes = db.list_quotes(chat_id)
+    total = len(quotes)
+    max_page = max(0, (total - 1) // QUOTES_PAGE_SIZE)
+    page = max(0, min(page, max_page))
+    start = page * QUOTES_PAGE_SIZE
+    page_items = quotes[start : start + QUOTES_PAGE_SIZE]
+
+    lines = ["<b>Цитаты</b>"]
+    if not page_items:
+        lines.append("Пока нет сохраненных цитат.")
+    else:
+        lines.append(f"Страница {page + 1}/{max_page + 1}. Всего: {total}.")
+        for offset, quote in enumerate(page_items, start=start + 1):
+            author = f" — {escape(quote.author_name)}" if quote.author_name else ""
+            lines.append(f"{offset}. {preview_html(quote.text, limit=100)}{author}")
 
     return "\n".join(lines), page, total
 
 
 @router.message(CommandStart())
-async def start(message: Message) -> None:
+async def start(message: Message, state: FSMContext) -> None:
     if message.chat.type == "private":
+        start_parts = (message.text or "").split(maxsplit=1)
+        if len(start_parts) == 2 and start_parts[1] in {"youtube", "youtube_music", "instagram"}:
+            service_name = {"youtube_music": "YouTube Music", "instagram": "Instagram Reels"}.get(start_parts[1], "YouTube")
+            await state.clear()
+            await message.answer(
+                f"<b>Скачать с {service_name}</b>\n\n"
+                "Пришлите публичную ссылку на контент, который вам разрешено скачивать. Бот проверит её и покажет доступные форматы.\n"
+                "Скачивание не начнётся до выбора формата.",
+                reply_markup=media_cancel_menu(),
+                disable_web_page_preview=True,
+            )
+            return
+        if len(start_parts) == 2 and start_parts[1].startswith("media_") and message.from_user:
+            task_type = start_parts[1][len("media_"):]
+            if task_type in TASK_TITLES:
+                if not premium_service.has_active_premium(message.from_user.id):
+                    await message.answer("Для этой функции нужен Premium.", reply_markup=premium_menu())
+                    return
+                await state.set_state(MediaInput.waiting_file)
+                await state.update_data(media_task_type=task_type)
+                await message.answer(
+                    f"<b>{escape(TASK_TITLES[task_type])}</b>\n\nПришлите видео, аудио, голосовое сообщение или файл.",
+                    reply_markup=media_cancel_menu(),
+                )
+                return
+        login_id = parse_app_login_start_payload(message.text)
+        if login_id is not None and message.from_user:
+            approved = db.approve_user_login(
+                login_id,
+                message.from_user.id,
+                message.from_user.username,
+                message.from_user.full_name,
+            )
+            await message.answer(
+                "Вход в приложение подтверждён. Вернись в MonkeyDin."
+                if approved
+                else "Ссылка входа устарела или уже использована.",
+                reply_markup=main_menu(),
+            )
+            return
+        chat_id = parse_donate_start_payload(message.text)
+        if chat_id is not None and message.from_user:
+            chat = db.get_chat(chat_id)
+            if chat is None:
+                await message.answer("Группа для доната больше не найдена.", reply_markup=main_menu())
+                return
+            if not await is_chat_member(message.bot, chat_id, message.from_user.id):
+                await message.answer("Донат шахты доступен только участникам выбранной группы.", reply_markup=main_menu())
+                return
+            if db.get_dig_player(chat_id, message.from_user.id) is None:
+                await message.answer("Сначала зарегистрируйся в шахте командой копай внутри группы.", reply_markup=main_menu())
+                return
+            await message.answer(
+                f"<b>Донат шахты</b>\nГруппа: <b>{mention_chat(chat)}</b>\n\nВыбери покупку за Stars.",
+                reply_markup=user_donate_menu(chat_id, message.from_user.id),
+            )
+            return
         await message.answer(
-            "Панель управления ботом. Выбери группу, где ты админ, и настраивай ответы кнопками.",
-            reply_markup=main_menu(),
+            "Выбери раздел.",
+            reply_markup=await main_menu_for_user(message.bot, message.from_user.id if message.from_user else None),
         )
         return
 
     await remember_sender(message)
     await message.answer(
-        "Группа зарегистрирована. Настройки теперь удобнее делать в личке со мной через /start."
+        "Группа зарегистрирована. Управление группой выполняется через приложение Abstergo."
     )
 
 
@@ -1171,7 +3006,10 @@ async def settings(message: Message) -> None:
         return
 
     await remember_sender(message)
-    await message.answer("Открой личку с ботом и нажми /start, чтобы настроить эту группу кнопками.")
+    if message.from_user and is_bot_admin(message.from_user.id):
+        await message.answer("Открой личку с ботом и нажми /start, чтобы открыть панель владельца.")
+    else:
+        await message.answer("Управление группой выполняется через приложение Abstergo.")
 
 
 @router.message(Command("id"))
@@ -1184,8 +3022,8 @@ async def show_user_id(message: Message) -> None:
 
 
 @router.message(F.text.casefold() == "/старт")
-async def start_ru(message: Message) -> None:
-    await start(message)
+async def start_ru(message: Message, state: FSMContext) -> None:
+    await start(message, state)
 
 
 @router.message(F.text.casefold() == "/настройки")
@@ -1214,7 +3052,7 @@ async def show_chat_select(message: Message) -> None:
     chats = await admin_chats_for_user(message.bot, message.from_user.id)
     if not chats:
         await message.answer(
-            "Нет доступных групп. Добавь бота в группу, отправь там /register_chat и убедись, что ты админ этой группы.",
+            "Админ-панель Telegram-бота доступна только владельцу. Для управления группой используй приложение.",
             reply_markup=main_menu(),
         )
         return
@@ -1222,10 +3060,21 @@ async def show_chat_select(message: Message) -> None:
     await message.answer("Выбери группу для настройки:", reply_markup=chat_select_menu(chats))
 
 
+def telegram_user_profile_text(
+    user_id: int,
+    username: str | None,
+    full_name: str,
+    chat_id: int | None = None,
+    short: bool = True,
+) -> str:
+    profile = build_user_profile(db, premium_service, user_id, username, full_name, chat_id=chat_id)
+    return profile_chat_text(profile, short=short)
+
+
 @router.callback_query(F.data == "ui:home")
 async def cb_home(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await safe_edit(callback, "Панель управления ботом.", reply_markup=main_menu())
+    await safe_edit(callback, "Панель управления ботом.", reply_markup=await main_menu_for_user(callback.bot, callback.from_user.id))
     await callback.answer()
 
 
@@ -1236,13 +3085,357 @@ async def cb_chats(callback: CallbackQuery, state: FSMContext) -> None:
     if not chats:
         await safe_edit(
             callback,
-            "Нет доступных групп. Добавь бота в группу, отправь там /register_chat и убедись, что ты админ этой группы.",
-            reply_markup=main_menu(),
+            "Админ-панель Telegram-бота доступна только владельцу. Для управления группой используй приложение.",
+            reply_markup=await main_menu_for_user(callback.bot, callback.from_user.id),
+        )
+        await callback.answer()
+        return
+
+    await safe_edit(callback, "Панель владельца.", reply_markup=admin_menu())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "ui:chat_select")
+async def cb_chat_select(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    chats = await admin_chats_for_user(callback.bot, callback.from_user.id)
+    if not chats:
+        await safe_edit(
+            callback,
+            "Админ-панель Telegram-бота доступна только владельцу. Для управления группой используй приложение.",
+            reply_markup=admin_back_menu(),
         )
         await callback.answer()
         return
 
     await safe_edit(callback, "Выбери группу для настройки:", reply_markup=chat_select_menu(chats))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "user:chats")
+async def cb_user_chats(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    chats = await paid_chats_for_user(callback.bot, callback.from_user.id)
+    if not chats:
+        await safe_edit(
+            callback,
+            "Нет доступных групп. Сначала вступи в группу, где есть бот.",
+            reply_markup=await main_menu_for_user(callback.bot, callback.from_user.id),
+        )
+        await callback.answer()
+        return
+
+    await safe_edit(callback, "Выбери группу:", reply_markup=user_chat_select_menu(chats))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("user:chat:"))
+async def cb_user_chat(callback: CallbackQuery) -> None:
+    chat_id = int(callback.data.split(":", 2)[2])
+    chat = db.get_chat(chat_id)
+    if chat is None:
+        await callback.answer("Группа не найдена.", show_alert=True)
+        return
+    if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+        await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+        return
+
+    await safe_edit(
+        callback,
+        f"Пользовательский раздел.\nГруппа: <b>{mention_chat(chat)}</b>",
+        reply_markup=user_menu(chat_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "profile:me")
+async def cb_profile_me(callback: CallbackQuery) -> None:
+    text = telegram_user_profile_text(
+        callback.from_user.id,
+        callback.from_user.username,
+        callback.from_user.full_name,
+        short=False,
+    )
+    await safe_edit(callback, text, reply_markup=await main_menu_for_user(callback.bot, callback.from_user.id))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "server:ip")
+async def cb_server_ip(callback: CallbackQuery) -> None:
+    if not await can_view_server_address(callback.bot, callback.from_user.id):
+        await callback.answer("Доступно только владельцу бота и администраторам групп.", show_alert=True)
+        return
+
+    await callback.answer("Проверяю адрес...")
+    public_ip = await detect_public_ip()
+    await safe_edit(callback, server_address_text(public_ip), reply_markup=await main_menu_for_user(callback.bot, callback.from_user.id))
+
+
+@router.callback_query(F.data.startswith("profile:chat:"))
+async def cb_profile_chat(callback: CallbackQuery) -> None:
+    chat_id = int(callback.data.split(":", 2)[2])
+    if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+        await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+        return
+    text = telegram_user_profile_text(
+        callback.from_user.id,
+        callback.from_user.username,
+        callback.from_user.full_name,
+        chat_id=chat_id,
+        short=False,
+    )
+    await safe_edit(callback, text, reply_markup=user_menu(chat_id))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("user:bag:"))
+async def cb_user_bag(callback: CallbackQuery) -> None:
+    chat_id = int(callback.data.split(":", 2)[2])
+    if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+        await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+        return
+
+    text = dig_bag_text(chat_id, callback.from_user.id)
+    if text is None:
+        await callback.answer("Сначала зарегистрируйся в шахте командой копай внутри группы.", show_alert=True)
+        return
+
+    await safe_edit(callback, text, reply_markup=user_bag_menu(chat_id, callback.from_user.id))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("user:mine:"))
+async def cb_user_mine(callback: CallbackQuery) -> None:
+    chat_id = int(callback.data.split(":", 2)[2])
+    chat = db.get_chat(chat_id)
+    if chat is None:
+        await callback.answer("Группа не найдена.", show_alert=True)
+        return
+    if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+        await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+        return
+
+    await safe_edit(
+        callback,
+        f"<b>Шахта</b>\nГруппа: <b>{mention_chat(chat)}</b>",
+        reply_markup=user_mine_menu(chat_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("user:donate:"))
+async def cb_user_donate(callback: CallbackQuery) -> None:
+    chat_id = int(callback.data.split(":", 2)[2])
+    if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+        await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+        return
+    if db.get_dig_player(chat_id, callback.from_user.id) is None:
+        await callback.answer("Сначала зарегистрируйся в шахте командой копай внутри группы.", show_alert=True)
+        return
+
+    await safe_edit(
+        callback,
+        "<b>Донат шахты</b>\n\nВыбери покупку за Stars.",
+        reply_markup=user_donate_menu(chat_id, callback.from_user.id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("user:shop:"))
+async def cb_user_shop(callback: CallbackQuery) -> None:
+    parts = callback.data.split(":")
+    if len(parts) < 3 or not parts[2].lstrip("-").isdigit():
+        await callback.answer("Кнопка магазина устарела.", show_alert=True)
+        return
+    chat_id = int(parts[2])
+    category = parts[3] if len(parts) > 3 else None
+    if category not in DIG_SHOP_CATEGORIES:
+        category = None
+    try:
+        page = int(parts[4]) if len(parts) > 4 else 0
+    except ValueError:
+        page = 0
+    if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+        await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+        return
+
+    player = db.get_dig_player(chat_id, callback.from_user.id)
+    if player is None:
+        await callback.answer("Сначала зарегистрируйся в шахте командой копай внутри группы.", show_alert=True)
+        return
+
+    items = dig_items_map(chat_id, callback.from_user.id)
+    if category:
+        page_items, page, total_pages = dig_shop_page_items(category, items, page)
+        await safe_edit(
+            callback,
+            dig_shop_category_text(player.coins, category, page, total_pages),
+            reply_markup=user_shop_items_menu(chat_id, callback.from_user.id, category, page, total_pages, page_items),
+        )
+        await callback.answer()
+        return
+
+    await safe_edit(
+        callback,
+        dig_shop_overview_text(player.coins, items),
+        reply_markup=user_shop_categories_menu(chat_id, dig_shop_categories_for_keyboard()),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("user:buy:"))
+async def cb_user_buy(callback: CallbackQuery) -> None:
+    parts = callback.data.split(":", 4)
+    if len(parts) != 5:
+        await callback.answer("Не получилось открыть предмет.", show_alert=True)
+        return
+
+    chat_id = int(parts[2])
+    owner_id = int(parts[3])
+    item_key = parts[4]
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+        await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+        return
+
+    item = DIG_SHOP_ITEMS.get(item_key)
+    if item is None:
+        await callback.answer("Предмет не найден.", show_alert=True)
+        return
+
+    player = db.get_dig_player(chat_id, callback.from_user.id)
+    if player is None:
+        await callback.answer("Сначала зарегистрируйся в шахте.", show_alert=True)
+        return
+
+    name, price, description = item
+    await safe_edit(
+        callback,
+        f"<b>{escape(name)}</b>\n"
+        f"Цена: <b>{price}</b> котоинов\n"
+        f"У тебя: <b>{player.coins}</b> котоинов\n\n"
+        f"{escape(description)}",
+        reply_markup=user_buy_confirm_menu(chat_id, callback.from_user.id, item_key),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("user:confirm:"))
+async def cb_user_confirm(callback: CallbackQuery) -> None:
+    parts = callback.data.split(":", 4)
+    if len(parts) != 5:
+        await callback.answer("Не получилось обработать покупку.", show_alert=True)
+        return
+
+    chat_id = int(parts[2])
+    owner_id = int(parts[3])
+    item_key = parts[4]
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+        await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+        return
+
+    item = DIG_SHOP_ITEMS.get(item_key)
+    if item is None:
+        await callback.answer("Предмет не найден.", show_alert=True)
+        return
+
+    player = db.get_dig_player(chat_id, callback.from_user.id)
+    if player is None:
+        await callback.answer("Сначала зарегистрируйся в шахте.", show_alert=True)
+        return
+    if not callback.message:
+        await callback.answer("Не вижу сообщение магазина.", show_alert=True)
+        return
+    if dig_purchase_is_duplicate(chat_id, callback.from_user.id, item_key, callback.message.message_id):
+        await callback.answer("Покупка уже обрабатывается.", show_alert=True)
+        return
+
+    purchase_error = dig_purchase_error(dig_items_map(chat_id, callback.from_user.id), item_key)
+    if purchase_error:
+        await callback.answer(purchase_error, show_alert=True)
+        return
+
+    name, price, _ = item
+    now = datetime.now(timezone.utc)
+    result = f"Куплено: <b>{escape(name)}</b>."
+    if item_key == "tea":
+        if not db.spend_dig_coins(chat_id, callback.from_user.id, price):
+            await callback.answer("Не хватает котоинов.", show_alert=True)
+            return
+        player = db.get_dig_player(chat_id, callback.from_user.id)
+        if player is None:
+            await callback.answer("Игрок не найден.", show_alert=True)
+            return
+        luck = refreshed_dig_luck(callback.from_user.id, player.luck, player.last_luck_at, now)
+        restored_luck = min(100, luck + 35)
+        db.set_dig_luck(chat_id, callback.from_user.id, restored_luck, now.isoformat(timespec="seconds"))
+        result = f"Чай выпит. Удача восстановлена до <b>{restored_luck}</b>/100."
+    elif item_key == "prank":
+        if not db.spend_dig_coins(chat_id, callback.from_user.id, price):
+            await callback.answer("Не хватает котоинов.", show_alert=True)
+            return
+        prank_text = f"{escape(dig_player_name(callback.from_user.username, callback.from_user.full_name))} оформил шахтерскую проверку. Кто-то явно копает не туда."
+        try:
+            await callback.bot.send_message(chat_id, prank_text)
+        except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound) as exc:
+            db.add_dig_coins(chat_id, callback.from_user.id, price)
+            await callback.answer("Не получилось отправить подставу, котоины возвращены.", show_alert=True)
+            await safe_edit(
+                callback,
+                "Не получилось отправить подставу, котоины возвращены.\n"
+                f"<code>{escape(str(exc))}</code>",
+                reply_markup=user_shop_categories_menu(chat_id, dig_shop_categories_for_keyboard()),
+            )
+            return
+        result = "Подстава куплена и отправлена в чат."
+    else:
+        purchase_status = db.purchase_dig_item(
+            chat_id,
+            callback.from_user.id,
+            item_key,
+            price,
+            quantity=1,
+            unique=item_key in DIG_PERMANENT_ITEMS,
+        )
+        if purchase_status == "owned":
+            await callback.answer("Кличка уже куплена.", show_alert=True)
+            return
+        if purchase_status == "no_coins":
+            await callback.answer("Не хватает котоинов.", show_alert=True)
+            return
+
+    updated = db.get_dig_player(chat_id, callback.from_user.id)
+    achievement_text = award_dig_achievement(chat_id, callback.from_user.id, "first_purchase")
+    items = dig_items_map(chat_id, callback.from_user.id)
+    category = dig_shop_category_for_item(item_key)
+    page_items, page, total_pages = dig_shop_page_items(category, items, 0)
+    achievement_block = f"\n\n<b>Достижение:</b>\n{escape(achievement_text)}" if achievement_text else ""
+    await safe_edit(
+        callback,
+        f"{result}\n\n"
+        f"Котоины: <b>{updated.coins if updated else 0}</b>\n\n"
+        f"<b>Активные эффекты:</b>\n{escape(dig_effects_text(items))}"
+        f"{achievement_block}",
+        reply_markup=user_shop_items_menu(chat_id, callback.from_user.id, category, page, total_pages, page_items),
+    )
+    await callback.answer("Куплено")
+
+
+@router.callback_query(F.data.startswith("user:dig:"))
+async def cb_user_dig(callback: CallbackQuery) -> None:
+    chat_id = int(callback.data.split(":", 2)[2])
+    if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+        await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+        return
+
+    await safe_edit(
+        callback,
+        run_private_dig(chat_id, callback.from_user),
+        reply_markup=user_mine_menu(chat_id),
+    )
     await callback.answer()
 
 
@@ -1255,13 +3448,16 @@ async def cb_help(callback: CallbackQuery) -> None:
         "2. Один раз отправь в группе /register_chat.\n"
         "3. Вернись сюда, выбери группу кнопкой и настраивай ответы.\n\n"
         "В группе бот отвечает на упоминания @username, фиксированные слова и фразу 'кто пидор'.",
-        reply_markup=main_menu(),
+        reply_markup=admin_back_menu(),
     )
     await callback.answer()
 
 
 @router.callback_query(F.data == "ui:clear_chat")
 async def cb_clear_chat(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_bot_admin(callback.from_user.id):
+        await callback.answer("Доступно только владельцу.", show_alert=True)
+        return
     await state.clear()
     if not callback.message:
         await callback.answer("Не вижу сообщение для очистки.", show_alert=True)
@@ -1281,7 +3477,7 @@ async def cb_clear_chat(callback: CallbackQuery, state: FSMContext) -> None:
     await safe_edit(
         callback,
         f"Чат очищен выше этого сообщения.\nУдалено сообщений: <b>{deleted}</b>.",
-        reply_markup=main_menu(),
+        reply_markup=admin_back_menu(),
     )
     await callback.answer("Готово")
 
@@ -1337,20 +3533,116 @@ async def cb_dig_bag(callback: CallbackQuery) -> None:
         await callback.answer("Сначала зарегистрируйся.", show_alert=True)
         return
 
-    now = datetime.now(timezone.utc)
-    luck = refreshed_dig_luck(player.luck, player.last_luck_at, now)
-    items = dig_items_map(player.chat_id, player.user_id)
+    text = dig_bag_text(callback.message.chat.id, callback.from_user.id)
+    if text is None:
+        await callback.answer("Сначала зарегистрируйся.", show_alert=True)
+        return
     await safe_edit(
         callback,
-        "<b>Сумка шахтера</b>\n"
-        f"Игрок: {escape(dig_display_name(player.chat_id, player.user_id, player.username, player.full_name))}\n"
-        f"Котоины: <b>{player.coins}</b>\n"
-        f"Общая глубина: <b>{player.total_depth}</b> м\n"
-        f"Лучшая раскопка: <b>{player.best_session_depth}</b> м\n"
-        f"Удача: <b>{luck}</b>/100\n\n"
-        f"<b>Активные эффекты:</b>\n{escape(dig_effects_text(items))}",
+        text,
         reply_markup=dig_bag_menu(callback.from_user.id),
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("user:routes:"))
+async def cb_user_routes(callback: CallbackQuery) -> None:
+    _, _, chat_raw, owner_raw = callback.data.split(":", 3)
+    chat_id, owner_id = int(chat_raw), int(owner_raw)
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    progress = db.get_dig_progress(owner_id)
+    routes = [(key, data[0], key == progress["selected_route"]) for key, data in DIG_ROUTES.items()]
+    await safe_edit(callback, dig_routes_text(owner_id), reply_markup=user_routes_menu(chat_id, owner_id, routes))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("user:route:"))
+async def cb_user_route_select(callback: CallbackQuery) -> None:
+    _, _, chat_raw, owner_raw, route_key = callback.data.split(":", 4)
+    chat_id, owner_id = int(chat_raw), int(owner_raw)
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    route = DIG_ROUTES.get(route_key)
+    progress = db.get_dig_progress(owner_id)
+    if route is None or int(progress["level"]) < route[5]:
+        await callback.answer("Маршрут пока закрыт.", show_alert=True)
+        return
+    db.set_dig_route(owner_id, route_key)
+    routes = [(key, data[0], key == route_key) for key, data in DIG_ROUTES.items()]
+    await safe_edit(callback, dig_routes_text(owner_id), reply_markup=user_routes_menu(chat_id, owner_id, routes))
+    await callback.answer(f"Выбран маршрут: {route[0]}")
+
+
+@router.callback_query(F.data.startswith("user:contracts:"))
+async def cb_user_contracts(callback: CallbackQuery) -> None:
+    _, _, chat_raw, owner_raw = callback.data.split(":", 3)
+    chat_id, owner_id = int(chat_raw), int(owner_raw)
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    await safe_edit(callback, dig_contracts_text(owner_id), reply_markup=user_bag_menu(chat_id, owner_id))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("user:expedition:"))
+async def cb_user_expedition(callback: CallbackQuery) -> None:
+    _, _, chat_raw, owner_raw = callback.data.split(":", 3)
+    chat_id, owner_id = int(chat_raw), int(owner_raw)
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    await safe_edit(callback, dig_expedition_text(chat_id), reply_markup=user_bag_menu(chat_id, owner_id))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dig:routes:"))
+async def cb_dig_routes(callback: CallbackQuery) -> None:
+    owner_id = int(callback.data.split(":", 2)[2])
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    progress = db.get_dig_progress(callback.from_user.id)
+    routes = [(key, data[0], key == progress["selected_route"]) for key, data in DIG_ROUTES.items()]
+    await safe_edit(callback, dig_routes_text(callback.from_user.id), reply_markup=dig_routes_menu(owner_id, routes))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dig:route:"))
+async def cb_dig_route_select(callback: CallbackQuery) -> None:
+    _, _, owner_raw, route_key = callback.data.split(":", 3)
+    owner_id = int(owner_raw)
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    route = DIG_ROUTES.get(route_key)
+    if route is None:
+        await callback.answer("Маршрут не найден.", show_alert=True)
+        return
+    progress = db.get_dig_progress(owner_id)
+    if int(progress["level"]) < route[5]:
+        await callback.answer(f"Маршрут откроется на {route[5]} уровне.", show_alert=True)
+        return
+    db.set_dig_route(owner_id, route_key)
+    routes = [(key, data[0], key == route_key) for key, data in DIG_ROUTES.items()]
+    await safe_edit(callback, dig_routes_text(owner_id), reply_markup=dig_routes_menu(owner_id, routes))
+    await callback.answer(f"Выбран маршрут: {route[0]}")
+
+
+@router.callback_query(F.data.startswith("dig:contracts:"))
+async def cb_dig_contracts(callback: CallbackQuery) -> None:
+    owner_id = int(callback.data.split(":", 2)[2])
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    await safe_edit(callback, dig_contracts_text(owner_id), reply_markup=dig_section_back_menu(owner_id))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dig:expedition:"))
+async def cb_dig_expedition(callback: CallbackQuery) -> None:
+    owner_id = int(callback.data.split(":", 2)[2])
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    if not callback.message or callback.message.chat.type not in SUPPORTED_CHAT_TYPES:
+        await callback.answer("Экспедиция доступна в группе.", show_alert=True)
+        return
+    await safe_edit(callback, dig_expedition_text(callback.message.chat.id), reply_markup=dig_section_back_menu(owner_id))
     await callback.answer()
 
 
@@ -1362,6 +3654,13 @@ async def cb_dig_shop(callback: CallbackQuery) -> None:
 
     parts = callback.data.split(":")
     owner_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else callback.from_user.id
+    category = parts[3] if len(parts) > 3 else None
+    if category not in DIG_SHOP_CATEGORIES:
+        category = None
+    try:
+        page = int(parts[4]) if len(parts) > 4 else 0
+    except ValueError:
+        page = 0
     if not await require_dig_button_owner(callback, owner_id):
         return
 
@@ -1371,15 +3670,122 @@ async def cb_dig_shop(callback: CallbackQuery) -> None:
         return
 
     items = dig_items_map(player.chat_id, player.user_id)
+    if category:
+        page_items, page, total_pages = dig_shop_page_items(category, items, page)
+        await safe_edit(
+            callback,
+            dig_shop_category_text(player.coins, category, page, total_pages),
+            reply_markup=dig_shop_items_menu(callback.from_user.id, category, page, total_pages, page_items),
+        )
+        await callback.answer()
+        return
+
     await safe_edit(
         callback,
-        "<b>Магазин раскопок</b>\n"
-        f"Котоины: <b>{player.coins}</b>\n\n"
-        f"<b>Активные эффекты:</b>\n{escape(dig_effects_text(items))}\n\n"
-        "Выбери предмет для покупки:",
-        reply_markup=dig_shop_menu(callback.from_user.id, dig_shop_items_for_keyboard()),
+        dig_shop_overview_text(player.coins, items),
+        reply_markup=dig_shop_categories_menu(callback.from_user.id, dig_shop_categories_for_keyboard()),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dig:donate:"))
+async def cb_dig_donate(callback: CallbackQuery) -> None:
+    if not callback.message or callback.message.chat.type not in SUPPORTED_CHAT_TYPES:
+        await callback.answer("Донат шахты доступен в группе.", show_alert=True)
+        return
+
+    owner_id = int(callback.data.split(":", 2)[2])
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    if db.get_dig_player(callback.message.chat.id, callback.from_user.id) is None:
+        await callback.answer("Сначала зарегистрируйся.", show_alert=True)
+        return
+
+    bot_user = await callback.bot.me()
+    if not bot_user.username:
+        await callback.answer("Не получилось открыть личный чат с ботом.", show_alert=True)
+        return
+    url = f"https://t.me/{bot_user.username}?start={donate_start_payload(callback.message.chat.id)}"
+    await callback.answer(url=url)
+
+
+@router.callback_query(F.data.startswith("dig:star:"))
+async def cb_dig_star(callback: CallbackQuery) -> None:
+    if not callback.message or callback.message.chat.type not in SUPPORTED_CHAT_TYPES:
+        await callback.answer("Сумка доступна в группе.", show_alert=True)
+        return
+
+    parts = callback.data.split(":", 3)
+    if len(parts) != 4 or parts[2] not in DIG_STAR_ACTIONS or not parts[3].isdigit():
+        await callback.answer("Кнопка устарела. Открой сумку заново.", show_alert=True)
+        return
+
+    action = parts[2]
+    owner_id = int(parts[3])
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+
+    player = db.get_dig_player(callback.message.chat.id, callback.from_user.id)
+    if player is None:
+        await callback.answer("Сначала зарегистрируйся.", show_alert=True)
+        return
+
+    title, description, price = dig_star_invoice(action)
+
+    try:
+        await callback.bot.send_invoice(
+            chat_id=callback.from_user.id,
+            title=title,
+            description=description,
+            payload=dig_star_payload(action, callback.from_user.id, callback.message.chat.id),
+            currency="XTR",
+            prices=[LabeledPrice(label=title, amount=price)],
+            provider_token="",
+        )
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        await callback.answer(
+            "Не получилось отправить счет в личку. Открой бота в личных сообщениях и нажми /start, потом попробуй снова.",
+            show_alert=True,
+        )
+        return
+    await callback.answer("Счет отправлен в личку.")
+
+
+@router.callback_query(F.data.startswith("user:star:"))
+async def cb_user_dig_star(callback: CallbackQuery) -> None:
+    parts = callback.data.split(":", 4)
+    if len(parts) != 5 or parts[2] not in DIG_STAR_ACTIONS or not parts[3].lstrip("-").isdigit() or not parts[4].isdigit():
+        await callback.answer("Кнопка устарела. Открой сумку заново.", show_alert=True)
+        return
+
+    action = parts[2]
+    chat_id = int(parts[3])
+    owner_id = int(parts[4])
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+        await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+        return
+    if db.get_dig_player(chat_id, callback.from_user.id) is None:
+        await callback.answer("Сначала зарегистрируйся в шахте командой копай внутри группы.", show_alert=True)
+        return
+
+    title, description, price = dig_star_invoice(action)
+
+    try:
+        await callback.bot.send_invoice(
+            chat_id=callback.from_user.id,
+            title=title,
+            description=description,
+            payload=dig_star_payload(action, callback.from_user.id, chat_id),
+            currency="XTR",
+            prices=[LabeledPrice(label=title, amount=price)],
+            provider_token="",
+        )
+    except (TelegramBadRequest, TelegramForbiddenError):
+        await callback.answer("Не получилось отправить счет. Нажми /start и попробуй снова.", show_alert=True)
+        return
+    await callback.answer("Счет отправлен.")
 
 
 @router.callback_query(F.data.startswith("dig:achievements:"))
@@ -1475,6 +3881,11 @@ async def cb_dig_confirm(callback: CallbackQuery) -> None:
         await callback.answer("Покупка уже обрабатывается.", show_alert=True)
         return
 
+    purchase_error = dig_purchase_error(dig_items_map(chat_id, callback.from_user.id), item_key)
+    if purchase_error:
+        await callback.answer(purchase_error, show_alert=True)
+        return
+
     name, price, _ = item
     now = datetime.now(timezone.utc)
     result = f"Куплено: <b>{escape(name)}</b>."
@@ -1486,9 +3897,9 @@ async def cb_dig_confirm(callback: CallbackQuery) -> None:
         if player is None:
             await callback.answer("Игрок не найден.", show_alert=True)
             return
-        luck = refreshed_dig_luck(player.luck, player.last_luck_at, now)
-        db.set_dig_luck(chat_id, callback.from_user.id, min(100, luck + 20), now.isoformat(timespec="seconds"))
-        result = f"Чай выпит. Удача восстановлена до <b>{min(100, luck + 20)}</b>/100."
+        luck = refreshed_dig_luck(callback.from_user.id, player.luck, player.last_luck_at, now)
+        db.set_dig_luck(chat_id, callback.from_user.id, min(100, luck + 35), now.isoformat(timespec="seconds"))
+        result = f"Чай выпит. Удача восстановлена до <b>{min(100, luck + 35)}</b>/100."
     elif item_key == "prank":
         if not db.spend_dig_coins(chat_id, callback.from_user.id, price):
             await callback.answer("Не хватает котоинов.", show_alert=True)
@@ -1503,7 +3914,7 @@ async def cb_dig_confirm(callback: CallbackQuery) -> None:
                 callback,
                 "Не получилось отправить подставу, котоины возвращены.\n"
                 f"<code>{escape(str(exc))}</code>",
-                reply_markup=dig_shop_menu(callback.from_user.id, dig_shop_items_for_keyboard()),
+                reply_markup=dig_shop_categories_menu(callback.from_user.id, dig_shop_categories_for_keyboard()),
             )
             return
         result = "Подстава куплена и отправлена в чат."
@@ -1514,7 +3925,7 @@ async def cb_dig_confirm(callback: CallbackQuery) -> None:
             item_key,
             price,
             quantity=1,
-            unique=item_key == "title_badge",
+            unique=item_key in DIG_PERMANENT_ITEMS,
         )
         if purchase_status == "owned":
             await callback.answer("Кличка уже куплена.", show_alert=True)
@@ -1526,6 +3937,8 @@ async def cb_dig_confirm(callback: CallbackQuery) -> None:
     updated = db.get_dig_player(chat_id, callback.from_user.id)
     achievement_text = award_dig_achievement(chat_id, callback.from_user.id, "first_purchase")
     items = dig_items_map(chat_id, callback.from_user.id)
+    category = dig_shop_category_for_item(item_key)
+    page_items, page, total_pages = dig_shop_page_items(category, items, 0)
     achievement_block = f"\n\n<b>Достижение:</b>\n{escape(achievement_text)}" if achievement_text else ""
     await safe_edit(
         callback,
@@ -1533,7 +3946,7 @@ async def cb_dig_confirm(callback: CallbackQuery) -> None:
         f"Котоины: <b>{updated.coins if updated else 0}</b>\n\n"
         f"<b>Активные эффекты:</b>\n{escape(dig_effects_text(items))}"
         f"{achievement_block}",
-        reply_markup=dig_shop_menu(callback.from_user.id, dig_shop_items_for_keyboard()),
+        reply_markup=dig_shop_items_menu(callback.from_user.id, category, page, total_pages, page_items),
     )
     await callback.answer("Куплено")
 
@@ -1567,7 +3980,7 @@ async def feedback_command(message: Message, state: FSMContext) -> None:
 async def cb_status(callback: CallbackQuery) -> None:
     chats = await admin_chats_for_user(callback.bot, callback.from_user.id)
     if not chats:
-        await safe_edit(callback, "Нет доступных групп, где ты админ.", reply_markup=main_menu())
+        await safe_edit(callback, "Нет доступных групп, где ты админ.", reply_markup=admin_back_menu())
         await callback.answer()
         return
 
@@ -1581,12 +3994,15 @@ async def cb_status(callback: CallbackQuery) -> None:
             status = "нет доступа"
         lines.append(f"{mention_chat_link(item)} - {escape(status)}")
 
-    await safe_edit(callback, "\n".join(lines), reply_markup=main_menu())
+    await safe_edit(callback, "\n".join(lines), reply_markup=admin_back_menu())
     await callback.answer()
 
 
 @router.callback_query(F.data == "ui:whoami")
 async def cb_whoami(callback: CallbackQuery) -> None:
+    if not is_bot_admin(callback.from_user.id):
+        await callback.answer("Панель владельца доступна только владельцу.", show_alert=True)
+        return
     bot_admin = is_bot_admin(callback.from_user.id)
     admin_roles = await user_admin_roles(callback.bot, callback.from_user.id)
     has_chat_admin = bool(admin_roles)
@@ -1620,7 +4036,7 @@ async def cb_whoami(callback: CallbackQuery) -> None:
         for chat, role in admin_roles:
             lines.append(f"{mention_chat(chat)} - <code>{escape(role)}</code>")
 
-    await safe_edit(callback, "\n".join(lines), reply_markup=main_menu())
+    await safe_edit(callback, "\n".join(lines), reply_markup=admin_back_menu())
     await callback.answer()
 
 
@@ -1642,7 +4058,7 @@ async def cb_restart(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "paid:chats")
 async def cb_paid_chats(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    chats = db.list_chats()
+    chats = await paid_chats_for_user(callback.bot, callback.from_user.id)
     if not chats:
         await safe_edit(
             callback,
@@ -1666,6 +4082,9 @@ async def cb_paid_chat(callback: CallbackQuery, state: FSMContext) -> None:
     chat = db.get_chat(chat_id)
     if chat is None:
         await callback.answer("Группа не найдена.", show_alert=True)
+        return
+    if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+        await callback.answer("Платная публикация доступна только в группах, где ты состоишь.", show_alert=True)
         return
 
     await state.set_state(AdminInput.paid_message)
@@ -1742,7 +4161,7 @@ async def cb_stars_payers(callback: CallbackQuery) -> None:
             chat = db.get_chat(payment.chat_id) if payment.chat_id else None
             chat_title_text = chat.title if chat else str(payment.chat_id or "-")
             lines.append(
-                f"{payment.id}. {escape(username)} - <b>{payment.amount} ⭐</b> "
+                f"{payment.id}. {escape(username)} - <b>{payment.amount} в­ђ</b> "
                 f"в {escape(chat_title_text)} · {escape(payment.created_at)}"
             )
 
@@ -1758,10 +4177,17 @@ async def cb_select_chat(callback: CallbackQuery, state: FSMContext) -> None:
     if chat is None:
         return
 
+    allowed_features = None
+    if not is_bot_admin(callback.from_user.id):
+        allowed_features = {
+            feature_id
+            for feature_id, _ in ADMIN_FEATURES
+            if bot_admin_feature_allowed(chat_id, callback.from_user.id, feature_id, mode="view", default=True)
+        }
     await safe_edit(
         callback,
         f"Выбрана группа: <b>{mention_chat(chat)}</b>\nЧто настроим?",
-        reply_markup=chat_admin_menu(chat_id),
+        reply_markup=chat_admin_menu(chat_id, include_access=is_bot_admin(callback.from_user.id), allowed_features=allowed_features),
     )
     await callback.answer()
 
@@ -1775,9 +4201,26 @@ async def cb_trigger_list_page(callback: CallbackQuery, state: FSMContext) -> No
     chat = await require_selected_admin(callback, chat_id)
     if chat is None:
         return
+    if not await require_callback_feature(callback, "triggers", default=True):
+        return
 
     text, page, total = trigger_page_text(chat_id, page)
     await safe_edit(callback, text, reply_markup=trigger_list_menu(chat_id, page, total))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("participants:top:"))
+async def cb_participant_top(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    _, _, chat_id_raw, period = callback.data.split(":", 3)
+    chat_id = int(chat_id_raw)
+    chat = await require_selected_admin(callback, chat_id)
+    if chat is None:
+        return
+    if not await require_callback_feature(callback, "participants", mode="view", default=True):
+        return
+
+    await safe_edit(callback, participant_top_text(chat_id, period), reply_markup=participant_top_menu(chat_id))
     await callback.answer()
 
 
@@ -1789,6 +4232,55 @@ async def cb_action(callback: CallbackQuery, state: FSMContext) -> None:
     if chat is None:
         return
 
+    if action == "access":
+        if not is_bot_admin(callback.from_user.id):
+            await callback.answer("Доступ может менять только владелец.", show_alert=True)
+            return
+        await state.clear()
+        await safe_edit(
+            callback,
+            f"Группа: <b>{mention_chat(chat)}</b>\n\nВыбери админа, которому нужно настроить права.",
+            reply_markup=await access_admins_menu(callback.bot, chat_id),
+        )
+        await callback.answer()
+        return
+
+    if action == "access":
+        if not is_bot_admin(callback.from_user.id):
+            await callback.answer("Доступ может менять только владелец.", show_alert=True)
+            return
+        await state.set_state(AdminInput.set_access_user)
+        await state.update_data(chat_id=chat_id)
+        await safe_edit(
+            callback,
+            f"Группа: <b>{mention_chat(chat)}</b>\n\n"
+            "Отправь Telegram ID пользователя, которому нужно настроить доступ к кнопкам панели.",
+            reply_markup=back_to_chat_menu(chat_id),
+        )
+        await callback.answer()
+        return
+
+    feature = ACTION_FEATURES.get(action)
+    if feature and not await require_callback_feature(callback, feature, mode="view", default=True):
+        return
+
+    if action == "logs":
+        await state.clear()
+        items = db.list_audit_logs(chat_id, limit=30)
+        lines = [f"Группа: <b>{mention_chat(chat)}</b>", "", "<b>Последние действия:</b>"]
+        if not items:
+            lines.append("Журнал пока пуст.")
+        for item in items:
+            actor = f"@{item.actor_username}" if item.actor_username else (item.actor_name or f"ID {item.actor_id}")
+            lines.append(
+                f"\n<b>{escape(item.action)}</b>\n"
+                f"{escape(actor)} В· {escape(item.source)} В· <code>{escape(item.created_at)}</code>"
+                + (f"\n<code>{escape(item.details)}</code>" if item.details else "")
+            )
+        await safe_edit(callback, "\n".join(lines), reply_markup=back_to_chat_menu(chat_id))
+        await callback.answer()
+        return
+
     if action == "set_reply":
         await state.set_state(AdminInput.set_reply)
         await state.update_data(chat_id=chat_id)
@@ -1796,7 +4288,8 @@ async def cb_action(callback: CallbackQuery, state: FSMContext) -> None:
             callback,
             f"Группа: <b>{mention_chat(chat)}</b>\n\n"
             "Отправь автоответ в формате:\n"
-            "<code>@username текст ответа</code>",
+            "<code>@username - текст ответа</code>\n\n"
+            "Можно прикрепить гиф, голос, аудио, видео или кружок.",
             reply_markup=back_to_chat_menu(chat_id),
         )
     elif action == "del_reply":
@@ -1816,7 +4309,8 @@ async def cb_action(callback: CallbackQuery, state: FSMContext) -> None:
             callback,
             f"Группа: <b>{mention_chat(chat)}</b>\n\n"
             "Отправь фиксированный ответ в формате:\n"
-            "<code>слово - текст ответа</code>",
+            "<code>слово - текст ответа</code>\n\n"
+            "Можно прикрепить гиф, голос, аудио, видео или кружок.",
             reply_markup=back_to_chat_menu(chat_id),
         )
     elif action == "del_trigger":
@@ -1832,13 +4326,19 @@ async def cb_action(callback: CallbackQuery, state: FSMContext) -> None:
         text, page, total = trigger_page_text(chat_id, 0)
         await safe_edit(callback, text, reply_markup=trigger_list_menu(chat_id, page, total))
     elif action == "participants":
-        users = db.list_pickable_users(chat_id)
         await safe_edit(
             callback,
-            f"Бот запомнил участников с @username для розыгрышей: <b>{len(users)}</b>.\n\n"
-            "В список попадают только те, кто уже писал в этой группе после запуска бота.",
-            reply_markup=back_to_chat_menu(chat_id),
+            participant_top_text(chat_id, "day"),
+            reply_markup=participant_top_menu(chat_id),
         )
+    elif action == "giveaway":
+        await safe_edit(
+            callback,
+            f"Группа: <b>{mention_chat(chat)}</b>\n\nНастройки розыгрышей и дней рождения.",
+            reply_markup=giveaway_menu(chat_id),
+        )
+        await callback.answer()
+        return
     elif action == "giveaway":
         settings = db.get_giveaway_settings(chat_id)
         await state.set_state(AdminInput.set_giveaway)
@@ -1859,9 +4359,16 @@ async def cb_action(callback: CallbackQuery, state: FSMContext) -> None:
             callback,
             f"Группа: <b>{mention_chat(chat)}</b>\n\n"
             f"Режим тревоги: <b>{'включен' if settings.enabled else 'выключен'}</b>\n\n"
-            f"Текст тревоги: {preview_html(settings.alarm_text or 'Тревога включена: медиа и реакции отключены.')}\n"
-            f"Текст отбоя: {preview_html(settings.clear_text or 'Отбой: медиа и реакции снова включены.')}",
-            reply_markup=alarm_menu(chat_id, bool(settings.enabled)),
+            f"Автотревога Alerts.in.ua ({ALERTS_LOCATION_TITLE}): <b>{'включена' if db.alarm_api_enabled(chat_id) else 'выключена'}</b>\n\n"
+            f"Ограничения медиа и реакций: <b>{'включены' if db.alarm_restrictions_enabled(chat_id) else 'выключены'}</b>\n\n"
+            f"Текст тревоги: {preview_html(settings.alarm_text or 'Тревога включена: медиа, реакции и одиночные эмодзи отключены.')}\n"
+            f"Текст отбоя: {preview_html(settings.clear_text or 'Отбой: медиа, реакции и одиночные эмодзи снова включены.')}",
+            reply_markup=alarm_menu(
+                chat_id,
+                bool(settings.enabled),
+                db.alarm_api_enabled(chat_id),
+                db.alarm_restrictions_enabled(chat_id),
+            ),
         )
     elif action == "roll_mute":
         if not is_bot_admin(callback.from_user.id):
@@ -1894,6 +4401,11 @@ async def cb_action(callback: CallbackQuery, state: FSMContext) -> None:
             "В тексте можно использовать: <code>{user}</code>, <code>{minutes}</code>, <code>{reason}</code>, <code>{reason_line}</code>.",
             reply_markup=quiet_menu(chat_id, bool(settings.media_file_id)),
         )
+    elif action == "blacklist":
+        await safe_edit(callback, blacklist_text(chat_id), reply_markup=blacklist_menu(chat_id))
+    elif action == "quotes":
+        text, page, total = quote_page_text(chat_id, 0)
+        await safe_edit(callback, text, reply_markup=quotes_menu(chat_id, page, total))
     elif action == "check":
         bot_user = await callback.bot.me()
         try:
@@ -1944,6 +4456,74 @@ async def cb_action(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("quotes:"))
+async def cb_quotes(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = callback.data.split(":")
+    if len(parts) < 3:
+        await callback.answer("Неизвестное действие.", show_alert=True)
+        return
+
+    action = parts[1]
+    chat_id = int(parts[2])
+    chat = await require_selected_admin(callback, chat_id)
+    if chat is None:
+        return
+    if not await require_callback_feature(callback, "quotes", default=True):
+        return
+
+    if action == "page":
+        await state.clear()
+        page = int(parts[3]) if len(parts) > 3 else 0
+        text, page, total = quote_page_text(chat_id, page)
+        await safe_edit(callback, text, reply_markup=quotes_menu(chat_id, page, total))
+    elif action == "delete":
+        if not is_bot_admin(callback.from_user.id):
+            await callback.answer("Удалять цитаты может только администратор бота.", show_alert=True)
+            return
+        await state.set_state(AdminInput.delete_quote)
+        await state.update_data(chat_id=chat_id)
+        await safe_edit(
+            callback,
+            f"Группа: <b>{mention_chat(chat)}</b>\n\n"
+            "Отправь номер цитаты из списка для удаления.",
+            reply_markup=quotes_menu(chat_id, 0, len(db.list_quotes(chat_id))),
+        )
+    else:
+        await callback.answer("Неизвестное действие.", show_alert=True)
+        return
+
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("blacklist:"))
+async def cb_blacklist(callback: CallbackQuery, state: FSMContext) -> None:
+    _, action, chat_id_raw = callback.data.split(":", 2)
+    chat_id = int(chat_id_raw)
+    chat = await require_selected_admin(callback, chat_id)
+    if chat is None:
+        return
+    if not await require_callback_feature(callback, "blacklist", default=True):
+        return
+
+    if action == "add":
+        await state.set_state(AdminInput.add_blacklist_word)
+        text = "Напиши слово или выражение, которое нужно запретить."
+    elif action == "delete":
+        await state.set_state(AdminInput.delete_blacklist_word)
+        text = "Напиши слово или выражение, которое нужно удалить из черного списка."
+    else:
+        await callback.answer("Неизвестное действие.", show_alert=True)
+        return
+
+    await state.update_data(chat_id=chat_id)
+    await safe_edit(
+        callback,
+        f"Группа: <b>{mention_chat(chat)}</b>\n\n{text}",
+        reply_markup=blacklist_menu(chat_id),
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("leave:yes:"))
 async def cb_leave_chat(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
@@ -1955,6 +4535,17 @@ async def cb_leave_chat(callback: CallbackQuery, state: FSMContext) -> None:
     try:
         await callback.bot.leave_chat(chat_id)
     except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        description = str(exc).casefold()
+        if "chat not found" in description or "bot is not a member" in description or "forbidden" in description:
+            db.delete_chat(chat_id)
+            await safe_edit(
+                callback,
+                f"Группа <b>{mention_chat(chat)}</b> уже недоступна для бота, я убрал ее из списка.",
+                reply_markup=admin_back_menu(),
+            )
+            await callback.answer()
+            return
+
         await safe_edit(
             callback,
             f"Не получилось выйти из группы <b>{mention_chat(chat)}</b>.\n"
@@ -1968,8 +4559,174 @@ async def cb_leave_chat(callback: CallbackQuery, state: FSMContext) -> None:
     await safe_edit(
         callback,
         f"Бот вышел из группы: <b>{mention_chat(chat)}</b>.",
-        reply_markup=main_menu(),
+        reply_markup=admin_back_menu(),
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("access:toggle:"))
+async def cb_access_toggle(callback: CallbackQuery) -> None:
+    if not is_bot_admin(callback.from_user.id):
+        await callback.answer("Доступ может менять только владелец.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    if len(parts) != 5:
+        await callback.answer("Неизвестное действие.", show_alert=True)
+        return
+
+    chat_id = int(parts[2])
+    user_id = int(parts[3])
+    feature = parts[4]
+    if feature not in ADMIN_FEATURE_IDS:
+        await callback.answer("Неизвестная функция.", show_alert=True)
+        return
+
+    allowed = not db.admin_feature_allowed(chat_id, user_id, feature, default=False)
+    db.set_admin_feature_permission(chat_id, user_id, feature, allowed, callback.from_user.id)
+    await safe_edit(
+        callback,
+        f"Доступ для <code>{user_id}</code>\n\n"
+        "Включенные функции будут доступны в приложении. Для Telegram-админки группы запрет закрывает выбранную функцию.",
+        reply_markup=access_permissions_menu(chat_id, user_id),
+    )
+    await callback.answer("Доступ обновлен")
+
+
+@router.callback_query(F.data.startswith("access:set:"))
+async def cb_access_set(callback: CallbackQuery) -> None:
+    if not is_bot_admin(callback.from_user.id):
+        await callback.answer("Доступ может менять только владелец.", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) not in {6, 7}:
+        await callback.answer("Неизвестное действие.", show_alert=True)
+        return
+    chat_id = int(parts[2])
+    user_id = int(parts[3])
+    feature = parts[4]
+    mode = parts[5]
+    page = int(parts[6]) if len(parts) == 7 else 0
+    if feature not in ADMIN_PERMISSION_IDS or mode not in {"view", "write"}:
+        await callback.answer("Неизвестное право.", show_alert=True)
+        return
+    key = admin_permission_key(feature, mode)
+    allowed = not bot_admin_feature_allowed(chat_id, user_id, feature, mode=mode, default=False)
+    db.set_admin_feature_permission(chat_id, user_id, key, allowed, callback.from_user.id)
+    if "." not in feature:
+        db.set_admin_feature_permission(chat_id, user_id, feature, False, callback.from_user.id)
+    await safe_edit(
+        callback,
+        f"Доступ для <code>{user_id}</code>\n\n"
+        "Читать = может открыть кнопку. Менять = может нажимать действия внутри нее.",
+        reply_markup=access_permissions_menu(chat_id, user_id, page),
+    )
+    await callback.answer("Доступ обновлен")
+
+
+@router.callback_query(F.data.startswith("access:page:"))
+async def cb_access_page(callback: CallbackQuery) -> None:
+    if not is_bot_admin(callback.from_user.id):
+        await callback.answer("Доступ может менять только владелец.", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 5:
+        await callback.answer("Неизвестное действие.", show_alert=True)
+        return
+    chat_id = int(parts[2])
+    user_id = int(parts[3])
+    page = int(parts[4])
+    await safe_edit(
+        callback,
+        f"Доступ для <code>{user_id}</code>\n\n"
+        "Читать = может открыть кнопку. Менять = может нажимать действия внутри нее.",
+        reply_markup=access_permissions_menu(chat_id, user_id, page),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("access:user:"))
+async def cb_access_user(callback: CallbackQuery) -> None:
+    if not is_bot_admin(callback.from_user.id):
+        await callback.answer("Доступ может менять только владелец.", show_alert=True)
+        return
+    _, _, chat_id_raw, user_id_raw = callback.data.split(":", 3)
+    chat_id = int(chat_id_raw)
+    user_id = int(user_id_raw)
+    await safe_edit(
+        callback,
+        f"Доступ для <code>{user_id}</code>\n\n"
+        "Читать = может открыть кнопку. Менять = может нажимать действия внутри нее.",
+        reply_markup=access_permissions_menu(chat_id, user_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("access:noop:"))
+async def cb_access_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("giveaway:"))
+async def cb_giveaway_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = callback.data.split(":")
+    action = parts[1]
+    chat_id = int(parts[2])
+    chat = await require_selected_admin(callback, chat_id)
+    if chat is None:
+        return
+    if not await require_callback_feature(callback, "giveaway", mode="view", default=True):
+        return
+
+    if action == "settings":
+        if not await require_callback_feature(callback, "giveaway.settings", default=True):
+            return
+        settings = db.get_giveaway_settings(chat_id)
+        await state.set_state(AdminInput.set_giveaway)
+        await state.update_data(chat_id=chat_id)
+        await safe_edit(
+            callback,
+            f"Группа: <b>{mention_chat(chat)}</b>\n\n"
+            "Отправь настройку розыгрыша в формате:\n"
+            "<code>фраза вызова - количество - заголовок</code>\n\n"
+            "Пример:\n"
+            "<code>кто пидор - 3 - Пидоры дня</code>\n\n"
+            f"Сейчас: <code>{escape(settings.trigger)} - {settings.winners_count} - {escape(settings.title)}</code>",
+            reply_markup=giveaway_menu(chat_id),
+        )
+    elif action == "birthdays":
+        if not await require_callback_feature(callback, "giveaway.birthdays", mode="view", default=True):
+            return
+        birthdays = db.list_birthdays(chat_id)
+        lines = [f"Группа: <b>{mention_chat(chat)}</b>", "", "<b>Дни рождения:</b>"]
+        if birthdays:
+            lines.extend(f"{item.id}. {item.day:02d}.{item.month:02d} — {escape(item.text)}" for item in birthdays[:50])
+        else:
+            lines.append("Пока пусто.")
+        await safe_edit(callback, "\n".join(lines), reply_markup=birthday_menu(chat_id, birthdays))
+    elif action == "add_birthday":
+        if not await require_callback_feature(callback, "giveaway.birthdays", default=True):
+            return
+        await state.set_state(AdminInput.add_birthday)
+        await state.update_data(chat_id=chat_id)
+        await safe_edit(
+            callback,
+            f"Группа: <b>{mention_chat(chat)}</b>\n\n"
+            "Отправь день рождения в формате:\n"
+            "<code>31.12 Имя или событие</code>",
+            reply_markup=giveaway_menu(chat_id),
+        )
+    elif action == "delete_birthday":
+        if not await require_callback_feature(callback, "giveaway.birthdays", default=True):
+            return
+        birthday_id = int(parts[3])
+        deleted = db.delete_birthday(chat_id, birthday_id)
+        birthdays = db.list_birthdays(chat_id)
+        await safe_edit(
+            callback,
+            "День рождения удален." if deleted else "День рождения не найден.",
+            reply_markup=birthday_menu(chat_id, birthdays),
+        )
     await callback.answer()
 
 
@@ -1980,21 +4737,84 @@ async def cb_alarm(callback: CallbackQuery, state: FSMContext) -> None:
     chat = await require_selected_admin(callback, chat_id)
     if chat is None:
         return
+    if not await require_callback_feature(callback, "alarm", mode="view", default=True):
+        return
 
     settings = db.get_alarm_settings(chat_id)
     if action == "toggle":
+        if not await require_callback_feature(callback, "alarm.toggle", default=True):
+            return
         enabled = not bool(settings.enabled)
         db.set_alarm_enabled(chat_id, enabled, callback.from_user.id)
+        invalidate_chat_runtime_cache(chat_id)
         settings = db.get_alarm_settings(chat_id)
         await safe_edit(
             callback,
             f"Группа: <b>{mention_chat(chat)}</b>\n\n"
             f"Режим тревоги: <b>{'включен' if settings.enabled else 'выключен'}</b>\n\n"
-            f"Текст тревоги: {preview_html(settings.alarm_text or 'Тревога включена: медиа и реакции отключены.')}\n"
-            f"Текст отбоя: {preview_html(settings.clear_text or 'Отбой: медиа и реакции снова включены.')}",
-            reply_markup=alarm_menu(chat_id, bool(settings.enabled)),
+            f"Автотревога Alerts.in.ua ({ALERTS_LOCATION_TITLE}): <b>{'включена' if db.alarm_api_enabled(chat_id) else 'выключена'}</b>\n\n"
+            f"Ограничения медиа и реакций: <b>{'включены' if db.alarm_restrictions_enabled(chat_id) else 'выключены'}</b>\n\n"
+            f"Текст тревоги: {preview_html(settings.alarm_text or 'Тревога включена: медиа, реакции и одиночные эмодзи отключены.')}\n"
+            f"Текст отбоя: {preview_html(settings.clear_text or 'Отбой: медиа, реакции и одиночные эмодзи снова включены.')}",
+            reply_markup=alarm_menu(
+                chat_id,
+                bool(settings.enabled),
+                db.alarm_api_enabled(chat_id),
+                db.alarm_restrictions_enabled(chat_id),
+            ),
+        )
+    elif action == "api":
+        if not await require_callback_feature(callback, "alarm.api", default=True):
+            return
+        if not ALERTS_API_TOKEN:
+            await callback.answer("Добавь ALERTS_API_TOKEN в файл .env и перезапусти бота.", show_alert=True)
+            return
+        enabled = not db.alarm_api_enabled(chat_id)
+        previous_status = db.alarm_api_last_status(chat_id)
+        if not enabled and previous_status in {"A", "P"}:
+            await deactivate_alarm_from_api(callback.bot, chat_id)
+        db.set_alarm_api_enabled(chat_id, enabled, callback.from_user.id)
+        invalidate_chat_runtime_cache(chat_id)
+        settings = db.get_alarm_settings(chat_id)
+        await safe_edit(
+            callback,
+            f"Группа: <b>{mention_chat(chat)}</b>\n\n"
+            f"Режим тревоги: <b>{'включен' if settings.enabled else 'выключен'}</b>\n\n"
+            f"Автотревога Alerts.in.ua ({ALERTS_LOCATION_TITLE}): <b>{'включена' if enabled else 'выключена'}</b>\n\n"
+            f"Ограничения медиа и реакций: <b>{'включены' if db.alarm_restrictions_enabled(chat_id) else 'выключены'}</b>\n\n"
+            f"Текст тревоги: {preview_html(settings.alarm_text or 'Тревога включена: медиа, реакции и одиночные эмодзи отключены.')}\n"
+            f"Текст отбоя: {preview_html(settings.clear_text or 'Отбой: медиа, реакции и одиночные эмодзи снова включены.')}",
+            reply_markup=alarm_menu(
+                chat_id,
+                bool(settings.enabled),
+                enabled,
+                db.alarm_restrictions_enabled(chat_id),
+            ),
+        )
+    elif action == "restrictions":
+        if not await require_callback_feature(callback, "alarm.restrictions", default=True):
+            return
+        enabled = not db.alarm_restrictions_enabled(chat_id)
+        if not enabled:
+            await restore_alarm_restrictions(callback.bot, chat_id)
+        db.set_alarm_restrictions_enabled(chat_id, enabled, callback.from_user.id)
+        invalidate_chat_runtime_cache(chat_id)
+        if enabled and db.alarm_api_last_status(chat_id) in {"A", "P"}:
+            await apply_alarm_restrictions(callback.bot, chat_id)
+        settings = db.get_alarm_settings(chat_id)
+        await safe_edit(
+            callback,
+            f"Группа: <b>{mention_chat(chat)}</b>\n\n"
+            f"Режим тревоги: <b>{'включен' if settings.enabled else 'выключен'}</b>\n\n"
+            f"Автотревога Alerts.in.ua ({ALERTS_LOCATION_TITLE}): <b>{'включена' if db.alarm_api_enabled(chat_id) else 'выключена'}</b>\n\n"
+            f"Ограничения медиа и реакций: <b>{'включены' if enabled else 'выключены'}</b>\n\n"
+            f"Текст тревоги: {preview_html(settings.alarm_text or 'Тревога включена: медиа, реакции и одиночные эмодзи отключены.')}\n"
+            f"Текст отбоя: {preview_html(settings.clear_text or 'Отбой: медиа, реакции и одиночные эмодзи снова включены.')}",
+            reply_markup=alarm_menu(chat_id, bool(settings.enabled), db.alarm_api_enabled(chat_id), enabled),
         )
     elif action == "text_on":
+        if not await require_callback_feature(callback, "alarm.text", default=True):
+            return
         await state.set_state(AdminInput.set_alarm_text)
         await state.update_data(chat_id=chat_id)
         await safe_edit(
@@ -2004,6 +4824,8 @@ async def cb_alarm(callback: CallbackQuery, state: FSMContext) -> None:
             reply_markup=back_to_chat_menu(chat_id),
         )
     elif action == "text_off":
+        if not await require_callback_feature(callback, "alarm.text", default=True):
+            return
         await state.set_state(AdminInput.set_clear_text)
         await state.update_data(chat_id=chat_id)
         await safe_edit(
@@ -2023,8 +4845,12 @@ async def cb_quiet(callback: CallbackQuery, state: FSMContext) -> None:
     chat = await require_selected_admin(callback, chat_id)
     if chat is None:
         return
+    if not await require_callback_feature(callback, "quiet", mode="view", default=True):
+        return
 
     if action == "text":
+        if not await require_callback_feature(callback, "quiet.text", default=True):
+            return
         await state.set_state(AdminInput.set_quiet_text)
         await state.update_data(chat_id=chat_id)
         await safe_edit(
@@ -2041,7 +4867,9 @@ async def cb_quiet(callback: CallbackQuery, state: FSMContext) -> None:
             reply_markup=back_to_chat_menu(chat_id),
         )
     elif action == "media":
-        if not is_bot_admin(callback.from_user.id):
+        if not await require_callback_feature(callback, "quiet.mediaSave", default=True):
+            return
+        if False:
             await callback.answer("Медиа может менять только администратор бота.", show_alert=True)
             return
 
@@ -2054,6 +4882,8 @@ async def cb_quiet(callback: CallbackQuery, state: FSMContext) -> None:
             reply_markup=back_to_chat_menu(chat_id),
         )
     elif action == "manual":
+        if not await require_callback_feature(callback, "quiet.manual", default=True):
+            return
         await state.set_state(AdminInput.set_quiet_manual)
         await state.update_data(chat_id=chat_id)
         await safe_edit(
@@ -2068,7 +4898,9 @@ async def cb_quiet(callback: CallbackQuery, state: FSMContext) -> None:
             reply_markup=back_to_chat_menu(chat_id),
         )
     elif action == "clear_media":
-        if not is_bot_admin(callback.from_user.id):
+        if not await require_callback_feature(callback, "quiet.mediaDelete", default=True):
+            return
+        if False:
             await callback.answer("Медиа может менять только администратор бота.", show_alert=True)
             return
 
@@ -2099,7 +4931,8 @@ async def cb_select_topic(callback: CallbackQuery, state: FSMContext) -> None:
         control_chat_id=callback.message.chat.id,
         control_message_id=callback.message.message_id,
     )
-    target = "основной чат" if thread_id == 0 else f"тему #{thread_id}"
+    topic = next((item for item in db.list_topics(chat_id) if item.thread_id == thread_id), None)
+    target = "основной чат" if thread_id == 0 else (topic.title if topic else "выбранную тему")
     await safe_edit(
         callback,
         f"Группа: <b>{mention_chat(chat)}</b>\n"
@@ -2110,22 +4943,93 @@ async def cb_select_topic(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
+@router.message(AdminInput.set_access_user, F.chat.type == "private")
+async def ui_set_access_user(message: Message, state: FSMContext) -> None:
+    if not message.from_user or not is_bot_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("Доступ может менять только владелец.")
+        return
+
+    data = await state.get_data()
+    chat_id = data.get("chat_id")
+    if not isinstance(chat_id, int):
+        await state.clear()
+        await message.answer("Группа не выбрана. Открой /start и выбери группу.", reply_markup=main_menu())
+        return
+
+    text = (message.text or "").strip()
+    if not text.lstrip("-").isdigit():
+        await message.answer("Отправь Telegram ID числом.")
+        return
+
+    user_id = int(text)
+    await state.clear()
+    await message.answer(
+        f"Доступ для <code>{user_id}</code>\n\n"
+        "Включи функции, которые можно использовать в приложении. Выключенная функция будет закрыта и в Telegram-админке.",
+        reply_markup=access_permissions_menu(chat_id, user_id),
+    )
+
+
 @router.message(AdminInput.set_reply, F.chat.type == "private")
 async def ui_set_reply(message: Message, state: FSMContext) -> None:
     chat_id = await require_state_admin(message, state)
     if chat_id is None:
         return
 
-    payload = message_html_text(message)
-    username, sep, reply_text = payload.partition(" ")
-    if not username.startswith("@") or not sep or not reply_text.strip():
-        await message.answer("Формат: <code>@username текст ответа</code>")
+    payload = message_html_content(message)
+    media = reply_media_from_message(message)
+    username, reply_text = split_reply_payload(payload)
+    if not username.startswith("@"):
+        await message.answer("Формат: <code>@username - текст ответа</code> или сообщение с таким caption и медиа.")
+        return
+    if not reply_text and not media:
+        await state.set_state(AdminInput.set_reply_media)
+        await state.update_data(chat_id=chat_id, reply_username=username)
+        await message.answer(
+            f"Ок, теперь отправь медиа для автоответа <b>@{escape(normalize_username(username))}</b>: "
+            "гиф, голос, аудио, видео, кружок или аудио/видео-файл.",
+            reply_markup=back_to_chat_menu(chat_id),
+        )
         return
 
-    db.set_reply(chat_id, username, reply_text, message.from_user.id if message.from_user else None)
+    media_type, media_file_id = media if media else (None, None)
+    db.set_reply(chat_id, username, reply_text, message.from_user.id if message.from_user else None, media_type, media_file_id)
+    invalidate_chat_runtime_cache(chat_id)
+    await notify_staff_autoreply_change(message.bot, f"@ответ @{normalize_username(username)} изменён для чата {chat_id}.")
     await state.clear()
     await message.answer(
         f"Готово. Автоответ для <b>@{escape(normalize_username(username))}</b> сохранен.",
+        reply_markup=back_to_chat_menu(chat_id),
+    )
+
+
+@router.message(AdminInput.set_reply_media, F.chat.type == "private")
+async def ui_set_reply_media(message: Message, state: FSMContext) -> None:
+    chat_id = await require_state_admin(message, state)
+    if chat_id is None:
+        return
+
+    data = await state.get_data()
+    username = data.get("reply_username")
+    if not isinstance(username, str) or not username.startswith("@"):
+        await state.clear()
+        await message.answer("Не вижу, для какого @username сохранить медиа. Открой настройку заново.", reply_markup=main_menu())
+        return
+
+    media = reply_media_from_message(message)
+    if not media:
+        await message.answer("Нужно отправить гиф, голос, аудио, видео, кружок или аудио/видео-файл.")
+        return
+
+    reply_text = message_html_content(message)
+    media_type, media_file_id = media
+    db.set_reply(chat_id, username, reply_text, message.from_user.id if message.from_user else None, media_type, media_file_id)
+    invalidate_chat_runtime_cache(chat_id)
+    await notify_staff_autoreply_change(message.bot, f"Медиа-@ответ @{normalize_username(username)} изменён для чата {chat_id}.")
+    await state.clear()
+    await message.answer(
+        f"Готово. Медиа-автоответ для <b>@{escape(normalize_username(username))}</b> сохранен.",
         reply_markup=back_to_chat_menu(chat_id),
     )
 
@@ -2142,6 +5046,9 @@ async def ui_del_reply(message: Message, state: FSMContext) -> None:
         return
 
     deleted = db.delete_reply(chat_id, username)
+    invalidate_chat_runtime_cache(chat_id)
+    if deleted:
+        await notify_staff_autoreply_change(message.bot, f"@ответ @{normalize_username(username)} удалён из чата {chat_id}.")
     await state.clear()
     await message.answer(
         "Автоответ удален." if deleted else "Для этого username автоответ не найден.",
@@ -2155,16 +5062,59 @@ async def ui_set_trigger(message: Message, state: FSMContext) -> None:
     if chat_id is None:
         return
 
-    payload = message_html_text(message)
+    payload = message_html_content(message)
+    media = reply_media_from_message(message)
     trigger, reply_text = split_trigger_payload(payload)
-    if not trigger or not reply_text:
-        await message.answer("Формат: <code>слово - текст ответа</code>")
+    if not trigger:
+        await message.answer("Формат: <code>слово - текст ответа</code> или сообщение с таким caption и медиа.")
+        return
+    if not reply_text and not media:
+        await state.set_state(AdminInput.set_trigger_media)
+        await state.update_data(chat_id=chat_id, trigger=trigger)
+        await message.answer(
+            f"Ок, теперь отправь медиа для триггера <b>{escape(normalize_trigger(trigger))}</b>: "
+            "гиф, голос, аудио, видео, кружок или аудио/видео-файл.",
+            reply_markup=back_to_chat_menu(chat_id),
+        )
         return
 
-    db.set_trigger(chat_id, trigger, reply_text, message.from_user.id if message.from_user else None)
+    media_type, media_file_id = media if media else (None, None)
+    db.set_trigger(chat_id, trigger, reply_text, message.from_user.id if message.from_user else None, media_type, media_file_id)
+    invalidate_chat_runtime_cache(chat_id)
+    await notify_staff_autoreply_change(message.bot, f"Триггер «{normalize_trigger(trigger)}» изменён для чата {chat_id}.")
     await state.clear()
     await message.answer(
         f"Фиксированный ответ на <b>{escape(normalize_trigger(trigger))}</b> сохранен.",
+        reply_markup=back_to_chat_menu(chat_id),
+    )
+
+
+@router.message(AdminInput.set_trigger_media, F.chat.type == "private")
+async def ui_set_trigger_media(message: Message, state: FSMContext) -> None:
+    chat_id = await require_state_admin(message, state)
+    if chat_id is None:
+        return
+
+    data = await state.get_data()
+    trigger = data.get("trigger")
+    if not isinstance(trigger, str) or not trigger.strip():
+        await state.clear()
+        await message.answer("Не вижу, для какого триггера сохранить медиа. Открой настройку заново.", reply_markup=main_menu())
+        return
+
+    media = reply_media_from_message(message)
+    if not media:
+        await message.answer("Нужно отправить гиф, голос, аудио, видео, кружок или аудио/видео-файл.")
+        return
+
+    reply_text = message_html_content(message)
+    media_type, media_file_id = media
+    db.set_trigger(chat_id, trigger, reply_text, message.from_user.id if message.from_user else None, media_type, media_file_id)
+    invalidate_chat_runtime_cache(chat_id)
+    await notify_staff_autoreply_change(message.bot, f"Медиа-триггер «{normalize_trigger(trigger)}» изменён для чата {chat_id}.")
+    await state.clear()
+    await message.answer(
+        f"Фиксированный медиа-ответ на <b>{escape(normalize_trigger(trigger))}</b> сохранен.",
         reply_markup=back_to_chat_menu(chat_id),
     )
 
@@ -2188,10 +5138,83 @@ async def ui_del_trigger(message: Message, state: FSMContext) -> None:
 
     trigger = triggers[index - 1].trigger
     deleted = db.delete_trigger(chat_id, trigger)
+    invalidate_chat_runtime_cache(chat_id)
+    if deleted:
+        await notify_staff_autoreply_change(message.bot, f"Триггер «{normalize_trigger(trigger)}» удалён из чата {chat_id}.")
     await state.clear()
     text, page, total = trigger_page_text(chat_id, (index - 1) // TRIGGERS_PAGE_SIZE)
     result = f"Удалено слово №{index}: <b>{escape(trigger)}</b>" if deleted else "Такой фиксированный ответ не найден."
     await message.answer(f"{result}\n\n{text}", reply_markup=trigger_list_menu(chat_id, page, total))
+
+
+@router.message(AdminInput.add_blacklist_word, F.chat.type == "private")
+async def ui_add_blacklist_word(message: Message, state: FSMContext) -> None:
+    chat_id = await require_state_admin(message, state)
+    if chat_id is None:
+        return
+
+    word = normalize_trigger(message.text or "")
+    if not word:
+        await message.answer("Напиши слово или выражение, которое нужно запретить.")
+        return
+
+    db.add_blacklist_word(chat_id, word, message.from_user.id if message.from_user else None)
+    invalidate_chat_runtime_cache(chat_id)
+    await state.clear()
+    await message.answer(
+        f"Добавлено в черный список: <b>{escape(word)}</b>\n\n{blacklist_text(chat_id)}",
+        reply_markup=blacklist_menu(chat_id),
+    )
+
+
+@router.message(AdminInput.delete_blacklist_word, F.chat.type == "private")
+async def ui_delete_blacklist_word(message: Message, state: FSMContext) -> None:
+    chat_id = await require_state_admin(message, state)
+    if chat_id is None:
+        return
+
+    word = normalize_trigger(message.text or "")
+    if not word:
+        await message.answer("Напиши слово или выражение, которое нужно удалить.")
+        return
+
+    deleted = db.delete_blacklist_word(chat_id, word)
+    invalidate_chat_runtime_cache(chat_id)
+    await state.clear()
+    result = f"Удалено из черного списка: <b>{escape(word)}</b>" if deleted else "Такого слова или выражения в черном списке нет."
+    await message.answer(
+        f"{result}\n\n{blacklist_text(chat_id)}",
+        reply_markup=blacklist_menu(chat_id),
+    )
+
+
+@router.message(AdminInput.delete_quote, F.chat.type == "private")
+async def ui_delete_quote(message: Message, state: FSMContext) -> None:
+    chat_id = await require_state_admin(message, state)
+    if chat_id is None:
+        return
+    if not message.from_user or not is_bot_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("Удалять цитаты может только администратор бота.", reply_markup=back_to_chat_menu(chat_id))
+        return
+
+    number_text = (message.text or "").strip()
+    if not number_text.isdigit():
+        await message.answer("Отправь номер цитаты из списка, например: <code>3</code>")
+        return
+
+    index = int(number_text)
+    quotes = db.list_quotes(chat_id)
+    if index < 1 or index > len(quotes):
+        await message.answer(f"Нет цитаты с номером {index}. Открой список и выбери номер из него.")
+        return
+
+    quote = quotes[index - 1]
+    deleted = db.delete_quote(chat_id, quote.id)
+    await state.clear()
+    text, page, total = quote_page_text(chat_id, (index - 1) // QUOTES_PAGE_SIZE)
+    result = f"Удалена цитата №{index}." if deleted else "Цитата уже удалена."
+    await message.answer(f"{result}\n\n{text}", reply_markup=quotes_menu(chat_id, page, total))
 
 
 @router.message(AdminInput.send_message, F.chat.type == "private")
@@ -2272,6 +5295,25 @@ async def ui_set_giveaway(message: Message, state: FSMContext) -> None:
     )
 
 
+@router.message(AdminInput.add_birthday, F.chat.type == "private")
+async def ui_add_birthday(message: Message, state: FSMContext) -> None:
+    chat_id = await require_state_admin(message, state)
+    if chat_id is None:
+        return
+    if not message.from_user or not bot_admin_feature_allowed(chat_id, message.from_user.id, "giveaway.birthdays", default=True):
+        await state.clear()
+        await message.answer("Нет доступа к дням рождения.", reply_markup=giveaway_menu(chat_id))
+        return
+    parsed = parse_birthday_payload(message.text or "")
+    if not parsed:
+        await message.answer("Формат: <code>31.12 Имя или событие</code>", reply_markup=giveaway_menu(chat_id))
+        return
+    day, month, label = parsed
+    db.add_birthday(chat_id, day, month, label, message.from_user.id)
+    await state.clear()
+    await message.answer(f"Дата добавлена: <b>{day:02d}.{month:02d}</b> — {escape(label)}", reply_markup=giveaway_menu(chat_id))
+
+
 @router.message(AdminInput.set_alarm_text, F.chat.type == "private")
 async def ui_set_alarm_text(message: Message, state: FSMContext) -> None:
     chat_id = await require_state_admin(message, state)
@@ -2288,7 +5330,12 @@ async def ui_set_alarm_text(message: Message, state: FSMContext) -> None:
     settings = db.get_alarm_settings(chat_id)
     await message.answer(
         "Текст тревоги сохранен.",
-        reply_markup=alarm_menu(chat_id, bool(settings.enabled)),
+        reply_markup=alarm_menu(
+            chat_id,
+            bool(settings.enabled),
+            db.alarm_api_enabled(chat_id),
+            db.alarm_restrictions_enabled(chat_id),
+        ),
     )
 
 
@@ -2308,7 +5355,12 @@ async def ui_set_clear_text(message: Message, state: FSMContext) -> None:
     settings = db.get_alarm_settings(chat_id)
     await message.answer(
         "Текст отбоя сохранен.",
-        reply_markup=alarm_menu(chat_id, bool(settings.enabled)),
+        reply_markup=alarm_menu(
+            chat_id,
+            bool(settings.enabled),
+            db.alarm_api_enabled(chat_id),
+            db.alarm_restrictions_enabled(chat_id),
+        ),
     )
 
 
@@ -2437,6 +5489,11 @@ async def ui_set_quiet_manual(message: Message, state: FSMContext) -> None:
 
 @router.message(AdminInput.paid_message, F.chat.type == "private")
 async def ui_paid_message(message: Message, state: FSMContext) -> None:
+    if not message.from_user:
+        await state.clear()
+        await message.answer("Не могу определить пользователя.", reply_markup=main_menu())
+        return
+
     data = await state.get_data()
     chat_id = data.get("chat_id")
     if not isinstance(chat_id, int):
@@ -2454,32 +5511,659 @@ async def ui_paid_message(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer("Группа не найдена.", reply_markup=main_menu())
         return
+    if not await is_chat_member(message.bot, chat_id, message.from_user.id):
+        await state.clear()
+        await message.answer("Платная публикация доступна только в группах, где ты состоишь.", reply_markup=main_menu())
+        return
 
-    await state.update_data(paid_text=text)
-    payload = f"paid_message:{message.from_user.id if message.from_user else 0}:{chat_id}"
-    await message.bot.send_invoice(
-        chat_id=message.chat.id,
-        title="Сообщение за звезды",
-        description=f"Публикация сообщения в группе {chat.title}",
-        payload=payload,
+    payload = f"paid_message:{message.from_user.id}:{chat_id}:{uuid4().hex}"
+    db.save_pending_star_message(payload, message.from_user.id, chat_id, text)
+    try:
+        await message.bot.send_invoice(
+            chat_id=message.chat.id,
+            title="Сообщение за звезды",
+            description=f"Публикация сообщения в группе {chat.title}",
+            payload=payload,
+            currency="XTR",
+            prices=[LabeledPrice(label="Публикация сообщения", amount=1)],
+            provider_token="",
+        )
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        db.delete_pending_star_message(payload)
+        await state.clear()
+        await message.answer(
+            "Не получилось создать счет на оплату.\n"
+            f"<code>{escape(str(exc))}</code>",
+            reply_markup=main_menu(),
+        )
+        return
+
+    await state.clear()
+
+
+def premium_status_text(user_id: int) -> str:
+    current = premium_service.get_user_plan(user_id)
+    subscription = premium_service.get_user_subscription(user_id)
+    lines = ["<b>Premium-тарифы</b>", "Бесплатного доступа к медиа-функциям нет.", ""]
+    for plan in PLANS.values():
+        lines.extend(
+            [
+                f"<b>{escape(plan.title)}</b> — {plan.price_stars} ⭐ / {PREMIUM_PERIOD_DAYS} дней",
+                f"Медиа-задач: {plan.daily_media_tasks}/день; файл до {plan.max_file_size_bytes // (1024 * 1024)} МБ; "
+                f"расшифровка до {plan.max_transcription_seconds // 60} мин.",
+                f"Шахта: ожидание −{round((1 - plan.cooldown_multiplier) * 100)}%, "
+                f"монеты +{round((plan.coins_multiplier - 1) * 100)}%, "
+                f"восстановление удачи +{round((plan.luck_regen_multiplier - 1) * 100)}%.",
+                "",
+            ]
+        )
+    if current and subscription:
+        lines.append(f"Текущий тариф: <b>{escape(current.title)}</b>")
+        lines.append(f"Активен до: <b>{datetime.fromisoformat(subscription['expires_at']).astimezone().strftime('%d.%m.%Y %H:%M')}</b>")
+        lines.append(f"Использовано медиа-задач сегодня: <b>{premium_service.daily_media_usage(user_id)}/{current.daily_media_tasks}</b>")
+    else:
+        lines.append("Текущий тариф: <b>Premium не активен</b>")
+    return "\n".join(lines)
+
+
+async def send_premium_invoice(message: Message, plan_key: str) -> None:
+    if not message.from_user:
+        return
+    plan = premium_service.get_plan_config(plan_key)
+    try:
+        await message.bot.send_invoice(
+            chat_id=message.chat.id,
+            title=plan.title,
+            description=f"Premium на {PREMIUM_PERIOD_DAYS} дней: медиа-функции и бонусы шахты.",
+            payload=premium_payment_payload(plan.key, message.from_user.id),
+            currency="XTR",
+            prices=[LabeledPrice(label=plan.title, amount=plan.price_stars)],
+            provider_token="",
+        )
+    except Exception as exc:
+        premium_service.log("ERROR", f"Premium invoice failed: user={message.from_user.id}, plan={plan.key}, error={exc}")
+        await message.answer(f"Не получилось создать счёт Premium.\n<code>{escape(str(exc))}</code>")
+
+
+async def send_premium_invoice_to_user(bot: Bot, chat_id: int, user_id: int, plan_key: str) -> None:
+    plan = premium_service.get_plan_config(plan_key)
+    await bot.send_invoice(
+        chat_id=chat_id,
+        title=plan.title,
+        description=f"Premium на {PREMIUM_PERIOD_DAYS} дней: медиа-функции и бонусы шахты.",
+        payload=premium_payment_payload(plan.key, user_id),
         currency="XTR",
-        prices=[LabeledPrice(label="Публикация сообщения", amount=1)],
+        prices=[LabeledPrice(label=plan.title, amount=plan.price_stars)],
         provider_token="",
     )
 
 
+@router.message(Command("premium"))
+async def premium_command(message: Message) -> None:
+    if message.from_user:
+        premium_service.ensure_user(message.from_user.id, message.from_user.username)
+        await message.answer(premium_status_text(message.from_user.id), reply_markup=premium_menu())
+
+
+@router.message(Command("profile"))
+async def profile_command(message: Message) -> None:
+    if message.from_user:
+        await message.answer(
+            telegram_user_profile_text(message.from_user.id, message.from_user.username, message.from_user.full_name, short=False),
+            reply_markup=main_menu() if message.chat.type == "private" else None,
+            disable_web_page_preview=True,
+        )
+
+
+@router.message(F.chat.type == "private", F.text.casefold() == "профиль")
+async def profile_private_ru(message: Message) -> None:
+    await profile_command(message)
+
+
+@router.message(Command("media"))
+async def media_command(message: Message) -> None:
+    if not message.from_user:
+        return
+    if not premium_service.has_active_premium(message.from_user.id):
+        await message.answer("Для этой функции нужен Premium.", reply_markup=premium_menu())
+        return
+    await message.answer(
+        "<b>Медиа-инструменты</b>\n\nВыберите действие, затем пришлите файл.",
+        reply_markup=media_tools_menu(),
+    )
+
+
+@router.message(Command("buy_basic"))
+async def buy_basic_command(message: Message) -> None:
+    await send_premium_invoice(message, "basic")
+
+
+@router.message(Command("buy_extended"))
+async def buy_extended_command(message: Message) -> None:
+    await send_premium_invoice(message, "extended")
+
+
+@router.callback_query(F.data == "premium:menu")
+async def cb_premium_menu(callback: CallbackQuery) -> None:
+    premium_service.ensure_user(callback.from_user.id, callback.from_user.username)
+    await safe_edit(callback, premium_status_text(callback.from_user.id), reply_markup=premium_menu())
+
+
+@router.callback_query(F.data.startswith("premium:buy:"))
+async def cb_premium_buy(callback: CallbackQuery) -> None:
+    if not callback.message:
+        return
+    plan_key = (callback.data or "").rsplit(":", 1)[-1]
+    if plan_key not in PLANS:
+        await callback.answer("Неизвестный тариф.", show_alert=True)
+        return
+    try:
+        await send_premium_invoice_to_user(callback.bot, callback.message.chat.id, callback.from_user.id, plan_key)
+        await callback.answer()
+    except Exception as exc:
+        premium_service.log("ERROR", f"Premium invoice failed: user={callback.from_user.id}, plan={plan_key}, error={exc}")
+        await callback.answer("Не получилось создать счёт.", show_alert=True)
+
+
+def media_history_text(user_id: int) -> str:
+    media = MediaTaskService(str(premium_service.path))
+    try:
+        tasks = media.get_user_media_tasks(user_id, 20)
+    finally:
+        media.close()
+    if not tasks:
+        return "<b>Мои медиа-задачи</b>\n\nЗадач пока нет."
+    status_names = {
+        "queued": "в очереди",
+        "processing": "обрабатывается",
+        "completed": "готово",
+        "failed": "ошибка",
+        "cancelled": "отменено",
+    }
+    lines = ["<b>Мои медиа-задачи</b>", ""]
+    for task in tasks:
+        title = TASK_TITLES.get(task.task_type, task.task_type)
+        lines.append(f"#{task.id} В· {escape(title)} В· <b>{status_names.get(task.status, task.status)}</b>")
+    return "\n".join(lines)
+
+
+@router.callback_query(F.data == "media:menu")
+async def cb_media_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    if not premium_service.has_active_premium(callback.from_user.id):
+        await callback.answer("Для этой функции нужен Premium.", show_alert=True)
+        await safe_edit(callback, premium_status_text(callback.from_user.id), reply_markup=premium_menu())
+        return
+    availability = "доступен" if ffmpeg_available() else "не найден"
+    whisper_status = "доступен" if whisper_available() else "не найден"
+    await safe_edit(
+        callback,
+        "<b>Медиа-инструменты</b>\n\nВыберите действие, затем пришлите файл.\n"
+        "Для скачивания с YouTube просто отправьте ссылку в этот чат.\n"
+        f"FFmpeg: <b>{availability}</b>.\nFaster-Whisper: <b>{whisper_status}</b>.",
+        reply_markup=media_tools_menu(),
+    )
+
+
+@router.callback_query(F.data == "media:history")
+async def cb_media_history(callback: CallbackQuery) -> None:
+    await safe_edit(callback, media_history_text(callback.from_user.id), reply_markup=media_tools_menu())
+
+
+@router.callback_query(F.data.startswith("media:tool:"))
+async def cb_media_tool(callback: CallbackQuery, state: FSMContext) -> None:
+    task_type = (callback.data or "").split(":", 2)[-1]
+    if task_type not in TASK_TITLES:
+        await callback.answer("Операция не поддерживается.", show_alert=True)
+        return
+    if not premium_service.has_active_premium(callback.from_user.id):
+        await callback.answer("Для этой функции нужен Premium.", show_alert=True)
+        return
+    await state.set_state(MediaInput.waiting_file)
+    await state.update_data(media_task_type=task_type)
+    await safe_edit(
+        callback,
+        f"<b>{escape(TASK_TITLES[task_type])}</b>\n\nПришлите видео, аудио, голосовое сообщение или файл.",
+        reply_markup=media_cancel_menu(),
+    )
+
+
+def message_media_file(message: Message):
+    return message.document or message.video or message.audio or message.voice or message.animation
+
+
+@router.message(MediaInput.waiting_file)
+async def media_file_received(message: Message, state: FSMContext) -> None:
+    if not message.from_user:
+        return
+    media_file = message_media_file(message)
+    if media_file is None:
+        await message.answer("Пришлите файл, видео, аудио или голосовое сообщение.", reply_markup=media_cancel_menu())
+        return
+    data = await state.get_data()
+    task_type = str(data.get("media_task_type", ""))
+    if task_type not in TASK_TITLES:
+        await state.clear()
+        await message.answer("Операция потеряна. Выберите её заново.", reply_markup=media_tools_menu())
+        return
+
+    file_name = getattr(media_file, "file_name", None) or f"{media_file.file_unique_id}.bin"
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", file_name)
+    input_dir = Path("media_storage") / "inputs" / str(message.from_user.id)
+    input_dir.mkdir(parents=True, exist_ok=True)
+    source_path = input_dir / f"{uuid4().hex}_{safe_name}"
+    progress = await message.answer("Загружаю файл и ставлю задачу в очередь...")
+    service = MediaTaskService(str(premium_service.path))
+    task = None
+    try:
+        await message.bot.download(media_file.file_id, destination=source_path)
+        task = service.create_media_task(
+            user_id=message.from_user.id,
+            task_type=task_type,
+            source_file_id=media_file.file_id,
+            source_file_path=str(source_path),
+            file_size_bytes=int(getattr(media_file, "file_size", 0) or source_path.stat().st_size),
+            duration_seconds=getattr(media_file, "duration", None),
+        )
+        service.update_media_task_status(task.id, "processing")
+        await progress.edit_text(f"Задача #{task.id}: FFmpeg обрабатывает файл...")
+        output_path = await asyncio.to_thread(
+            process_media,
+            task_type,
+            str(source_path),
+            str(Path("media_storage") / "outputs" / str(message.from_user.id)),
+            task.id,
+        )
+        service.set_output_file_path(task.id, output_path)
+        service.update_media_task_status(task.id, "completed")
+        await message.answer_document(
+            FSInputFile(output_path),
+            caption=f"Готово: {escape(TASK_TITLES[task_type])}\nЗадача #{task.id}",
+        )
+        await message.answer(
+            "<b>Медиа-инструменты</b>\n\nВыберите следующее действие или вернитесь к Premium.",
+            reply_markup=media_tools_menu(),
+        )
+        await progress.delete()
+        await state.clear()
+    except Exception as exc:
+        if task is not None:
+            service.update_media_task_status(task.id, "failed", str(exc))
+        await progress.edit_text(
+            "Не получилось обработать файл.\n"
+            f"<code>{escape(str(exc)[-1500:])}</code>",
+            reply_markup=media_tools_menu(),
+        )
+        await state.clear()
+    finally:
+        service.close()
+
+
+@router.message(F.chat.type == "private", F.text.regexp(SUPPORTED_MEDIA_URL_RE))
+async def youtube_link_received(message: Message, state: FSMContext) -> None:
+    url = extract_supported_media_url(message.text)
+    if not url:
+        return
+    is_instagram = extract_instagram_url(url) is not None
+    if is_instagram:
+        progress = await message.answer("\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u044e \u0441\u0441\u044b\u043b\u043a\u0443 Instagram...")
+        await state.update_data(youtube_url=url, youtube_title="Instagram Reels", youtube_is_music=False, youtube_is_instagram=True)
+        await progress.edit_text(
+            "<b>Instagram Reels</b>\n\n"
+            "\u0421\u0441\u044b\u043b\u043a\u0430 \u043f\u0440\u0438\u043d\u044f\u0442\u0430. \u041d\u0430\u0436\u043c\u0438\u0442\u0435 \u043a\u043d\u043e\u043f\u043a\u0443, \u0447\u0442\u043e\u0431\u044b \u0441\u043a\u0430\u0447\u0430\u0442\u044c Reels \u0432 MP4.",
+            reply_markup=instagram_download_menu(),
+            disable_web_page_preview=True,
+        )
+        return
+    progress = await message.answer("Проверяю ссылку Instagram..." if is_instagram else "Проверяю ссылку YouTube...")
+    try:
+        info = await asyncio.to_thread(inspect_youtube, url)
+    except YoutubeMediaError as exc:
+        await progress.edit_text(str(exc))
+        return
+    await state.update_data(youtube_url=url, youtube_title=info.title, youtube_is_music=info.is_music, youtube_is_instagram=is_instagram)
+    duration = f"{info.duration // 60}:{info.duration % 60:02d}" if info.duration else "неизвестна"
+    await progress.edit_text(
+        f"<b>{escape(info.title)}</b>\n"
+        f"Длительность: <b>{duration}</b>\n\n"
+        "Выберите формат. Скачивание начнётся только после нажатия кнопки.",
+        reply_markup=instagram_download_menu() if is_instagram else youtube_download_menu(info.is_music),
+        disable_web_page_preview=True,
+    )
+
+
+@router.callback_query(F.data == "youtube:cancel")
+async def cb_youtube_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(youtube_url=None, youtube_title=None, youtube_is_music=None)
+    await safe_edit(callback, "\u0421\u043a\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u0435 \u043e\u0442\u043c\u0435\u043d\u0435\u043d\u043e.", reply_markup=media_tools_menu())
+
+
+@router.callback_query(F.data.startswith("youtube:"))
+async def cb_youtube_download(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message:
+        return
+    download_type = (callback.data or "").split(":", 1)[-1]
+    if download_type not in DOWNLOAD_TYPES:
+        return
+    if not premium_service.has_active_premium(callback.from_user.id):
+        await callback.answer("Для этой функции нужен Premium.", show_alert=True)
+        return
+    data = await state.get_data()
+    url = data.get("youtube_url")
+    if not isinstance(url, str) or not url:
+        await callback.answer("Ссылка устарела. Отправьте её ещё раз.", show_alert=True)
+        return
+    await callback.answer()
+    is_instagram = bool(data.get("youtube_is_instagram"))
+    if is_instagram and download_type != "video_mp4":
+        await callback.answer("Instagram Reels можно скачать только как MP4.", show_alert=True)
+        return
+    await safe_edit(callback, "\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u044e \u0440\u0430\u0437\u043c\u0435\u0440 \u0438 \u0441\u043e\u0437\u0434\u0430\u044e \u0437\u0430\u0434\u0430\u0447\u0443 \u0441\u043a\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u044f...")
+    service = MediaTaskService(str(premium_service.path))
+    task = None
+    output_path = None
+    try:
+        if is_instagram:
+            media_title = str(data.get("youtube_title") or "Instagram Reels")
+            estimated_size = 0
+            duration_seconds = None
+        else:
+            info = await asyncio.to_thread(inspect_youtube, url, download_type)
+            if download_type.startswith("music_") and not info.is_music:
+                raise YoutubeMediaError("Форматы YouTube Music доступны только для ссылок music.youtube.com.")
+            media_title = info.title
+            estimated_size = info.estimated_size
+            duration_seconds = info.duration
+        plan = premium_service.check_media_limits(
+            callback.from_user.id,
+            estimated_size,
+            duration_seconds,
+            None,
+        )
+        task_type = {
+            "video_mp4": "youtube_video",
+            "audio_mp3": "youtube_audio",
+            "music_mp3": "youtube_music_audio",
+            "music_m4a": "youtube_music_audio",
+        }[download_type]
+        if is_instagram:
+            task_type = "instagram_reel"
+        task = service.create_media_task(
+            user_id=callback.from_user.id,
+            task_type=task_type,
+            source_file_id=download_type,
+            source_file_path=url,
+            file_size_bytes=estimated_size,
+            duration_seconds=duration_seconds,
+        )
+        service.update_media_task_status(task.id, "processing")
+        premium_service.log("INFO", f"YouTube task created: id={task.id}, user={callback.from_user.id}, type={download_type}")
+        await callback.message.edit_text(f"\u0417\u0430\u0434\u0430\u0447\u0430 #{task.id}: yt-dlp \u0441\u043a\u0430\u0447\u0438\u0432\u0430\u0435\u0442 \u0438 \u043e\u0431\u0440\u0430\u0431\u0430\u0442\u044b\u0432\u0430\u0435\u0442 \u0444\u0430\u0439\u043b...")
+        output_path = await asyncio.to_thread(download_youtube, url, download_type, task.id)
+        actual_size = Path(output_path).stat().st_size
+        if actual_size > plan.max_file_size_bytes:
+            raise YoutubeMediaError(
+                f"Итоговый файл превышает лимит тарифа: {plan.max_file_size_bytes // (1024 * 1024)} МБ."
+            )
+        service.set_output_file_path(task.id, output_path)
+        service.update_media_task_status(task.id, "completed")
+        premium_service.log("INFO", f"YouTube download completed: id={task.id}, bytes={actual_size}")
+        await callback.message.answer_document(
+            FSInputFile(output_path, filename=media_output_filename(media_title, output_path)),
+            caption=f"\u0413\u043e\u0442\u043e\u0432\u043e: {escape(media_title)}",
+        )
+        premium_service.log("INFO", f"YouTube file sent: id={task.id}, user={callback.from_user.id}")
+        await callback.message.answer(
+            "<b>\u041c\u0435\u0434\u0438\u0430-\u0438\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u044b</b>\n\n\u041c\u043e\u0436\u043d\u043e \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0443\u044e \u0441\u0441\u044b\u043b\u043a\u0443 \u0438\u043b\u0438 \u0432\u044b\u0431\u0440\u0430\u0442\u044c \u0434\u0440\u0443\u0433\u0443\u044e \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u044e.",
+            reply_markup=media_tools_menu(),
+        )
+        cleanup_youtube_file(output_path)
+        await state.update_data(youtube_url=None, youtube_title=None, youtube_is_music=None)
+    except (YoutubeMediaError, PremiumRequiredError, PremiumLimitError) as exc:
+        if task is not None:
+            service.update_media_task_status(task.id, "failed", str(exc))
+        cleanup_youtube_file(output_path)
+        premium_service.log("ERROR", f"YouTube task failed: user={callback.from_user.id}, error={exc}")
+        await callback.message.edit_text(str(exc), reply_markup=instagram_download_menu() if is_instagram else media_tools_menu())
+    except Exception as exc:
+        if task is not None:
+            service.update_media_task_status(task.id, "failed", str(exc))
+        cleanup_youtube_file(output_path)
+        premium_service.log("CRITICAL", f"YouTube task crashed: user={callback.from_user.id}, error={exc}")
+        if staff_service:
+            await staff_service.log(callback.bot, "CRITICAL", f"YouTube task crashed: {exc}", notify=True)
+        await callback.message.edit_text(
+            f"\u041d\u0435 \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c \u0441\u043a\u0430\u0447\u0430\u0442\u044c \u0444\u0430\u0439\u043b.\n<code>{escape(str(exc)[-1500:])}</code>",
+            reply_markup=instagram_download_menu() if is_instagram else media_tools_menu(),
+        )
+    finally:
+        service.close()
+
+
 @router.pre_checkout_query()
 async def pre_checkout(pre_checkout_query: PreCheckoutQuery) -> None:
+    pending = db.get_pending_star_message(pre_checkout_query.invoice_payload)
+    if pending is None:
+        premium_payment = parse_premium_payment_payload(pre_checkout_query.invoice_payload)
+        if premium_payment is not None:
+            plan_key, user_id = premium_payment
+            plan = premium_service.get_plan_config(plan_key)
+            if user_id != pre_checkout_query.from_user.id:
+                await pre_checkout_query.answer(ok=False, error_message="Этот счёт создан для другого пользователя.")
+                return
+            if pre_checkout_query.currency != "XTR" or pre_checkout_query.total_amount != plan.price_stars:
+                await pre_checkout_query.answer(ok=False, error_message="Неверная стоимость Premium.")
+                return
+            await pre_checkout_query.answer(ok=True)
+            return
+        subscription_user_id = parse_user_subscription_payload(pre_checkout_query.invoice_payload)
+        if subscription_user_id is not None:
+            if subscription_user_id != pre_checkout_query.from_user.id:
+                await pre_checkout_query.answer(ok=False, error_message="Этот счёт создан для другого пользователя.")
+                return
+            if pre_checkout_query.currency != "XTR" or pre_checkout_query.total_amount != user_subscription_stars():
+                await pre_checkout_query.answer(ok=False, error_message="Неверная стоимость подписки.")
+                return
+            await pre_checkout_query.answer(ok=True)
+            return
+        dig_star = parse_dig_star_payload(pre_checkout_query.invoice_payload)
+        if dig_star is None:
+            await pre_checkout_query.answer(
+                ok=False,
+                error_message="Счет устарел. Создай покупку заново.",
+            )
+            return
+
+        _, user_id, chat_id = dig_star
+        if user_id != pre_checkout_query.from_user.id:
+            await pre_checkout_query.answer(
+                ok=False,
+                error_message="Этот счет создан для другого пользователя.",
+            )
+            return
+        if db.get_dig_player(chat_id, user_id) is None:
+            await pre_checkout_query.answer(
+                ok=False,
+                error_message="Сначала зарегистрируйся в игре.",
+            )
+            return
+        if pre_checkout_query.currency != "XTR" or pre_checkout_query.total_amount != dig_star_price(dig_star[0]):
+            await pre_checkout_query.answer(
+                ok=False,
+                error_message="Неверная сумма счета. Создай покупку заново.",
+            )
+            return
+
+        await pre_checkout_query.answer(ok=True)
+        return
+    if pending.user_id != pre_checkout_query.from_user.id:
+        await pre_checkout_query.answer(
+            ok=False,
+            error_message="Этот счет создан для другого пользователя.",
+        )
+        return
+    if db.get_chat(pending.chat_id) is None:
+        await pre_checkout_query.answer(
+            ok=False,
+            error_message="Группа для публикации больше не найдена.",
+        )
+        return
+    if pre_checkout_query.currency != "XTR" or pre_checkout_query.total_amount != 1:
+        await pre_checkout_query.answer(
+            ok=False,
+            error_message="Неверная сумма счета. Создай публикацию заново.",
+        )
+        return
+
     await pre_checkout_query.answer(ok=True)
+
+
+async def handle_dig_star_payment(message: Message, payment: SuccessfulPayment) -> bool:
+    parsed = parse_dig_star_payload(payment.invoice_payload)
+    if parsed is None:
+        return False
+
+    action, user_id, chat_id = parsed
+    if payment.currency != "XTR" or payment.total_amount != dig_star_price(action):
+        await message.answer("Оплата прошла, но сумма покупки не совпала. Напиши администратору бота.")
+        return True
+    if not message.from_user or message.from_user.id != user_id:
+        await message.answer("Оплата прошла, но пользователь покупки не совпал. Напиши администратору бота.")
+        return True
+
+    if db.has_star_payment_charge(payment.telegram_payment_charge_id):
+        await message.answer("Эта оплата уже была обработана ранее.")
+        return True
+
+    player = db.get_dig_player(chat_id, user_id)
+    if player is None:
+        await message.answer("Оплата прошла, но игрок не найден. Напиши администратору бота.")
+        return True
+
+    if action == "luck":
+        now = datetime.now(timezone.utc)
+        db.set_dig_luck(chat_id, user_id, 100, now.isoformat(timespec="seconds"))
+        result = "Оплата прошла. Удача восстановлена до <b>100</b>/100."
+    elif action == "cooldown":
+        db.clear_dig_cooldown(chat_id, user_id)
+        result = "Оплата прошла. Ожидание между раскопками сброшено, можно писать <code>копай</code>."
+    else:
+        _, _, _, item_key, quantity = DIG_STAR_ACTIONS[action]
+        if item_key is None:
+            await message.answer("Оплата прошла, но пакет раскопок не найден. Напиши администратору бота.")
+            return True
+        db.add_dig_item(chat_id, user_id, item_key, quantity)
+        if item_key == "star_depth_10":
+            result = "Оплата прошла. Следующая раскопка гарантированно пройдет <b>10 м</b> без ожидания."
+        elif item_key == "star_lucky_dig":
+            result = f"Оплата прошла. Начислено дополнительных раскопок со <b>100 удачей</b>: <b>{quantity}</b>."
+        else:
+            result = f"Оплата прошла. Начислено дополнительных раскопок без ожидания: <b>{quantity}</b>."
+
+    db.add_star_payment(
+        user_id=message.from_user.id,
+        username=message.from_user.username,
+        full_name=message.from_user.full_name,
+        chat_id=chat_id,
+        amount=payment.total_amount,
+        currency=payment.currency,
+        charge_id=payment.telegram_payment_charge_id,
+    )
+    await message.answer(result)
+    return True
+
+
+async def handle_user_subscription_payment(message: Message, payment: SuccessfulPayment) -> bool:
+    user_id = parse_user_subscription_payload(payment.invoice_payload)
+    if user_id is None:
+        return False
+    if not message.from_user or message.from_user.id != user_id:
+        await message.answer("Оплата подписки получена, но пользователь не совпал.")
+        return True
+    if payment.currency != "XTR" or payment.total_amount != user_subscription_stars():
+        await message.answer("Оплата подписки получена, но сумма не совпала.")
+        return True
+    expiration = payment.subscription_expiration_date or (datetime.now(timezone.utc) + timedelta(days=30))
+    db.set_user_subscription(user_id, "active", expiration.isoformat(timespec="seconds"), payment.telegram_payment_charge_id)
+    if not db.has_star_payment_charge(payment.telegram_payment_charge_id):
+        db.add_star_payment(
+            user_id=user_id,
+            username=message.from_user.username,
+            full_name=message.from_user.full_name,
+            chat_id=None,
+            amount=payment.total_amount,
+            currency=payment.currency,
+            charge_id=payment.telegram_payment_charge_id,
+        )
+    await message.answer(f"Подписка MonkeyDin активна до <b>{expiration.astimezone().strftime('%d.%m.%Y %H:%M')}</b>.")
+    return True
+
+
+async def handle_premium_payment(message: Message, payment: SuccessfulPayment) -> bool:
+    parsed = parse_premium_payment_payload(payment.invoice_payload)
+    if parsed is None:
+        return False
+    plan_key, user_id = parsed
+    plan = premium_service.get_plan_config(plan_key)
+    if not message.from_user or message.from_user.id != user_id:
+        await message.answer("Оплата Premium получена, но пользователь не совпал.")
+        return True
+    if payment.currency != "XTR" or payment.total_amount != plan.price_stars:
+        await message.answer("Оплата Premium получена, но сумма не совпала.")
+        return True
+    if db.has_star_payment_charge(payment.telegram_payment_charge_id):
+        await message.answer("Эта оплата Premium уже была обработана.")
+        return True
+    expiration = payment.subscription_expiration_date or (datetime.now(timezone.utc) + timedelta(days=PREMIUM_PERIOD_DAYS))
+    premium_service.activate_subscription(
+        user_id=user_id,
+        username=message.from_user.username,
+        plan=plan_key,
+        expires_at=expiration,
+        telegram_payment_charge_id=payment.telegram_payment_charge_id,
+        provider_payment_charge_id=payment.provider_payment_charge_id,
+    )
+    db.add_star_payment(
+        user_id=user_id,
+        username=message.from_user.username,
+        full_name=message.from_user.full_name,
+        chat_id=None,
+        amount=payment.total_amount,
+        currency=payment.currency,
+        charge_id=payment.telegram_payment_charge_id,
+    )
+    await message.answer(
+        f"Premium активирован: <b>{escape(plan.title)}</b>.\n"
+        f"Действует до <b>{expiration.astimezone().strftime('%d.%m.%Y %H:%M')}</b>."
+    )
+    return True
 
 
 @router.message(F.successful_payment)
 async def successful_paid_message(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    chat_id = data.get("chat_id")
-    text = data.get("paid_text")
-    if not isinstance(chat_id, int) or not isinstance(text, str):
+    payment = message.successful_payment
+    if payment is None:
+        return
+
+    pending = db.get_pending_star_message(payment.invoice_payload)
+    if pending is None:
+        if await handle_premium_payment(message, payment):
+            await state.clear()
+            return
+        if await handle_user_subscription_payment(message, payment):
+            await state.clear()
+            return
+        if await handle_dig_star_payment(message, payment):
+            await state.clear()
+            return
         await message.answer("Оплата прошла, но сообщение не найдено. Напиши администратору бота.")
+        await state.clear()
+        return
+
+    chat_id = pending.chat_id
+    text = pending.text
+    if payment.currency != "XTR" or payment.total_amount != 1:
+        await message.answer("Оплата прошла, но сумма публикации не совпала. Напиши администратору бота.")
         await state.clear()
         return
 
@@ -2501,7 +6185,6 @@ async def successful_paid_message(message: Message, state: FSMContext) -> None:
         await state.clear()
         return
 
-    payment = message.successful_payment
     if message.from_user and payment:
         db.add_star_payment(
             user_id=message.from_user.id,
@@ -2513,6 +6196,7 @@ async def successful_paid_message(message: Message, state: FSMContext) -> None:
             charge_id=payment.telegram_payment_charge_id,
         )
 
+    db.delete_pending_star_message(payment.invoice_payload)
     await state.clear()
     await message.answer("Оплата прошла. Сообщение опубликовано.", reply_markup=main_menu())
 
@@ -2627,88 +6311,229 @@ async def ui_set_roll_mute(message: Message, state: FSMContext) -> None:
     )
 
 
+def is_single_emoji_message(message: Message) -> bool:
+    text = message.text
+    if not text:
+        return False
+
+    stripped = text.strip()
+    if SINGLE_EMOJI_RE.fullmatch(stripped):
+        return True
+
+    entities = message.entities or []
+    if stripped != text or len(entities) != 1:
+        return False
+    entity = entities[0]
+    entity_type = getattr(entity.type, "value", entity.type)
+    utf16_length = len(text.encode("utf-16-le")) // 2
+    return entity_type == "custom_emoji" and entity.offset == 0 and entity.length == utf16_length
+
+
+async def delete_single_emoji_during_alarm(message: Message) -> bool:
+    restrictions_enabled, api_enabled, last_status, has_saved_permissions = cached_alarm_runtime(message.chat.id)
+    if not restrictions_enabled or not api_enabled or last_status not in {"A", "P"} or not has_saved_permissions:
+        return False
+
+    try:
+        await message.delete()
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
+        return False
+    return True
+
+
+async def fetch_alerts_location_status() -> str:
+    if not ALERTS_API_TOKEN:
+        raise RuntimeError("ALERTS_API_TOKEN не настроен")
+    url = f"https://api.alerts.in.ua/v1/iot/active_air_raid_alerts/{ALERTS_LOCATION_UID}.json"
+    timeout = aiohttp.ClientTimeout(total=15)
+    headers = {"Authorization": f"Bearer {ALERTS_API_TOKEN}"}
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(url, headers=headers) as response:
+            if response.status != 200:
+                body = await response.text()
+                raise RuntimeError(f"Alerts.in.ua HTTP {response.status}: {body[:200]}")
+            status = str(await response.json(content_type=None)).strip().upper()
+            if status not in {"A", "P", "N"}:
+                raise RuntimeError(f"Неизвестный статус Alerts.in.ua: {status!r}")
+            return status
+
+
+async def apply_alarm_restrictions(bot: Bot, chat_id: int) -> None:
+    settings = db.get_alarm_settings(chat_id)
+    try:
+        if not settings.permissions_json:
+            chat = await bot.get_chat(chat_id)
+            db.save_alarm_permissions(chat_id, permissions_to_dict(getattr(chat, "permissions", None)))
+        await bot.set_chat_permissions(
+            chat_id=chat_id,
+            permissions=media_locked_permissions(),
+            use_independent_chat_permissions=True,
+        )
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        logging.warning("Could not apply alarm permissions in chat %s: %s", chat_id, exc)
+
+    try:
+        if settings.reactions_json is None:
+            current_reactions = await raw_chat_available_reactions(bot, chat_id)
+            if current_reactions is not None:
+                db.save_alarm_reactions(chat_id, current_reactions)
+        await set_chat_available_reactions(bot, chat_id, [])
+    except TelegramNotFound:
+        pass
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        if "not found" not in str(exc).casefold():
+            logging.warning("Could not disable alarm reactions in chat %s: %s", chat_id, exc)
+
+
+async def send_alarm_notification(bot: Bot, chat_id: int, text: str) -> bool:
+    topics = db.list_topics(chat_id)
+    destinations: list[int | None] = [None, *[topic.thread_id for topic in topics]]
+    last_error: Exception | None = None
+    for thread_id in destinations:
+        try:
+            kwargs = {"chat_id": chat_id, "text": text}
+            if thread_id is not None:
+                kwargs["message_thread_id"] = thread_id
+            await bot.send_message(**kwargs)
+            return True
+        except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as exc:
+            last_error = exc
+    logging.warning("Could not send alarm notification to chat %s: %s", chat_id, last_error)
+    return False
+
+
+async def activate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
+    settings = db.get_alarm_settings(chat_id)
+    restrictions_enabled = db.alarm_restrictions_enabled(chat_id)
+    if restrictions_enabled:
+        await apply_alarm_restrictions(bot, chat_id)
+
+    alert_sent = await send_alarm_notification(
+        bot,
+        chat_id,
+        f"Alerts.in.ua сообщает: объявлена воздушная тревога — <b>{ALERTS_LOCATION_TITLE}</b>.",
+    )
+    action_text = settings.alarm_text or (
+        "Режим тревоги применен: медиа, реакции и одиночные эмодзи отключены."
+        if restrictions_enabled
+        else "Оповещение отправлено. Ограничения медиа и реакций для этой группы выключены."
+    )
+    action_sent = await send_alarm_notification(bot, chat_id, action_text)
+    return alert_sent and action_sent
+
+
+async def restore_alarm_restrictions(bot: Bot, chat_id: int) -> None:
+    settings = db.get_alarm_settings(chat_id)
+    try:
+        saved = json.loads(settings.permissions_json) if settings.permissions_json else None
+        await bot.set_chat_permissions(
+            chat_id=chat_id,
+            permissions=ChatPermissions(**saved) if saved else default_open_permissions(),
+            use_independent_chat_permissions=True,
+        )
+        if settings.permissions_json:
+            db.pop_alarm_permissions(chat_id)
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        logging.warning("Could not restore alarm permissions in chat %s: %s", chat_id, exc)
+
+    try:
+        saved_reactions = json.loads(settings.reactions_json) if settings.reactions_json is not None else None
+        await set_chat_available_reactions(
+            bot,
+            chat_id,
+            saved_reactions if saved_reactions is not None else DEFAULT_AVAILABLE_REACTIONS,
+        )
+        if settings.reactions_json is not None:
+            db.pop_alarm_reactions(chat_id)
+    except TelegramNotFound:
+        if settings.reactions_json is not None:
+            db.pop_alarm_reactions(chat_id)
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        if "not found" in str(exc).casefold():
+            if settings.reactions_json is not None:
+                db.pop_alarm_reactions(chat_id)
+        else:
+            logging.warning("Could not restore alarm reactions in chat %s: %s", chat_id, exc)
+
+
+async def deactivate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
+    settings = db.get_alarm_settings(chat_id)
+    had_restrictions = bool(settings.permissions_json or settings.reactions_json is not None)
+    await restore_alarm_restrictions(bot, chat_id)
+
+    clear_sent = await send_alarm_notification(
+        bot,
+        chat_id,
+        f"Alerts.in.ua сообщает: отбой воздушной тревоги — <b>{ALERTS_LOCATION_TITLE}</b>.",
+    )
+    action_text = settings.clear_text or (
+        "Отбой применен: медиа, реакции и одиночные эмодзи снова включены."
+        if had_restrictions
+        else "Оповещение об отбое отправлено. Ограничения для этой группы не применялись."
+    )
+    action_sent = await send_alarm_notification(bot, chat_id, action_text)
+    return clear_sent and action_sent
+
+
+async def alerts_monitor_loop(bot: Bot) -> None:
+    initial_sync = True
+    while True:
+        try:
+            chat_ids = db.list_alarm_api_chats()
+            if chat_ids and ALERTS_API_TOKEN:
+                status = await fetch_alerts_location_status()
+                active = status in {"A", "P"}
+                if initial_sync:
+                    baseline = "A" if active else "N"
+                    for chat_id in chat_ids:
+                        db.set_alarm_api_last_status(chat_id, status)
+                        db.set_alarm_api_last_notified_status(chat_id, baseline)
+                    initial_sync = False
+                    await asyncio.sleep(ALERTS_POLL_INTERVAL_SECONDS)
+                    continue
+                for chat_id in chat_ids:
+                    previous = db.alarm_api_last_status(chat_id)
+                    notified = db.alarm_api_last_notified_status(chat_id)
+                    if previous != status:
+                        db.set_alarm_api_last_status(chat_id, status)
+                    if active and notified != "A":
+                        if await activate_alarm_from_api(bot, chat_id):
+                            db.set_alarm_api_last_notified_status(chat_id, "A")
+                    elif not active and notified != "N":
+                        if previous is None and notified is None:
+                            db.set_alarm_api_last_notified_status(chat_id, "N")
+                        elif await deactivate_alarm_from_api(bot, chat_id):
+                            db.set_alarm_api_last_notified_status(chat_id, "N")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logging.warning("Alerts.in.ua monitor error: %s", exc)
+        await asyncio.sleep(ALERTS_POLL_INTERVAL_SECONDS)
+
+
+def alarm_status_text(chat_id: int) -> str:
+    if not db.alarm_api_enabled(chat_id):
+        return "Автоматическое отслеживание тревоги для этой группы не включено."
+
+    status = db.alarm_api_last_status(chat_id)
+    if status == "A":
+        return f"В <b>{ALERTS_LOCATION_TITLE}</b> сейчас воздушная тревога."
+    if status == "P":
+        return f"В <b>{ALERTS_LOCATION_TITLE}</b> сейчас частичная воздушная тревога."
+    if status == "N":
+        return f"В <b>{ALERTS_LOCATION_TITLE}</b> сейчас нет воздушной тревоги."
+    return "Статус тревоги еще не получен. Попробуй снова через минуту."
+
+
 async def handle_alarm_mode(message: Message) -> bool:
     if not message.text:
         return False
 
-    settings = db.get_alarm_settings(message.chat.id)
-    if not settings.enabled:
-        return False
-
-    is_admin_message = bool(
-        message.from_user and await is_chat_admin(message.bot, message.chat.id, message.from_user.id)
-    )
-    is_linked_channel_message = bool(
-        getattr(message, "is_automatic_forward", False)
-        or (message.sender_chat and message.sender_chat.type == "channel")
-    )
-    if not is_admin_message and not is_linked_channel_message:
-        return False
-
-    if ALARM_ON_RE.search(message.text):
-        reaction_warning = ""
-        try:
-            if not settings.permissions_json:
-                chat = await message.bot.get_chat(message.chat.id)
-                db.save_alarm_permissions(message.chat.id, permissions_to_dict(getattr(chat, "permissions", None)))
-
-            await message.bot.set_chat_permissions(
-                chat_id=message.chat.id,
-                permissions=media_locked_permissions(),
-                use_independent_chat_permissions=True,
-            )
-        except (TelegramBadRequest, TelegramForbiddenError) as exc:
-            await safe_reply(
-                message,
-                "Не получилось включить тревогу. Проверь, что бот админ и у него есть право ограничивать участников.\n"
-                f"<code>{escape(str(exc))}</code>"
-            )
-            return True
-
-        try:
-            if settings.reactions_json is None:
-                current_reactions = await raw_chat_available_reactions(message.bot, message.chat.id)
-                if current_reactions is not None:
-                    db.save_alarm_reactions(message.chat.id, current_reactions)
-            await set_chat_available_reactions(message.bot, message.chat.id, [])
-        except (TelegramBadRequest, TelegramForbiddenError):
-            reaction_warning = (
-                "\n\nРеакции не удалось отключить настройкой группы. "
-                "Пока тревога включена, бот будет пытаться удалять новые реакции."
-            )
-
-        await safe_reply(message, (settings.alarm_text or "Тревога включена: медиа и реакции отключены.") + reaction_warning)
+    if ALARM_STATUS_COMMAND_RE.fullmatch(message.text):
+        await safe_reply(message, alarm_status_text(message.chat.id))
         return True
 
-    if ALARM_OFF_RE.search(message.text):
-        reaction_warning = ""
-        try:
-            saved = db.pop_alarm_permissions(message.chat.id)
-            permissions = ChatPermissions(**saved) if saved else default_open_permissions()
-            await message.bot.set_chat_permissions(
-                chat_id=message.chat.id,
-                permissions=permissions,
-                use_independent_chat_permissions=True,
-            )
-        except (TelegramBadRequest, TelegramForbiddenError) as exc:
-            await safe_reply(
-                message,
-                "Не получилось сделать отбой. Проверь права бота на ограничение участников.\n"
-                f"<code>{escape(str(exc))}</code>"
-            )
-            return True
-
-        try:
-            saved_reactions = db.pop_alarm_reactions(message.chat.id)
-            await set_chat_available_reactions(
-                message.bot,
-                message.chat.id,
-                saved_reactions if saved_reactions is not None else DEFAULT_AVAILABLE_REACTIONS,
-            )
-        except (TelegramBadRequest, TelegramForbiddenError):
-            reaction_warning = "\n\nРеакции не удалось вернуть настройкой группы."
-
-        await safe_reply(message, (settings.clear_text or "Отбой: медиа и реакции снова включены.") + reaction_warning)
+    if ALARM_STATUS_QUERY_RE.fullmatch(message.text) or ALARM_CLEAR_QUERY_RE.fullmatch(message.text):
         return True
 
     return False
@@ -2719,12 +6544,33 @@ async def delete_reactions_during_alarm(event: MessageReactionUpdated, bot: Bot)
     if event.chat.type not in SUPPORTED_CHAT_TYPES:
         return
 
-    settings = db.get_alarm_settings(event.chat.id)
-    if not settings.enabled or not settings.permissions_json or not event.new_reaction:
-        return
-
     user_id = event.user.id if event.user else None
     actor_chat_id = event.actor_chat.id if event.actor_chat else None
+    if user_id is not None and event.new_reaction and db.get_active_quiet_admin(
+        event.chat.id,
+        user_id,
+        datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    ):
+        try:
+            await bot.delete_message_reaction(
+                chat_id=event.chat.id,
+                message_id=event.message_id,
+                user_id=user_id,
+            )
+        except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+            return
+        return
+
+    restrictions_enabled, api_enabled, last_status, has_saved_permissions = cached_alarm_runtime(event.chat.id)
+    if (
+        not restrictions_enabled
+        or not api_enabled
+        or last_status not in {"A", "P"}
+        or not has_saved_permissions
+        or not event.new_reaction
+    ):
+        return
+
     if user_id is None and actor_chat_id is None:
         return
 
@@ -2742,6 +6588,12 @@ async def delete_reactions_during_alarm(event: MessageReactionUpdated, bot: Bot)
 async def handle_birthdays(message: Message) -> None:
     today = datetime.now().date()
     sent_date = today.isoformat()
+    cache_key = (message.chat.id, sent_date)
+    now = time.monotonic()
+    if now - BIRTHDAY_CHECK_CACHE.get(cache_key, 0) < 1800:
+        return
+    BIRTHDAY_CHECK_CACHE[cache_key] = now
+
     birthdays = db.birthdays_for_date(message.chat.id, today.day, today.month, sent_date)
     for birthday in birthdays:
         await safe_reply(message, f"Сегодня праздник: <b>{escape(birthday.text)}</b> 🎉")
@@ -2749,19 +6601,19 @@ async def handle_birthdays(message: Message) -> None:
 
 
 async def handle_blacklist(message: Message) -> bool:
-    if not message.text:
+    content = message.text or message.caption
+    if not content:
         return False
 
-    text = normalize_trigger(message.text)
-    for item in db.list_blacklist_words(message.chat.id):
+    text = normalize_trigger(content)
+    for item in cached_blacklist_words(message.chat.id):
         if has_trigger(text, item.word):
             try:
                 await message.delete()
             except (TelegramBadRequest, TelegramForbiddenError):
                 pass
 
-            user_name = message.from_user.full_name if message.from_user else "Пользователь"
-            await safe_reply(message, f"{escape(user_name)}, сообщение удалено: слово в черном списке.")
+            await message.answer("Данные выражения запрещены в чате.")
             return True
 
     return False
@@ -2772,39 +6624,47 @@ async def set_reply(message: Message) -> None:
     if not await require_admin(message):
         return
 
-    payload = split_command_payload(message_html_text(message))
-    username, sep, reply_text = payload.partition(" ")
-    if not username.startswith("@") or not sep or not reply_text.strip():
-        await message.answer("Формат: <code>/setreply @username текст автоответа</code>")
+    payload = split_command_payload(message_html_content(message))
+    media = reply_media_from_message(message)
+    username, reply_text = split_reply_payload(payload)
+    if not username.startswith("@") or (not reply_text and not media):
+        await message.answer("Формат: <code>/setreply @username - текст автоответа</code>")
         return
 
     await remember_sender(message)
-    db.set_reply(message.chat.id, username, reply_text, message.from_user.id if message.from_user else None)
+    media_type, media_file_id = media if media else (None, None)
+    db.set_reply(message.chat.id, username, reply_text, message.from_user.id if message.from_user else None, media_type, media_file_id)
+    invalidate_chat_runtime_cache(message.chat.id)
+    await notify_staff_autoreply_change(message.bot, f"@ответ @{normalize_username(username)} изменён для чата {message.chat.id}.")
     await message.answer(f"Готово. Автоответ для <b>@{escape(normalize_username(username))}</b> сохранен.")
 
 
 @router.message(F.text.regexp(re.compile(r"^/ответ(\s|$)", re.IGNORECASE)))
 async def set_reply_ru(message: Message) -> None:
-    command, payload = split_text_command(message_html_text(message))
+    command, payload = split_text_command(message_html_content(message))
     if command != "/ответ":
         return
 
     if not await require_admin(message):
         return
 
-    username, sep, reply_text = payload.partition(" ")
-    if not username.startswith("@") or not sep or not reply_text.strip():
-        await message.answer("Формат: <code>/ответ @username текст автоответа</code>")
+    media = reply_media_from_message(message)
+    username, reply_text = split_reply_payload(payload)
+    if not username.startswith("@") or (not reply_text and not media):
+        await message.answer("Формат: <code>/ответ @username - текст автоответа</code>")
         return
 
     await remember_sender(message)
-    db.set_reply(message.chat.id, username, reply_text, message.from_user.id if message.from_user else None)
+    media_type, media_file_id = media if media else (None, None)
+    db.set_reply(message.chat.id, username, reply_text, message.from_user.id if message.from_user else None, media_type, media_file_id)
+    invalidate_chat_runtime_cache(message.chat.id)
+    await notify_staff_autoreply_change(message.bot, f"@ответ @{normalize_username(username)} изменён для чата {message.chat.id}.")
     await message.answer(f"Готово. Автоответ для <b>@{escape(normalize_username(username))}</b> сохранен.")
 
 
 @router.message(F.text.regexp(re.compile(r"^/мойответ(\s|$)", re.IGNORECASE)))
 async def my_reply_ru(message: Message) -> None:
-    command, payload = split_text_command(message_html_text(message))
+    command, payload = split_text_command(message_html_content(message))
     if command != "/мойответ":
         return
 
@@ -2815,12 +6675,16 @@ async def my_reply_ru(message: Message) -> None:
         await message.answer("У вашего аккаунта нет username. Добавьте username в Telegram или используйте /ответ.")
         return
 
-    if not payload:
+    media = reply_media_from_message(message)
+    if not payload and not media:
         await message.answer("Формат: <code>/мойответ текст автоответа</code>")
         return
 
     await remember_sender(message)
-    db.set_reply(message.chat.id, message.from_user.username, payload, message.from_user.id)
+    media_type, media_file_id = media if media else (None, None)
+    db.set_reply(message.chat.id, message.from_user.username, payload, message.from_user.id, media_type, media_file_id)
+    invalidate_chat_runtime_cache(message.chat.id)
+    await notify_staff_autoreply_change(message.bot, f"@ответ @{message.from_user.username.lower()} изменён для чата {message.chat.id}.")
     await message.answer(f"Готово. Автоответ для <b>@{escape(message.from_user.username.lower())}</b> сохранен.")
 
 
@@ -2838,6 +6702,9 @@ async def del_reply_ru(message: Message) -> None:
         return
 
     deleted = db.delete_reply(message.chat.id, payload)
+    invalidate_chat_runtime_cache(message.chat.id)
+    if deleted:
+        await notify_staff_autoreply_change(message.bot, f"@ответ @{normalize_username(payload)} удалён из чата {message.chat.id}.")
     await message.answer("Автоответ удален." if deleted else "Для этого username автоответ не найден.")
 
 
@@ -2845,6 +6712,8 @@ async def del_reply_ru(message: Message) -> None:
 async def list_replies_ru(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
         await message.answer("Открой /старт в личке и выбери группу.")
+        return
+    if not await require_admin(message):
         return
 
     await message.answer(replies_text(message.chat.id))
@@ -2855,33 +6724,41 @@ async def set_trigger(message: Message) -> None:
     if not await require_admin(message):
         return
 
-    payload = split_command_payload(message_html_text(message))
+    payload = split_command_payload(message_html_content(message))
+    media = reply_media_from_message(message)
     trigger, reply_text = split_trigger_payload(payload)
-    if not trigger or not reply_text:
+    if not trigger or (not reply_text and not media):
         await message.answer("Формат: <code>/settrigger слово - текст ответа</code>")
         return
 
     await remember_sender(message)
-    db.set_trigger(message.chat.id, trigger, reply_text, message.from_user.id if message.from_user else None)
+    media_type, media_file_id = media if media else (None, None)
+    db.set_trigger(message.chat.id, trigger, reply_text, message.from_user.id if message.from_user else None, media_type, media_file_id)
+    invalidate_chat_runtime_cache(message.chat.id)
+    await notify_staff_autoreply_change(message.bot, f"Триггер «{normalize_trigger(trigger)}» изменён для чата {message.chat.id}.")
     await message.answer(f"Фиксированный ответ на <b>{escape(normalize_trigger(trigger))}</b> сохранен.")
 
 
 @router.message(F.text.regexp(re.compile(r"^/(тригер|триггер)(\s|$)", re.IGNORECASE)))
 async def set_trigger_ru(message: Message) -> None:
-    command, payload = split_text_command(message_html_text(message))
+    command, payload = split_text_command(message_html_content(message))
     if command not in {"/тригер", "/триггер"}:
         return
 
     if not await require_admin(message):
         return
 
+    media = reply_media_from_message(message)
     trigger, reply_text = split_trigger_payload(payload)
-    if not trigger or not reply_text:
+    if not trigger or (not reply_text and not media):
         await message.answer("Формат: <code>/тригер слово - текст ответа</code>")
         return
 
     await remember_sender(message)
-    db.set_trigger(message.chat.id, trigger, reply_text, message.from_user.id if message.from_user else None)
+    media_type, media_file_id = media if media else (None, None)
+    db.set_trigger(message.chat.id, trigger, reply_text, message.from_user.id if message.from_user else None, media_type, media_file_id)
+    invalidate_chat_runtime_cache(message.chat.id)
+    await notify_staff_autoreply_change(message.bot, f"Триггер «{normalize_trigger(trigger)}» изменён для чата {message.chat.id}.")
     await message.answer(f"Фиксированный ответ на <b>{escape(normalize_trigger(trigger))}</b> сохранен.")
 
 
@@ -2899,6 +6776,9 @@ async def del_trigger_ru(message: Message) -> None:
         return
 
     deleted = db.delete_trigger(message.chat.id, payload)
+    invalidate_chat_runtime_cache(message.chat.id)
+    if deleted:
+        await notify_staff_autoreply_change(message.bot, f"Триггер «{normalize_trigger(payload)}» удалён из чата {message.chat.id}.")
     await message.answer("Фиксированный ответ удален." if deleted else "Такой фиксированный ответ не найден.")
 
 
@@ -2906,6 +6786,8 @@ async def del_trigger_ru(message: Message) -> None:
 async def list_triggers_ru(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
         await message.answer("Открой /старт в личке и выбери группу.")
+        return
+    if not await require_admin(message):
         return
 
     triggers = db.list_triggers(message.chat.id)
@@ -2915,7 +6797,8 @@ async def list_triggers_ru(message: Message) -> None:
 
     lines = ["<b>Фиксированные ответы:</b>"]
     for item in triggers:
-        lines.append(f"{escape(item.trigger)} - {preview_html(item.text)}")
+        media = f" [{escape(item.media_type)}]" if item.media_type else ""
+        lines.append(f"{escape(item.trigger)}{media} - {preview_html(item.text)}")
     await message.answer("\n".join(lines))
 
 
@@ -3001,14 +6884,30 @@ async def handle_day_pick(message: Message) -> bool:
     today = datetime.now().date().isoformat()
     pick_key = settings.trigger
     picked = db.get_giveaway_picks(message.chat.id, pick_key, today)
+    if picked:
+        active_picked = []
+        for user in picked:
+            if await is_valid_giveaway_user(message.bot, message.chat.id, user.user_id):
+                active_picked.append(user)
+        picked = active_picked
+
     if len(picked) != settings.winners_count:
         users = db.list_pickable_users(message.chat.id)
         if not users:
             await safe_reply(message, "Пока некого выбрать: бот еще не видел участников с username.")
             return True
 
-        count = min(settings.winners_count, len(users))
-        picked = random.sample(users, count)
+        random.shuffle(users)
+        picked = []
+        for user in users:
+            if await is_valid_giveaway_user(message.bot, message.chat.id, user.user_id):
+                picked.append(user)
+                if len(picked) >= settings.winners_count:
+                    break
+        if not picked:
+            await safe_reply(message, "Пока некого выбрать: из запомненных пользователей с username никто не найден в этом чате.")
+            return True
+
         picked_ids = [user.user_id for user in picked]
         db.set_giveaway_picks(message.chat.id, pick_key, today, picked_ids)
 
@@ -3021,23 +6920,114 @@ async def handle_day_pick(message: Message) -> bool:
     return True
 
 
+async def chat_top_page_text(bot: Bot, chat_id: int, kind: str, page: int) -> tuple[str, int, int]:
+    if kind == "giveaway":
+        items = db.top_giveaway_stats(chat_id, limit=None)
+        title = "Топ пидоров"
+    elif kind == "roll":
+        items = db.top_roll_mute_stats(chat_id, limit=None)
+        title = "Топ roll mute"
+    elif kind == "depth":
+        items = db.top_dig_depth(chat_id, limit=None)
+        title = "Топ копания"
+    elif kind == "coins":
+        items = db.top_dig_coins(chat_id, limit=None)
+        title = "Топ монет"
+    else:
+        return "Неизвестный топ.", 0, 0
+
+    total = len(items)
+    max_page = max(0, (total - 1) // TOP_PAGE_SIZE)
+    page = max(0, min(page, max_page))
+    start = page * TOP_PAGE_SIZE
+    lines = [f"<b>{title}:</b>"]
+    for index, item in enumerate(items[start : start + TOP_PAGE_SIZE], start=start + 1):
+        suffix = dig_title_suffix(dig_items_map(item.chat_id, item.user_id)) if kind in {"depth", "coins"} else ""
+        link = await current_profile_link(bot, chat_id, item.user_id, item.username, item.full_name, suffix)
+        if kind == "giveaway":
+            value = f"<b>{item.wins_count}</b>"
+        elif kind == "roll":
+            value = f"<b>{item.unlucky_count}</b>"
+        elif kind == "depth":
+            value = f"<b>{item.total_depth}</b> м"
+        else:
+            value = f"<b>{item.coins}</b> котоинов"
+        lines.append(f"{index}. {link} - {value}")
+    return "\n".join(lines), page, total
+
+
+async def send_chat_top(message: Message, kind: str, empty_text: str) -> None:
+    text, page, total = await chat_top_page_text(message.bot, message.chat.id, kind, 0)
+    if not total:
+        await temporary_reply(message, empty_text)
+        return
+    await temporary_reply(
+        message,
+        text,
+        reply_markup=chat_top_page_menu(kind, message.chat.id, page, total),
+        disable_web_page_preview=True,
+    )
+
+
+@router.callback_query(F.data.startswith("top:"))
+async def cb_chat_top_page(callback: CallbackQuery) -> None:
+    _, kind, chat_id_raw, page_raw = callback.data.split(":", 3)
+    chat_id = int(chat_id_raw)
+    if callback.message.chat.id != chat_id:
+        await callback.answer("Эта страница относится к другому чату.", show_alert=True)
+        return
+    text, page, total = await chat_top_page_text(callback.bot, chat_id, kind, int(page_raw))
+    if not total:
+        await callback.answer("Топ пока пуст.", show_alert=True)
+        return
+    await safe_edit(
+        callback,
+        text,
+        reply_markup=chat_top_page_menu(kind, chat_id, page, total),
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
+
+
 @router.message(F.text.regexp(re.compile(r"^топ\s+пидоров[?!.]?$", re.IGNORECASE)))
 async def giveaway_top(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
         return
 
     await remember_sender(message)
-    stats = db.top_giveaway_stats(message.chat.id, limit=10)
-    if not stats:
-        await safe_reply(message, "Топ пока пуст. Сначала вызови дневной розыгрыш: кто пидор")
+    await send_chat_top(message, "giveaway", "Топ пока пуст. Сначала вызови дневной розыгрыш: кто пидор")
+
+
+@router.message(F.text.regexp(re.compile(r"^профиль(?:\s+@[A-Za-z0-9_]{5,32})?[?!.]?$", re.IGNORECASE)))
+async def chat_profile(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
         return
 
-    lines = ["<b>Топ пидоров:</b>"]
-    for index, item in enumerate(stats, start=1):
-        name = f"@{item.username}" if item.username else item.full_name
-        lines.append(f"{index}. {escape(name)} - <b>{item.wins_count}</b>")
+    await remember_sender(message)
+    target_id = message.from_user.id
+    target_username = message.from_user.username
+    target_name = message.from_user.full_name
+    match = re.match(r"^профиль(?:\s+@([A-Za-z0-9_]{5,32}))?", message.text or "", flags=re.IGNORECASE)
+    if match and match.group(1):
+        seen = db.get_seen_user_by_username(message.chat.id, match.group(1))
+        if not seen:
+            await temporary_reply(message, "Я еще не видел этого пользователя в чате. Ответь командой <code>профиль</code> на его сообщение.")
+            return
+        target_id = seen.user_id
+        target_username = seen.username
+        target_name = seen.full_name
+    elif message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id != message.from_user.id:
+        user = message.reply_to_message.from_user
+        target_id = user.id
+        target_username = user.username
+        target_name = user.full_name
+        db.upsert_seen_user(message.chat.id, user.id, user.username, user.full_name, user.is_bot)
 
-    await safe_reply(message, "\n".join(lines))
+    await temporary_reply(
+        message,
+        telegram_user_profile_text(target_id, target_username, target_name, chat_id=message.chat.id, short=True),
+        disable_web_page_preview=True,
+    )
 
 
 @router.message(F.text.casefold() == "копай")
@@ -3058,9 +7048,19 @@ async def dig_command(message: Message) -> None:
         return
 
     now = datetime.now(timezone.utc)
-    if player.last_dig_at:
+    items = dig_items_map(message.chat.id, message.from_user.id)
+    route_key, route_data = dig_route(message.from_user.id)
+    route_name, route_chance, route_coins, route_artifacts, route_collapse, _ = route_data
+    camp_used = False
+    star_dig_used, forced_luck, forced_depth = consume_star_dig(message.chat.id, message.from_user.id, items)
+    if player.last_dig_at and not star_dig_used:
         last_dig = datetime.fromisoformat(player.last_dig_at)
-        next_dig = last_dig + DIG_COOLDOWN
+        cooldown = user_dig_cooldown(message.from_user.id)
+        next_dig = last_dig + cooldown
+        if now < next_dig and items.get("camp", 0) > 0 and now >= last_dig + cooldown / 2:
+            camp_used = db.consume_dig_item(message.chat.id, message.from_user.id, "camp")
+            if camp_used:
+                next_dig = now
         if now < next_dig:
             remaining = int((next_dig - now).total_seconds() // 60) + 1
             hours = remaining // 60
@@ -3068,16 +7068,39 @@ async def dig_command(message: Message) -> None:
             await temporary_reply(message, f"Лопата отдыхает. До следующей раскопки: <b>{hours} ч {minutes} мин</b>.")
             return
 
-    luck_before = refreshed_dig_luck(player.luck, player.last_luck_at, now)
-    luck_after = max(0, luck_before - DIG_LUCK_COST)
-    items = dig_items_map(message.chat.id, message.from_user.id)
+    luck_before = refreshed_dig_luck(message.from_user.id, player.luck, player.last_luck_at, now)
+    luck_after = luck_before if forced_luck else max(0, luck_before - DIG_LUCK_COST)
     used_effects: list[str] = []
+    used_effects.append(f"Маршрут: {route_name}")
+    if camp_used:
+        used_effects.append("Переносной лагерь: ожидание сокращено на 50%")
+    if star_dig_used:
+        if forced_depth:
+            used_effects.append("Оплаченная раскопка: гарантированно пройдено 10 м")
+        elif forced_luck:
+            used_effects.append("Оплаченная раскопка: ожидание пропущено, действует 100 удачи")
+        else:
+            used_effects.append("Оплаченная раскопка: ожидание пропущено")
 
-    helmet_used = items.get("helmet", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "helmet")
-    shovel_used = items.get("shovel", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "shovel")
-    flashlight_used = items.get("flashlight", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "flashlight")
+    helmet_used = not forced_luck and items.get("helmet", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "helmet")
+    shovel_used = not forced_luck and items.get("shovel", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "shovel")
+    flashlight_used = not forced_depth and items.get("flashlight", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "flashlight")
     bucket_used = items.get("bucket", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "bucket")
-    effective_luck = min(100, luck_before + (5 if helmet_used else 0))
+    compass_used = items.get("compass", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "compass")
+    scanner_used = items.get("scanner", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "scanner")
+    drill_used = items.get("drill", 0) > 0
+    map_used = items.get("map", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "map")
+    talisman_used = items.get("talisman", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "talisman")
+    medkit_available = items.get("medkit", 0) > 0
+    repair_used = items.get("repair_kit", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "repair_kit")
+    chest_used = items.get("mystery_chest", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "mystery_chest")
+    shovel_bonus = dig_permanent_shovel_bonus(items)
+    cart_bonus = dig_cart_bonus(items)
+    backpack_bonus = dig_backpack_bonus(items)
+    helmet_reduction = dig_helmet_reduction(items)
+    artifact_equipment_bonus = dig_flashlight_artifact_bonus(items)
+    collection_bonus = items.get("artifact_set_reward", 0) > 0
+    effective_luck = 100 if forced_luck else min(100, luck_before + (5 if helmet_used else 0))
     if helmet_used:
         used_effects.append("Каска шахтера: +5 удачи")
     if shovel_used:
@@ -3086,16 +7109,45 @@ async def dig_command(message: Message) -> None:
         used_effects.append("Фонарик: +10% к шансам раскопки")
     if bucket_used:
         used_effects.append("Премиум ведро: +25% котоинов")
+    if shovel_bonus:
+        used_effects.append(f"Постоянная лопата: +{shovel_bonus}% к шансам раскопки")
+    if cart_bonus:
+        used_effects.append(f"Вагонетка: +{cart_bonus}% котоинов")
+    if backpack_bonus:
+        used_effects.append(f"Рюкзак: +{backpack_bonus}% котоинов")
+    if helmet_reduction:
+        used_effects.append(f"Каска: риск обвала -{helmet_reduction}%")
+    if compass_used:
+        route_chance = round(route_chance * 1.25)
+        route_coins *= 1.15
+        used_effects.append("Компас: маршрут усилен")
+    if scanner_used:
+        used_effects.append("Сканер породы: риск обвала -30%")
+    if map_used:
+        used_effects.append("Карта тоннелей: +15% к артефактам")
+    if collection_bonus:
+        used_effects.append("Коллекция артефактов: +5% котоинов")
 
-    dug = 0
+    dug = 10 if forced_depth else 0
     stopped_by_stone = False
-    for meter, chance in enumerate(DIG_SUCCESS_CHANCES, start=1):
-        actual_chance = min(95, chance + (10 if flashlight_used else 0))
-        if secrets.randbelow(100) < actual_chance:
-            dug = meter
-            continue
-        stopped_by_stone = True
-        break
+    if not forced_depth:
+        for meter, chance in enumerate(DIG_SUCCESS_CHANCES, start=1):
+            actual_chance = min(95.0, chance + route_chance + (10 if flashlight_used else 0) + shovel_bonus)
+            if secrets.randbelow(10000) < int(actual_chance * 100):
+                dug = meter
+                continue
+            if drill_used and db.consume_dig_item(message.chat.id, message.from_user.id, "drill"):
+                drill_used = False
+                dug = meter
+                used_effects.append(f"Бур: пробит {meter}-й метр")
+                continue
+            if items.get("dynamite", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "dynamite"):
+                items["dynamite"] -= 1
+                dug = meter
+                used_effects.append(f"Динамит: пробит {meter}-й метр")
+                continue
+            stopped_by_stone = True
+            break
 
     collapse_depth = 0
     insurance_used = False
@@ -3105,9 +7157,12 @@ async def dig_command(message: Message) -> None:
             dug = 1
             used_effects.append("Страховка: первый метр засчитан")
 
-    collapse_chance = max(0, 100 - effective_luck)
+    collapse_chance = int(max(0, 100 - effective_luck) * route_collapse)
+    collapse_chance = max(0, collapse_chance - helmet_reduction)
     if shovel_used:
         collapse_chance //= 2
+    if scanner_used:
+        collapse_chance = collapse_chance * 70 // 100
     if dug > 0 and collapse_chance and secrets.randbelow(100) < collapse_chance:
         if items.get("safe", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "safe"):
             used_effects.append("Сейф: обвал остановлен")
@@ -3115,9 +7170,48 @@ async def dig_command(message: Message) -> None:
             collapse_depth = 1 + secrets.randbelow(dug)
             dug = max(0, dug - collapse_depth)
 
-    coins = dig_coin_reward(dug)
+    coins = max(1, int(dig_coin_reward(dug) * route_coins + 0.9999))
     if bucket_used:
         coins = (coins * 125 + 99) // 100
+    if cart_bonus:
+        coins = (coins * (100 + cart_bonus) + 99) // 100
+    if backpack_bonus:
+        coins = (coins * (100 + backpack_bonus) + 99) // 100
+    if collection_bonus:
+        coins = (coins * 105 + 99) // 100
+    coins_before_event = coins
+    coins, event_text = dig_random_event(dug, coins)
+    if coins < coins_before_event and medkit_available and db.consume_dig_item(message.chat.id, message.from_user.id, "medkit"):
+        coins = coins_before_event
+        used_effects.append("Аптечка: потеря котоинов отменена")
+    artifact_chance_bonus = artifact_equipment_bonus + (15 if map_used else 0) + max(0, int((route_artifacts - 1) * 10))
+    artifact_bonus, artifact_text = find_dig_artifact(message.chat.id, message.from_user.id, dug, items, artifact_chance_bonus)
+    coins += artifact_bonus
+    if talisman_used:
+        coins *= 2
+        used_effects.append("Талисман: котоины удвоены")
+    if chest_used:
+        chest_roll = secrets.randbelow(4)
+        if chest_roll == 0:
+            used_effects.append("Таинственный сундук оказался пуст")
+        elif chest_roll == 1:
+            bonus = 25 + secrets.randbelow(51)
+            coins += bonus
+            used_effects.append(f"Таинственный сундук: +{bonus} котоинов")
+        elif chest_roll == 2:
+            db.add_dig_item(message.chat.id, message.from_user.id, "insurance", 1)
+            used_effects.append("Таинственный сундук: найдена страховка")
+        else:
+            db.add_dig_item(message.chat.id, message.from_user.id, "dynamite", 1)
+            used_effects.append("Таинственный сундук: найден динамит")
+    if repair_used:
+        restored = "bucket" if bucket_used else "flashlight" if flashlight_used else "helmet" if helmet_used else "shovel" if shovel_used else None
+        if restored:
+            db.add_dig_item(message.chat.id, message.from_user.id, restored, 1)
+            used_effects.append(f"Ремонтный набор восстановил: {DIG_SHOP_ITEMS[restored][0]}")
+        else:
+            db.add_dig_item(message.chat.id, message.from_user.id, "repair_kit", 1)
+    coins = apply_premium_coin_bonus(message.from_user.id, coins, used_effects)
     db.update_dig_player_after_dig(
         chat_id=message.chat.id,
         user_id=message.from_user.id,
@@ -3131,6 +7225,32 @@ async def dig_command(message: Message) -> None:
         last_dig_at=now.isoformat(timespec="seconds"),
     )
 
+    contract_updates = update_dig_contracts(message.from_user.id, dug, coins, artifact_text is not None)
+    progress = db.update_dig_progress(
+        message.from_user.id,
+        xp_delta=5 + dug * 10 + len(contract_updates) * DIG_CONTRACT_REWARD_XP,
+        success=dug > 0,
+        route=route_key,
+    )
+    streak_rewards: list[str] = []
+    if progress["streak"] == 3:
+        db.add_dig_coins(message.chat.id, message.from_user.id, 10)
+        streak_rewards.append("Серия 3: +10 котоинов")
+    elif progress["streak"] == 5:
+        db.add_dig_item(message.chat.id, message.from_user.id, "mystery_chest", 1)
+        streak_rewards.append("Серия 5: таинственный сундук")
+    elif progress["streak"] == 10:
+        db.add_dig_item(message.chat.id, message.from_user.id, "artifact_gem", 1)
+        streak_rewards.append("Серия 10: редкий самоцвет")
+    today = now.date().isoformat()
+    expedition = db.add_dig_expedition_progress(
+        message.chat.id, message.from_user.id, today, dug, DIG_EXPEDITION_TARGET
+    )
+    expedition_rewarded = (
+        db.reward_dig_expedition(message.chat.id, today, DIG_EXPEDITION_REWARD)
+        if expedition["completed"] else []
+    )
+
     total_depth = player.total_depth + dug
     achievements = check_dig_achievements(
         message.chat.id,
@@ -3141,6 +7261,34 @@ async def dig_command(message: Message) -> None:
         collapse_depth,
         stopped_by_stone,
     )
+    extra_checks = []
+    if progress["level"] >= 5:
+        extra_checks.append("level_5")
+    if progress["level"] >= 10:
+        extra_checks.append("level_10")
+    if progress["streak"] >= 3:
+        extra_checks.append("streak_3")
+    if progress["streak"] >= 5:
+        extra_checks.append("streak_5")
+    if progress["streak"] >= 10:
+        extra_checks.append("streak_10")
+    artifact_count = sum(1 for key in DIG_ARTIFACTS if items.get(key, 0) > 0)
+    if artifact_count >= 3:
+        extra_checks.append("collector_3")
+    if artifact_count == len(DIG_ARTIFACTS):
+        extra_checks.append("collector_all")
+    if luck_after < 10:
+        extra_checks.append("low_luck")
+    if route_key != "old_mine":
+        extra_checks.append("route_master")
+    if message.from_user.id in expedition_rewarded:
+        extra_checks.append("expedition")
+    if player.coins + coins >= 10000:
+        extra_checks.append("coins_10000")
+    for achievement_key in extra_checks:
+        awarded = award_dig_achievement(message.chat.id, message.from_user.id, achievement_key)
+        if awarded:
+            achievements.append(awarded)
     lines = [f"<b>{escape(dig_display_name(message.chat.id, message.from_user.id, message.from_user.username, message.from_user.full_name))} копает...</b>"]
     if stopped_by_stone and dug == 0 and collapse_depth == 0 and not insurance_used:
         lines.append("Ты наткнулся на большой камень, попробуй в следующий раз.")
@@ -3151,6 +7299,20 @@ async def dig_command(message: Message) -> None:
 
     if collapse_depth:
         lines.append(f"Обвал срезал <b>{collapse_depth}</b> м прогресса этой раскопки.")
+    if event_text:
+        lines.append(event_text)
+    if artifact_text:
+        lines.append(artifact_text)
+    lines.append(f"Маршрут: <b>{escape(route_name)}</b>. Уровень: <b>{progress['level']}</b>, XP: <b>{progress['xp']}</b>, серия: <b>{progress['streak']}</b>.")
+    lines.append(f"Экспедиция группы: <b>{expedition['progress']}/{expedition['target']}</b> м.")
+    if expedition_rewarded:
+        lines.append(f"Экспедиция завершена: участникам начислено по <b>{DIG_EXPEDITION_REWARD}</b> котоинов.")
+    if contract_updates:
+        lines.append("\n<b>Контракты:</b>")
+        lines.extend(escape(item) for item in contract_updates)
+    if streak_rewards:
+        lines.append("\n<b>Награды серии:</b>")
+        lines.extend(escape(item) for item in streak_rewards)
     if used_effects:
         lines.append("\n<b>Сработали эффекты:</b>")
         lines.extend(escape(effect) for effect in used_effects)
@@ -3159,7 +7321,11 @@ async def dig_command(message: Message) -> None:
         [
             f"Получено: <b>{coins}</b> котоинов.",
             f"Общая глубина: <b>{total_depth}</b> м.",
-            f"Удача: <b>{luck_before}</b> → <b>{luck_after}</b>.",
+            (
+                f"Удача в раскопке: <b>100</b>/100. Обычная удача сохранена: <b>{luck_before}</b>/100."
+                if forced_luck
+                else f"Удача: <b>{luck_before}</b> → <b>{luck_after}</b>."
+            ),
         ]
     )
     if achievements:
@@ -3185,28 +7351,44 @@ async def dig_bag(message: Message) -> None:
         )
         return
 
-    now = datetime.now(timezone.utc)
-    luck = refreshed_dig_luck(player.luck, player.last_luck_at, now)
-    cooldown = "можно копать"
-    if player.last_dig_at:
-        next_dig = datetime.fromisoformat(player.last_dig_at) + DIG_COOLDOWN
-        if now < next_dig:
-            remaining = int((next_dig - now).total_seconds() // 60) + 1
-            cooldown = f"через {remaining // 60} ч {remaining % 60} мин"
-    items = dig_items_map(message.chat.id, message.from_user.id)
-
+    text = dig_bag_text(message.chat.id, message.from_user.id)
+    if text is None:
+        await temporary_reply(message, "Сначала зарегистрируйся в шахте.", reply_markup=dig_register_menu())
+        return
     await temporary_reply(
         message,
-        "<b>Сумка шахтера</b>\n"
-        f"Игрок: {escape(dig_display_name(player.chat_id, player.user_id, player.username, player.full_name))}\n"
-        f"Котоины: <b>{player.coins}</b>\n"
-        f"Общая глубина: <b>{player.total_depth}</b> м\n"
-        f"Лучшая раскопка: <b>{player.best_session_depth}</b> м\n"
-        f"Удача: <b>{luck}</b>/100\n"
-        f"Копать: <b>{escape(cooldown)}</b>\n\n"
-        f"<b>Активные эффекты:</b>\n{escape(dig_effects_text(items))}",
+        text,
         reply_markup=dig_bag_menu(message.from_user.id),
     )
+
+
+@router.message(F.text.casefold() == "маршруты")
+async def dig_routes_command(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+    if db.get_dig_player(message.chat.id, message.from_user.id) is None:
+        await temporary_reply(message, "Сначала зарегистрируйся в шахте.", reply_markup=dig_register_menu())
+        return
+    progress = db.get_dig_progress(message.from_user.id)
+    routes = [(key, data[0], key == progress["selected_route"]) for key, data in DIG_ROUTES.items()]
+    await temporary_reply(message, dig_routes_text(message.from_user.id), reply_markup=dig_routes_menu(message.from_user.id, routes))
+
+
+@router.message(F.text.casefold() == "контракты")
+async def dig_contracts_command(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+    if db.get_dig_player(message.chat.id, message.from_user.id) is None:
+        await temporary_reply(message, "Сначала зарегистрируйся в шахте.", reply_markup=dig_register_menu())
+        return
+    await temporary_reply(message, dig_contracts_text(message.from_user.id), reply_markup=dig_bag_menu(message.from_user.id))
+
+
+@router.message(F.text.casefold() == "экспедиция")
+async def dig_expedition_command(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+    await temporary_reply(message, dig_expedition_text(message.chat.id), reply_markup=dig_bag_menu(message.from_user.id))
 
 
 @router.message(F.text.casefold() == "достижения")
@@ -3239,18 +7421,7 @@ async def dig_depth_top(message: Message) -> None:
         return
 
     await remember_sender(message)
-    players = db.top_dig_depth(message.chat.id, limit=10)
-    if not players:
-        await safe_reply(message, "Топ копания пока пуст. Сначала зарегистрируйтесь и напишите: копай")
-        return
-
-    lines = ["<b>Топ копания:</b>"]
-    for index, player in enumerate(players, start=1):
-        lines.append(
-            f"{index}. {escape(dig_display_name(player.chat_id, player.user_id, player.username, player.full_name))} - "
-            f"<b>{player.total_depth}</b> м"
-        )
-    await safe_reply(message, "\n".join(lines))
+    await send_chat_top(message, "depth", "Топ копания пока пуст. Сначала зарегистрируйтесь и напишите: копай")
 
 
 @router.message(F.text.casefold() == "топ монет")
@@ -3259,18 +7430,7 @@ async def dig_coins_top(message: Message) -> None:
         return
 
     await remember_sender(message)
-    players = db.top_dig_coins(message.chat.id, limit=10)
-    if not players:
-        await safe_reply(message, "Топ монет пока пуст. Сначала зарегистрируйтесь и напишите: копай")
-        return
-
-    lines = ["<b>Топ монет:</b>"]
-    for index, player in enumerate(players, start=1):
-        lines.append(
-            f"{index}. {escape(dig_display_name(player.chat_id, player.user_id, player.username, player.full_name))} - "
-            f"<b>{player.coins}</b> котоинов"
-        )
-    await safe_reply(message, "\n".join(lines))
+    await send_chat_top(message, "coins", "Топ монет пока пуст. Сначала зарегистрируйтесь и напишите: копай")
 
 
 @router.message(F.text.regexp(re.compile(r"^(ролл|рол|roll)\s+(ор[её]л|решка)$", re.IGNORECASE)))
@@ -3339,7 +7499,7 @@ async def coin_roll(message: Message) -> None:
 async def roll_mute(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
         return
-    if not message.from_user or not await is_chat_admin(message.bot, message.chat.id, message.from_user.id):
+    if not message.from_user:
         return
 
     await remember_sender(message)
@@ -3364,14 +7524,7 @@ async def roll_mute(message: Message) -> None:
     picked = None
     last_error = None
     for candidate in candidates:
-        try:
-            member = await message.bot.get_chat_member(message.chat.id, candidate.user_id)
-        except (TelegramBadRequest, TelegramForbiddenError) as exc:
-            last_error = exc
-            continue
-
-        status = member_status_text(member.status)
-        if status in {"left", "kicked"} or member.status in ADMIN_STATUSES or status in ADMIN_STATUS_TEXTS:
+        if not await is_valid_roll_mute_target(message.bot, message.chat.id, candidate.user_id):
             continue
 
         try:
@@ -3425,20 +7578,57 @@ async def roll_mute_top(message: Message) -> None:
         return
 
     await remember_sender(message)
-    stats = db.top_roll_mute_stats(message.chat.id, limit=10)
-    if not stats:
-        await safe_reply(
-            message,
-            "Топ roll mute пока пуст. Статистика считается только для успешных <code>roll mute</code> после обновления бота.",
-        )
+    await send_chat_top(
+        message,
+        "roll",
+        "Топ roll mute пока пуст. Статистика считается только для успешных <code>roll mute</code> после обновления бота.",
+    )
+
+
+@router.message(F.text.regexp(re.compile(r"^(@[A-Za-z0-9_]{5,32}\s+)?затихни\s+админ(?:\s+\d+)?(\s+-\s+.*)?$", re.IGNORECASE)))
+async def quiet_admin_user(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+    if not message.from_user or not await is_chat_admin(message.bot, message.chat.id, message.from_user.id):
         return
 
-    lines = ["<b>Топ roll mute:</b>"]
-    for index, item in enumerate(stats, start=1):
-        name = f"@{item.username}" if item.username else item.full_name
-        lines.append(f"{index}. {escape(name)} - <b>{item.unlucky_count}</b>")
+    await remember_sender(message)
+    parsed = parse_quiet_admin_payload(message.text)
+    if not parsed:
+        await safe_reply(message, "Формат: ответом на сообщение <code>затихни админ 60 - причина</code> или <code>@username затихни админ 60 - причина</code>")
+        return
+    username, minutes, reason = parsed
+    target_id, target_name, error = await resolve_command_target(message, username)
+    if error:
+        await safe_reply(message, error)
+        return
+    if not target_id or not target_name:
+        return
+    member = await get_active_chat_member(message.bot, message.chat.id, target_id)
+    if member is None:
+        await safe_reply(message, "Не нашел этого пользователя среди активных участников чата.")
+        return
+    if member.status not in ADMIN_STATUSES and member_status_text(member.status) not in ADMIN_STATUS_TEXTS:
+        await safe_reply(message, "Команда <code>затихни админ</code> нужна только для администраторов. Для обычных участников используй <code>затихни 10 - причина</code>.")
+        return
 
-    await safe_reply(message, "\n".join(lines))
+    until_at = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    db.set_quiet_admin(
+        chat_id=message.chat.id,
+        user_id=member.user.id,
+        username=member.user.username,
+        full_name=member.user.full_name,
+        reason=reason,
+        until_at=until_at.isoformat(timespec="seconds"),
+        created_by=message.from_user.id,
+    )
+    reason_line = f"\nПричина: {escape(reason)}" if reason else ""
+    await safe_reply(
+        message,
+        f"{escape(target_name)} отправлен в тихий режим на <b>{minutes}</b> мин. "
+        "Новые сообщения и реакции будут удаляться."
+        f"{reason_line}",
+    )
 
 
 @router.message(F.text.regexp(re.compile(r"^(@[A-Za-z0-9_]{5,32}\s+)?затихни\s+\d+(\s+-\s+.*)?$", re.IGNORECASE)))
@@ -3519,6 +7709,18 @@ async def unquiet_user(message: Message) -> None:
     if not target_id or not target_name:
         return
 
+    quiet_admin_cleared = db.clear_quiet_admin(message.chat.id, target_id)
+    if await is_chat_admin(message.bot, message.chat.id, target_id):
+        await safe_reply(
+            message,
+            (
+                f"{escape(target_name)} снова может трещать."
+                if quiet_admin_cleared
+                else f"{escape(target_name)} не был в тихом админ-режиме."
+            ),
+        )
+        return
+
     try:
         await message.bot.restrict_chat_member(
             chat_id=message.chat.id,
@@ -3534,7 +7736,8 @@ async def unquiet_user(message: Message) -> None:
         )
         return
 
-    await safe_reply(message, f"{escape(target_name)} снова может трещать.")
+    suffix = " Тихий админ-режим тоже снят." if quiet_admin_cleared else ""
+    await safe_reply(message, f"{escape(target_name)} снова может трещать.{suffix}")
 
 
 @router.message(F.text.casefold() == "в цитаты")
@@ -3544,7 +7747,7 @@ async def add_quote(message: Message) -> None:
 
     await remember_sender(message)
     source = message.reply_to_message
-    quote_text = source.html_text or source.text or source.caption or source.html_caption
+    quote_text = source.html_text or getattr(source, "html_caption", None) or source.text or source.caption
     if not quote_text:
         await safe_reply(message, "В цитату можно добавить только текстовое сообщение.")
         return
@@ -3567,6 +7770,73 @@ async def random_quote(message: Message) -> None:
 
     author = f"\n\n— {escape(quote.author_name)}" if quote.author_name else ""
     await safe_reply(message, f"<b>Цитата #{quote.id}</b>\n{quote.text}{author}")
+
+
+@router.message(F.text.casefold() == "все цитаты")
+async def all_quotes(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+
+    await remember_sender(message)
+    quotes = db.list_quotes(message.chat.id)
+    if not quotes:
+        await safe_reply(message, "Цитат пока нет. Ответь на сообщение фразой: в цитаты")
+        return
+
+    lines = [f"<b>Все цитаты:</b> {len(quotes)}"]
+    for index, quote in enumerate(quotes, start=1):
+        author = f" — {escape(quote.author_name)}" if quote.author_name else ""
+        lines.append(f"{index}. {preview_html(quote.text, limit=180)}{author}")
+
+    await safe_reply_chunks(message, lines, disable_web_page_preview=True)
+
+
+@router.message(F.text.regexp(re.compile(r"^цитата\s+\d+$", re.IGNORECASE)))
+async def quote_by_number(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+
+    await remember_sender(message)
+    match = re.search(r"\d+", message.text or "")
+    if not match:
+        return
+
+    index = int(match.group(0))
+    quotes = db.list_quotes(message.chat.id)
+    if index < 1 or index > len(quotes):
+        await safe_reply(message, f"Цитаты с номером {index} нет. Напиши <code>все цитаты</code>, чтобы увидеть список.")
+        return
+
+    quote = quotes[index - 1]
+    author = f"\n\n— {escape(quote.author_name)}" if quote.author_name else ""
+    await safe_reply(message, f"<b>Цитата №{index}</b>\n{quote.text}{author}")
+
+
+@router.message(F.text.regexp(re.compile(r"^удалить\s+цитату\s+\d+$", re.IGNORECASE)))
+async def delete_quote(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+    if not message.from_user or not is_bot_admin(message.from_user.id):
+        return
+
+    await remember_sender(message)
+    match = re.search(r"\d+", message.text or "")
+    if not match:
+        return
+
+    index = int(match.group(0))
+    quotes = db.list_quotes(message.chat.id)
+    if index < 1 or index > len(quotes):
+        await safe_reply(message, f"Цитаты с номером {index} нет. Напиши <code>все цитаты</code>, чтобы увидеть список.")
+        return
+
+    quote = quotes[index - 1]
+    deleted = db.delete_quote(message.chat.id, quote.id)
+    if not deleted:
+        await safe_reply(message, "Не получилось удалить цитату: она уже удалена.")
+        return
+
+    await safe_reply(message, f"Удалена цитата №{index}.")
 
 
 @router.message(F.text.regexp(re.compile(r"^опрос\s+.+", re.IGNORECASE)))
@@ -3623,6 +7893,7 @@ async def add_blacklist_word(message: Message) -> None:
 
     word = split_command_payload(message.text)
     db.add_blacklist_word(message.chat.id, word, message.from_user.id if message.from_user else None)
+    invalidate_chat_runtime_cache(message.chat.id)
     await safe_reply(message, f"Слово добавлено в черный список: <b>{escape(normalize_trigger(word))}</b>")
 
 
@@ -3635,12 +7906,15 @@ async def delete_blacklist_word(message: Message) -> None:
 
     word = split_command_payload(message.text)
     deleted = db.delete_blacklist_word(message.chat.id, word)
+    invalidate_chat_runtime_cache(message.chat.id)
     await safe_reply(message, "Слово удалено из черного списка." if deleted else "Такого слова в черном списке нет.")
 
 
 @router.message(F.text.casefold() == "черный список")
 async def list_blacklist_words(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+    if not await require_admin(message):
         return
 
     words = db.list_blacklist_words(message.chat.id)
@@ -3651,24 +7925,6 @@ async def list_blacklist_words(message: Message) -> None:
     lines = ["<b>Черный список:</b>"]
     lines.extend(f"{index}. {escape(item.word)}" for index, item in enumerate(words, start=1))
     await safe_reply(message, "\n".join(lines))
-
-
-@router.message(F.text.regexp(re.compile(r"^бот[, ]\s*.+", re.IGNORECASE)))
-async def ai_answer(message: Message) -> None:
-    if message.chat.type not in SUPPORTED_CHAT_TYPES:
-        return
-
-    prompt = extract_ai_prompt(message.text)
-    if not prompt:
-        return
-
-    await remember_sender(message)
-    try:
-        answer = await fetch_ai_answer(prompt)
-    except Exception as exc:
-        await safe_reply(message, f"AI не ответил: <code>{escape(str(exc))}</code>")
-        return
-    await safe_reply(message, answer)
 
 
 @router.message(F.text.regexp(re.compile(r"^погода\s+.+", re.IGNORECASE)))
@@ -3705,8 +7961,6 @@ async def handle_auto_reply(message: Message) -> None:
 
     await remember_sender(message)
     await handle_birthdays(message)
-    if await handle_blacklist(message):
-        return
 
     if await handle_alarm_mode(message):
         return
@@ -3714,28 +7968,109 @@ async def handle_auto_reply(message: Message) -> None:
     if message.text and await handle_day_pick(message):
         return
 
-    answers: list[str] = []
+    answers = []
+    normalized_text = normalize_trigger(text)
     trigger_answers = [
-        item.text
-        for item in db.list_triggers(message.chat.id)
-        if has_trigger(text, item.trigger)
+        item
+        for item in cached_triggers(message.chat.id)
+        if has_normalized_trigger(normalized_text, item.trigger)
     ]
     if trigger_answers:
         answers.append(random.choice(trigger_answers))
 
     mentions = extract_mentions(text)
     if mentions:
-        answers.extend(item.text for item in db.replies_for_mentions(message.chat.id, mentions))
+        replies = cached_replies_map(message.chat.id)
+        answers.extend(replies[normalize_username(username)] for username in mentions if normalize_username(username) in replies)
 
     if not answers:
         return
 
-    await safe_reply(message, "\n\n".join(answers), disable_web_page_preview=True)
+    for item in answers:
+        await send_auto_reply_item(message, item)
+
+
+def advertisement_due(advertisement, now: datetime) -> bool:
+    if not advertisement.enabled:
+        return False
+    if not advertisement.first_sent_at and advertisement.scheduled_at:
+        try:
+            scheduled_at = datetime.fromisoformat(advertisement.scheduled_at)
+            if scheduled_at.tzinfo is None:
+                scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+            if now < scheduled_at.astimezone(now.tzinfo):
+                return False
+        except ValueError:
+            return False
+    if advertisement.duration_type == "once" and advertisement.last_sent_at:
+        return False
+    if advertisement.duration_type == "day" and advertisement.first_sent_at:
+        try:
+            first_sent = datetime.fromisoformat(advertisement.first_sent_at)
+            if first_sent.tzinfo is None:
+                first_sent = first_sent.replace(tzinfo=timezone.utc)
+            if (now - first_sent.astimezone(now.tzinfo)).total_seconds() >= 24 * 60 * 60:
+                return False
+        except ValueError:
+            pass
+    if not advertisement.last_sent_at:
+        return True
+    try:
+        last_sent = datetime.fromisoformat(advertisement.last_sent_at)
+        if last_sent.tzinfo is None:
+            last_sent = last_sent.replace(tzinfo=timezone.utc)
+        last_sent = last_sent.astimezone(now.tzinfo)
+    except ValueError:
+        return True
+    return (now - last_sent).total_seconds() >= max(1, advertisement.interval_minutes) * 60
+
+
+async def advertisement_loop(bot: Bot) -> None:
+    while True:
+        now = datetime.now().astimezone()
+        for chat in db.list_chats():
+            ads = db.list_advertisements(chat.chat_id)
+            for ad in ads:
+                if not advertisement_due(ad, now):
+                    continue
+                try:
+                    thread_kwargs = {"message_thread_id": ad.topic_thread_id} if ad.topic_thread_id else {}
+                    attachments = db.list_advertisement_attachments(ad.id)
+                    if attachments:
+                        caption = ad.text if len(ad.text) <= 1024 else None
+                        media = [
+                            (
+                                InputMediaPhoto(media=item.file_id, caption=caption if position == 0 else None, parse_mode=None)
+                                if item.media_type == "photo"
+                                else InputMediaVideo(media=item.file_id, caption=caption if position == 0 else None, parse_mode=None)
+                            )
+                            for position, item in enumerate(attachments)
+                        ]
+                        if len(media) == 1:
+                            item = attachments[0]
+                            if item.media_type == "photo":
+                                await bot.send_photo(chat.chat_id, item.file_id, caption=caption, parse_mode=None, **thread_kwargs)
+                            else:
+                                await bot.send_video(chat.chat_id, item.file_id, caption=caption, parse_mode=None, **thread_kwargs)
+                        else:
+                            await bot.send_media_group(chat.chat_id, media=media, **thread_kwargs)
+                        if caption is None:
+                            await bot.send_message(chat.chat_id, ad.text, parse_mode=None, disable_web_page_preview=False, **thread_kwargs)
+                    else:
+                        await bot.send_message(chat.chat_id, ad.text, parse_mode=None, disable_web_page_preview=False, **thread_kwargs)
+                    db.mark_advertisement_sent(ad.id, now.isoformat(timespec="seconds"))
+                except Exception as exc:
+                    db.mark_advertisement_failed(ad.id, str(exc))
+                    logging.exception("Advertisement %s send failed for chat %s: %s", ad.id, chat.chat_id, exc)
+        await asyncio.sleep(30)
 
 
 @router.message(F.chat.type == "private")
 async def private_fallback(message: Message) -> None:
-    await message.answer("Выбери группу и действие кнопками.", reply_markup=main_menu())
+    await message.answer(
+        "Выбери группу и действие кнопками.",
+        reply_markup=await main_menu_for_user(message.bot, message.from_user.id if message.from_user else None),
+    )
 
 
 @router.message(F.text | F.caption)
@@ -3749,26 +8084,66 @@ async def main() -> None:
 
     global db
     global BOT_ADMIN_IDS
+    global ALERTS_API_TOKEN
+    global staff_service
+    global premium_service
     BOT_ADMIN_IDS = config.bot_admin_ids
+    ALERTS_API_TOKEN = config.alerts_api_token
     db = Database(config.db_path)
     db.init()
+    premium_service = PremiumService(config.db_path)
+    staff_service = StaffService(config.db_path, config.owner_id)
+    configure_staff(staff_service)
     awarded = backfill_dig_achievements()
     if awarded:
         logging.info("Backfilled dig achievements: %s", awarded)
 
     bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher()
+    staff_router.message.middleware(StaffTopicMiddleware())
     router.message.middleware(DropStaleMessagesMiddleware())
+    router.message.middleware(StaffTopicMiddleware())
+    router.message.middleware(AuditAdminStateMiddleware())
+    router.message.middleware(QuietAdminMiddleware())
+    router.message.middleware(AlarmEmojiMiddleware())
+    router.message.middleware(BlacklistMiddleware())
+    router.callback_query.middleware(StaleCallbackQueryMiddleware())
+    router.callback_query.middleware(AuditCallbackMiddleware())
+    dispatcher.include_router(staff_router)
     dispatcher.include_router(router)
+    dispatcher.errors.register(staff_error_handler)
 
     try:
         await bot.get_me()
+        if staff_service.chat_id is not None:
+            missing_topics = staff_service.sync_known_topics()
+            for topic in missing_topics:
+                await staff_service.log(bot, "WARNING", f"Staff-тема не найдена: {topic}")
+        await staff_service.send(bot, "status", "🟢 Бот запущен")
         await send_restart_panel_if_needed(bot)
-        await dispatcher.start_polling(bot, allowed_updates=["message", "callback_query", "message_reaction"])
+        advertisement_task = asyncio.create_task(advertisement_loop(bot))
+        alerts_task = asyncio.create_task(alerts_monitor_loop(bot))
+        await dispatcher.start_polling(
+            bot,
+            allowed_updates=["message", "callback_query", "message_reaction", "pre_checkout_query", "my_chat_member"],
+        )
     except TelegramNotFound as exc:
         raise RuntimeError("Telegram rejected BOT_TOKEN. Check .env and paste the real token from BotFather.") from exc
     finally:
+        if "advertisement_task" in locals():
+            advertisement_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await advertisement_task
+        if "alerts_task" in locals():
+            alerts_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await alerts_task
+        if staff_service:
+            await staff_service.send(bot, "status", "🔴 Бот остановлен")
         await bot.session.close()
+        if staff_service:
+            staff_service.close()
+        premium_service.close()
         db.close()
 
 

@@ -1,0 +1,17 @@
+.env
+*.sqlite3
+*.sqlite3-*
+*.backup*
+bot.sqlite3.backup*
+admin_access_keys.json
+downloads/
+logs/
+media_storage/
+*.apk
+*.aab
+__pycache__/
+*.py[cod]
+.git/
+.venv/
+venv/
+bot.lock
