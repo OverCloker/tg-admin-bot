@@ -2014,7 +2014,19 @@ ADMIN_PANEL_HTML = r"""
           <div class="muted">Окончание: ${escapeHtml(item.expires_at)}</div>
         </div>
       `).join("");
-      return `<p class="muted">Подписок: ${premiumSubscriptions.total || 0}</p>${rows || `<p class="muted">Покупок Premium пока нет.</p>`}`;
+      const grantForm = ownerActionsAllowed ? `
+        <div class="form-stack">
+          <h2>Выдать Premium</h2>
+          <input id="premiumUserId" placeholder="User ID">
+          <select id="premiumPlan">
+            <option value="basic">Базовый Premium - 50 Stars</option>
+            <option value="extended">Расширенный Premium - 100 Stars</option>
+          </select>
+          <input id="premiumDays" placeholder="Дней" value="30">
+          <button onclick="grantPremium()">Выдать Premium</button>
+        </div>
+      ` : "";
+      return `${grantForm}<h2 style="margin-top:16px">Подписки</h2><p class="muted">Подписок: ${premiumSubscriptions.total || 0}</p>${rows || `<p class="muted">Покупок Premium пока нет.</p>`}`;
     }
 
     function analyticsForm() {
@@ -2405,6 +2417,18 @@ ADMIN_PANEL_HTML = r"""
       afterAction("Игрок обновлен");
     }
 
+    async function grantPremium() {
+      const payload = {
+        userId: Number(val("premiumUserId")),
+        plan: document.getElementById("premiumPlan").value,
+        days: Number(val("premiumDays") || 30)
+      };
+      await api(`/admin/premium/grant`, { method: "POST", body: JSON.stringify(payload) });
+      premiumSubscriptions = await api("/admin/premium/subscriptions");
+      document.getElementById("actionBody").innerHTML = premiumSubscriptionsForm();
+      toast("Premium выдан");
+    }
+
     async function saveAppSettings() {
       const settings = loadAppSettings();
       settings.theme = document.getElementById("themeSelect").value;
@@ -2690,6 +2714,12 @@ class DigGrantPayload(BaseModel):
     clearCooldown: bool = False
 
 
+class PremiumGrantPayload(BaseModel):
+    userId: int
+    plan: str = Field(pattern=r"^(basic|extended)$")
+    days: int = Field(default=PREMIUM_PERIOD_DAYS, ge=1, le=3660)
+
+
 class MediaTaskCreatePayload(BaseModel):
     taskType: str = Field(min_length=1)
     sourceFileId: str | None = None
@@ -2925,6 +2955,7 @@ def api_audit_action(method: str, path: str) -> str:
         ("roll-mute", "Изменил Roll mute"),
         ("giveaway", "Изменил розыгрыш"),
         ("dig/grant", "Изменил ресурсы шахты"),
+        ("premium/grant", "Выдал Premium"),
         ("/message", "Отправил сообщение через панель"),
         ("/media", "Отправил медиа через панель"),
         ("feedback", "Отправил обратную связь"),
@@ -4815,6 +4846,38 @@ def admin_premium_subscriptions() -> dict[str, Any]:
             item["planTitle"] = PLANS[item["plan"]].title if item["plan"] in PLANS else item["plan"]
             items.append(item)
         return {"items": items, "total": len(items)}
+    finally:
+        premium.close()
+
+
+@app.post("/admin/premium/grant", dependencies=[Depends(require_admin)])
+def admin_premium_grant(payload: PremiumGrantPayload) -> dict[str, Any]:
+    require_owner_action()
+    premium = PremiumService(load_config().db_path)
+    try:
+        now = datetime.now(timezone.utc)
+        base = now
+        current = premium.get_user_subscription(payload.userId)
+        if current and current["status"] == "active" and current["plan"] == payload.plan:
+            try:
+                current_expiry = datetime.fromisoformat(current["expires_at"])
+                if current_expiry > now:
+                    base = current_expiry
+            except (TypeError, ValueError):
+                pass
+        expires_at = base + timedelta(days=payload.days)
+        subscription = premium.activate_subscription(
+            user_id=payload.userId,
+            plan=payload.plan,
+            telegram_payment_charge_id=f"manual:{current_actor_id() or 'unknown'}",
+            provider_payment_charge_id=None,
+            expires_at=expires_at,
+        )
+        premium.log(
+            "INFO",
+            f"Premium granted manually: actor={current_actor_id()}, user={payload.userId}, plan={payload.plan}, days={payload.days}",
+        )
+        return {"ok": True, "subscription": dict(subscription) if subscription else None}
     finally:
         premium.close()
 
