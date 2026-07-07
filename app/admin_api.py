@@ -33,7 +33,7 @@ from .config import load_config
 from .db import Database, normalize_trigger, normalize_username, utc_now
 from .media_tasks import MediaTaskService, SUPPORTED_TASK_TYPES
 from .media_processor import find_ffmpeg
-from .premium import PLANS, PremiumError, PremiumLimitError, PremiumRequiredError, PremiumService, plan_public_dict
+from .premium import PLANS, PREMIUM_PERIOD_DAYS, PremiumError, PremiumLimitError, PremiumRequiredError, PremiumService, plan_public_dict
 from .staff import StaffService
 from .user_profile import build_user_profile
 from .youtube_media import DOWNLOAD_TYPES, YoutubeMediaError, cleanup_youtube_file, download_youtube, inspect_youtube
