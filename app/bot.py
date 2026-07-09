@@ -1000,6 +1000,8 @@ async def get_active_chat_member(bot: Bot, chat_id: int, user_id: int):
     status = member_status_text(member.status)
     if status not in ACTIVE_MEMBER_STATUS_TEXTS:
         return None
+    if status == "restricted" and getattr(member, "is_member", True) is False:
+        return None
     if member.user.is_bot:
         return None
     return member
@@ -6915,7 +6917,14 @@ async def handle_day_pick(message: Message) -> bool:
 
     lines = [f"<b>{escape(settings.title)}:</b>"]
     for index, user in enumerate(picked, start=1):
-        lines.append(f"{index}. @{escape(user.username or user.full_name)}")
+        link = await current_profile_link(
+            message.bot,
+            message.chat.id,
+            user.user_id,
+            user.username,
+            user.full_name,
+        )
+        lines.append(f"{index}. {link}")
     await safe_reply(message, "\n".join(lines))
     return True
 
