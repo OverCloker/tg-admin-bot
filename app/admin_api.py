@@ -11,6 +11,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import aiohttp
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
@@ -45,8 +46,10 @@ YOUTUBE_WORKER_TASK: asyncio.Task | None = None
 CURRENT_ADMIN_ACTOR_ID: ContextVar[int | None] = ContextVar("current_admin_actor_id", default=None)
 CURRENT_ADMIN_CHAT_ID: ContextVar[int | None] = ContextVar("current_admin_chat_id", default=None)
 SESSION_TOKENS: dict[str, dict[str, Any]] = {}
+ADMIN_MEMBERSHIP_CACHE: dict[tuple[int, int], tuple[float, bool]] = {}
+ADMIN_MEMBERSHIP_CACHE_SECONDS = 45
 ACCESS_KEY_PREFIX = "tbp_"
-ACCESS_SESSION_HOURS = 24 * 30
+ACCESS_SESSION_HOURS = 24 * 7
 USER_SESSION_PREFIX = "usr_"
 USER_LOGIN_TTL_MINUTES = 10
 USER_SESSION_DAYS = 180
@@ -170,11 +173,18 @@ async def notify_staff_critical(text: str) -> None:
 
 
 async def youtube_queue_worker() -> None:
+    next_cleanup_at = 0.0
     while True:
         media = MediaTaskService(load_config().db_path)
         task = None
         output_path = None
         try:
+            now = asyncio.get_running_loop().time()
+            if now >= next_cleanup_at:
+                next_cleanup_at = now + 60 * 60
+                removed = media.cleanup_stale_files(max_age_hours=24)
+                if removed:
+                    media.premium.log("INFO", f"Expired media files removed: {removed}")
             task = media.claim_next_youtube_task()
             if task is None:
                 await asyncio.sleep(3)
@@ -182,16 +192,17 @@ async def youtube_queue_worker() -> None:
             download_type = task.source_file_id or ""
             if download_type not in DOWNLOAD_TYPES or not task.source_file_path:
                 raise YoutubeMediaError("YouTube-задача содержит некорректные параметры.")
+            plan = media.premium.get_user_plan(task.user_id)
+            if plan is None:
+                raise PremiumRequiredError("Для этой функции нужен Premium.")
             output_path = await asyncio.to_thread(
                 download_youtube,
                 task.source_file_path,
                 download_type,
                 task.id,
+                plan.max_file_size_bytes,
             )
             actual_size = os.path.getsize(output_path)
-            plan = media.premium.get_user_plan(task.user_id)
-            if plan is None:
-                raise PremiumRequiredError("Для этой функции нужен Premium.")
             if actual_size > plan.max_file_size_bytes:
                 cleanup_youtube_file(output_path)
                 output_path = None
@@ -829,7 +840,7 @@ ADMIN_PANEL_HTML = r"""
 
     function key() {
       const field = document.getElementById("settingsApiKey") || document.getElementById("apiKey");
-      return localStorage.getItem("adminSessionToken") || localStorage.getItem("adminApiKey") || (field ? field.value.trim() : "");
+      return localStorage.getItem("adminSessionToken") || (field ? field.value.trim() : "");
     }
 
     function headers() {
@@ -887,15 +898,6 @@ ADMIN_PANEL_HTML = r"""
           ...options,
           headers: { ...headers(), ...(options.headers || {}) }
         });
-        if (response.status === 401 && localStorage.getItem("adminApiKey")) {
-          const restored = await restoreSession();
-          if (restored) {
-            response = await fetch(path, {
-              ...options,
-              headers: { ...headers(), ...(options.headers || {}) }
-            });
-          }
-        }
         const durationMs = Math.round(performance.now() - started);
         if (!path.startsWith("/admin/analytics")) {
           reportAdminAnalytics(`api:${path}`, response.ok ? "api" : "error", {
@@ -927,23 +929,6 @@ ADMIN_PANEL_HTML = r"""
       }
     }
 
-    async function restoreSession() {
-      const accessKey = localStorage.getItem("adminApiKey") || "";
-      if (!accessKey) return false;
-      const response = await fetch("/admin/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accessKey })
-      });
-      if (!response.ok) {
-        localStorage.removeItem("adminSessionToken");
-        return false;
-      }
-      const session = await response.json();
-      localStorage.setItem("adminSessionToken", session.sessionToken);
-      return true;
-    }
-
     async function saveKey() {
       const field = document.getElementById("settingsApiKey") || document.getElementById("apiKey");
       const accessKey = field ? field.value.trim() : "";
@@ -963,18 +948,18 @@ ADMIN_PANEL_HTML = r"""
       }
       const session = await response.json();
       localStorage.setItem("adminSessionToken", session.sessionToken);
-      localStorage.setItem("adminApiKey", accessKey);
+      localStorage.removeItem("adminApiKey");
+      if (field) field.value = "";
       syncKeyFields();
       toast("Вход выполнен");
       loadAll();
     }
 
     function syncKeyFields() {
-      const saved = localStorage.getItem("adminApiKey") || "";
       const legacy = document.getElementById("apiKey");
       const settings = document.getElementById("settingsApiKey");
-      if (legacy) legacy.value = saved;
-      if (settings) settings.value = saved;
+      if (legacy) legacy.value = "";
+      if (settings) settings.value = "";
     }
 
     function canView(feature) {
@@ -2770,21 +2755,20 @@ class AnalyticsPayload(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-def telegram_user_id_header(x_telegram_user_id: Annotated[int | None, Header(alias="X-Telegram-User-Id")] = None) -> int:
-    # TODO: replace this temporary header with Telegram initData/Auth verification.
-    if x_telegram_user_id is None or x_telegram_user_id <= 0:
-        raise HTTPException(status_code=401, detail="X-Telegram-User-Id header is required")
-    return int(x_telegram_user_id)
-
-
-def require_public_stream_url(raw_url: str) -> str:
+def resolve_public_stream_url(raw_url: str) -> tuple[str, str, tuple[str, ...]]:
     parsed = urlparse(raw_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
         raise HTTPException(status_code=422, detail="Поток радиостанции должен быть http/https ссылкой.")
+    hostname = parsed.hostname.rstrip(".").casefold()
     try:
-        addresses = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="Некорректный порт радиопотока.") from error
+    try:
+        addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
     except socket.gaierror as error:
         raise HTTPException(status_code=422, detail="Не удалось проверить адрес радиопотока.") from error
+    approved: list[str] = []
     for item in addresses:
         host = item[4][0]
         try:
@@ -2793,7 +2777,95 @@ def require_public_stream_url(raw_url: str) -> str:
             raise HTTPException(status_code=422, detail="Некорректный адрес радиопотока.")
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
             raise HTTPException(status_code=422, detail="Радиопоток ведет на запрещенный внутренний адрес.")
-    return raw_url
+        normalized = str(ip)
+        if normalized not in approved:
+            approved.append(normalized)
+    if not approved:
+        raise HTTPException(status_code=422, detail="Не удалось проверить адрес радиопотока.")
+    return raw_url, hostname, tuple(approved)
+
+
+def require_public_stream_url(raw_url: str) -> str:
+    return resolve_public_stream_url(raw_url)[0]
+
+
+class PinnedPublicResolver(aiohttp.abc.AbstractResolver):
+    def __init__(self, hostname: str, addresses: tuple[str, ...]) -> None:
+        self.hostname = hostname
+        self.addresses = addresses
+
+    async def resolve(self, host: str, port: int = 0, family: int = socket.AF_INET) -> list[dict[str, Any]]:
+        if host.rstrip(".").casefold() != self.hostname:
+            raise OSError("Unexpected hostname during pinned radio connection")
+        records: list[dict[str, Any]] = []
+        for address in self.addresses:
+            ip = ipaddress.ip_address(address)
+            address_family = socket.AF_INET6 if ip.version == 6 else socket.AF_INET
+            if family not in {socket.AF_UNSPEC, address_family}:
+                continue
+            records.append(
+                {
+                    "hostname": host,
+                    "host": address,
+                    "port": port,
+                    "family": address_family,
+                    "proto": socket.IPPROTO_TCP,
+                    "flags": socket.AI_NUMERICHOST,
+                }
+            )
+        if not records:
+            raise OSError("No approved address for requested family")
+        return records
+
+    async def close(self) -> None:
+        return None
+
+
+async def download_public_stream_sample(
+    raw_url: str,
+    output_path: str,
+    *,
+    max_bytes: int = 24 * 1024 * 1024,
+    max_seconds: float = 18.0,
+) -> None:
+    checked_url, hostname, addresses = resolve_public_stream_url(raw_url)
+    connector = aiohttp.TCPConnector(
+        resolver=PinnedPublicResolver(hostname, addresses),
+        use_dns_cache=False,
+        force_close=True,
+        limit=1,
+    )
+    timeout = aiohttp.ClientTimeout(total=max_seconds + 5, connect=10, sock_read=8)
+    started = time.monotonic()
+    total = 0
+    try:
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout, auto_decompress=False) as session:
+            async with session.get(
+                checked_url,
+                allow_redirects=False,
+                headers={"User-Agent": "MonkeyDin/0.3", "Icy-MetaData": "0"},
+            ) as response:
+                if response.status < 200 or response.status >= 300:
+                    raise HTTPException(status_code=502, detail="Радиопоток вернул ошибку.")
+                declared_size = response.content_length
+                if declared_size is not None and declared_size > max_bytes:
+                    raise HTTPException(status_code=413, detail="Фрагмент радиопотока слишком большой.")
+                with open(output_path, "wb") as target:
+                    async for chunk in response.content.iter_chunked(64 * 1024):
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise HTTPException(status_code=413, detail="Фрагмент радиопотока слишком большой.")
+                        target.write(chunk)
+                        if time.monotonic() - started >= max_seconds:
+                            break
+    except HTTPException:
+        raise
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as error:
+        raise HTTPException(status_code=502, detail="Не удалось безопасно получить радиопоток.") from error
+    if total < 1024:
+        raise HTTPException(status_code=502, detail="Радиопоток не передал достаточно данных.")
 
 
 def admin_api_key() -> str:
@@ -2936,6 +3008,15 @@ def access_session(token: str) -> dict[str, Any] | None:
     if not isinstance(expires_at, datetime) or datetime.now(timezone.utc) >= expires_at:
         SESSION_TOKENS.pop(token, None)
         return None
+    key_id = item.get("keyId")
+    if key_id is not None:
+        key_is_active = any(
+            stored.get("id") == key_id and not stored.get("revokedAt")
+            for stored in load_access_keys()
+        )
+        if not key_is_active:
+            SESSION_TOKENS.pop(token, None)
+            return None
     return item
 
 
@@ -2978,6 +3059,17 @@ async def audit_api_request(request: Request, call_next):
         response = await call_next(request)
     finally:
         CURRENT_ADMIN_CHAT_ID.reset(chat_token)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; media-src 'self' blob: https: http:; connect-src 'self' https:; "
+        "object-src 'none'; frame-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    )
+    if request.url.path.startswith(("/admin", "/user", "/premium", "/media", "/youtube")):
+        response.headers.setdefault("Cache-Control", "no-store")
     if request.url.path.startswith("/user/"):
         return response
     if request.method not in {"POST", "PUT", "DELETE"} or response.status_code >= 400:
@@ -3018,6 +3110,32 @@ async def audit_api_request(request: Request, call_next):
     return response
 
 
+async def live_chat_admin(user_id: int, chat_id: int) -> bool:
+    cache_key = (chat_id, user_id)
+    now = asyncio.get_running_loop().time()
+    cached = ADMIN_MEMBERSHIP_CACHE.get(cache_key)
+    # Positive authorization decisions are never cached: a Telegram admin may
+    # be removed at any moment. Short negative caching only limits abuse.
+    if cached and cached[0] > now and not cached[1]:
+        return False
+    config = load_config()
+    bot = Bot(token=config.bot_token)
+    allowed = False
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+        status = getattr(member.status, "value", member.status)
+        allowed = status in {"administrator", "creator"}
+    except (TelegramBadRequest, TelegramForbiddenError):
+        allowed = False
+    finally:
+        await bot.session.close()
+    if allowed:
+        ADMIN_MEMBERSHIP_CACHE.pop(cache_key, None)
+    else:
+        ADMIN_MEMBERSHIP_CACHE[cache_key] = (now + ADMIN_MEMBERSHIP_CACHE_SECONDS, False)
+    return allowed
+
+
 async def require_admin(authorization: Annotated[str | None, Header()] = None) -> None:
     key = admin_api_key()
     if not key:
@@ -3030,7 +3148,13 @@ async def require_admin(authorization: Annotated[str | None, Header()] = None) -
         return
     session = access_session(token)
     if session:
-        CURRENT_ADMIN_ACTOR_ID.set(int(session["userId"]))
+        actor_id = int(session["userId"])
+        chat_id = CURRENT_ADMIN_CHAT_ID.get()
+        config = load_config()
+        if actor_id not in config.bot_admin_ids and actor_id != config.owner_id:
+            if chat_id is not None and not await live_chat_admin(actor_id, chat_id):
+                raise HTTPException(status_code=403, detail="Права администратора этой группы больше не действуют.")
+        CURRENT_ADMIN_ACTOR_ID.set(actor_id)
         return
     raise HTTPException(status_code=401, detail="Invalid admin API key")
 
@@ -3296,6 +3420,14 @@ async def create_media_task(
     config = load_config()
     media = MediaTaskService(config.db_path)
     user_id = int(user["userId"])
+    if payload.taskType in {
+        "youtube_video", "youtube_audio", "youtube_music_audio",
+        "instagram_video", "instagram_audio",
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail="Сетевые загрузки создаются только через /youtube/download с проверкой URL и размера.",
+        )
     try:
         task = media.create_media_task(
             user_id=user_id,
@@ -3426,14 +3558,17 @@ def user_auth_status(payload: UserLoginStatusPayload) -> dict[str, Any]:
             return {"status": "pending"}
         raw_token = USER_SESSION_PREFIX + secrets.token_urlsafe(36)
         expires_at = datetime.now(timezone.utc) + timedelta(days=USER_SESSION_DAYS)
-        db.create_user_session(
+        consumed = db.consume_user_login_and_create_session(
+            request.login_id,
+            hash_secret(payload.secret),
             hash_secret(raw_token),
             request.user_id,
             request.username,
             request.full_name or str(request.user_id),
             expires_at.isoformat(timespec="seconds"),
         )
-        db.consume_user_login(request.login_id)
+        if not consumed:
+            raise HTTPException(status_code=410, detail="Login request already used")
         return {
             "status": "approved",
             "userToken": raw_token,
@@ -3527,9 +3662,12 @@ async def user_radio_recognize(
     if not token:
         raise HTTPException(status_code=503, detail="Распознавание треков пока не настроено.")
     premium = PremiumService(load_config().db_path)
+    user_id = int(user["userId"])
+    slot_claimed = False
     try:
         try:
-            plan = premium.check_radio_recognition_limit(int(user["userId"]))
+            plan = premium.claim_radio_recognition_slot(user_id)
+            slot_claimed = True
         except PremiumRequiredError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
         except PremiumLimitError as error:
@@ -3547,9 +3685,10 @@ async def user_radio_recognize(
             station_url = stations[0].get("url_resolved") or stations[0].get("url")
             if not station_url:
                 raise HTTPException(status_code=422, detail="У станции нет рабочего потока.")
-            station_url = require_public_stream_url(str(station_url))
             with tempfile.TemporaryDirectory(prefix="monkeydin-radio-") as temp_dir:
+                stream_path = os.path.join(temp_dir, "stream-source")
                 sample_path = os.path.join(temp_dir, "sample.mp3")
+                await download_public_stream_sample(str(station_url), stream_path)
                 command = [
                     find_ffmpeg(),
                     "-hide_banner",
@@ -3557,11 +3696,9 @@ async def user_radio_recognize(
                     "error",
                     "-y",
                     "-protocol_whitelist",
-                    "http,https,tcp,tls,crypto",
-                    "-http_follow_redirects",
-                    "0",
+                    "file,pipe",
                     "-i",
-                    station_url,
+                    stream_path,
                     "-t",
                     "15",
                     "-vn",
@@ -3585,12 +3722,11 @@ async def user_radio_recognize(
                 result = await response.json(content_type=None)
         if result.get("status") != "success":
             raise HTTPException(status_code=502, detail="Сервис распознавания временно недоступен.")
-        premium.increment_radio_recognition_usage(int(user["userId"]))
         track = result.get("result")
         if not track:
             return {
                 "found": False,
-                "usageToday": premium.daily_radio_recognition_usage(int(user["userId"])),
+                "usageToday": premium.daily_radio_recognition_usage(user_id),
                 "limit": plan.daily_radio_recognitions,
             }
         spotify = track.get("spotify") or {}
@@ -3605,7 +3741,7 @@ async def user_radio_recognize(
         }
         if plan.radio_track_history:
             premium.add_radio_track(
-                int(user["userId"]),
+                user_id,
                 payload.stationName.strip(),
                 item["artist"],
                 item["title"],
@@ -3616,9 +3752,13 @@ async def user_radio_recognize(
             "found": True,
             "track": item,
             "savedToHistory": plan.radio_track_history,
-            "usageToday": premium.daily_radio_recognition_usage(int(user["userId"])),
+            "usageToday": premium.daily_radio_recognition_usage(user_id),
             "limit": plan.daily_radio_recognitions,
         }
+    except Exception:
+        if slot_claimed:
+            premium.release_radio_recognition_slot(user_id)
+        raise
     finally:
         premium.close()
 
@@ -3648,14 +3788,14 @@ async def user_link_preview(
         premium.close()
     url = payload.url.strip()
     parsed = urlparse(url)
-    host = parsed.netloc.lower()
-    if parsed.scheme not in {"http", "https"}:
+    host = (parsed.hostname or "").casefold().rstrip(".")
+    if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
         raise HTTPException(status_code=400, detail="Поддерживаются только http/https ссылки.")
-    if "spotify.com" in host:
+    if host in {"open.spotify.com", "spotify.com", "www.spotify.com"}:
         return await preview_spotify_link(url)
-    if "soundcloud.com" in host:
+    if host in {"soundcloud.com", "www.soundcloud.com", "m.soundcloud.com"}:
         return await preview_soundcloud_link(url)
-    if "instagram.com" in host:
+    if host in {"instagram.com", "www.instagram.com"}:
         return {
             "platform": "instagram",
             "title": "Instagram Reels",
@@ -3734,7 +3874,7 @@ async def preview_spotify_public_link(url: str, item_type: str) -> dict[str, Any
                     title = data.get("title") or title
                     artwork = data.get("thumbnail_url") or artwork
         with suppress(aiohttp.ClientError, asyncio.TimeoutError):
-            async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as response:
+            async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=False) as response:
                 if response.status < 400:
                     page = await response.text()
                     page_title = extract_html_title(page)
@@ -3837,6 +3977,7 @@ def auth_login(payload: AccessLoginPayload) -> dict[str, Any]:
     config = load_config()
     actor_id: int | None = None
     label = "master"
+    key_id: str | None = None
     if master_key and secrets.compare_digest(raw_key, master_key):
         actor_id = admin_actor_id()
         if actor_id is None and len(config.bot_admin_ids) == 1:
@@ -3849,13 +3990,14 @@ def auth_login(payload: AccessLoginPayload) -> dict[str, Any]:
             if secrets.compare_digest(str(item.get("keyHash", "")), key_hash):
                 actor_id = int(item["userId"])
                 label = str(item.get("label", "access key"))
+                key_id = str(item.get("id", "")) or None
                 break
     if actor_id is None:
         raise HTTPException(status_code=401, detail="Invalid access key")
 
     token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(hours=ACCESS_SESSION_HOURS)
-    SESSION_TOKENS[token] = {"userId": actor_id, "label": label, "expiresAt": expires_at}
+    SESSION_TOKENS[token] = {"userId": actor_id, "label": label, "keyId": key_id, "expiresAt": expires_at}
     return {
         "ok": True,
         "sessionToken": token,
@@ -3913,6 +4055,9 @@ def revoke_access_key(key_id: str) -> dict[str, Any]:
             break
     if changed:
         save_access_keys(items)
+        for token, session in list(SESSION_TOKENS.items()):
+            if session.get("keyId") == key_id:
+                SESSION_TOKENS.pop(token, None)
     return ok("revoked" if changed else "not found")
 
 

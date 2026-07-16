@@ -16,6 +16,15 @@ services:
       - bot_downloads:/app/downloads
       - bot_logs:/app/logs
       - bot_media:/app/media_storage
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
     restart: unless-stopped
 
   api:
@@ -38,6 +47,15 @@ services:
       - bot_downloads:/app/downloads
       - bot_logs:/app/logs
       - bot_media:/app/media_storage
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/"]

@@ -32,7 +32,7 @@ from aiogram.types import CallbackQuery, Chat, ChatMemberUpdated, ChatPermission
 from .config import load_config
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
 from .premium import PLANS, PREMIUM_PERIOD_DAYS, PremiumLimitError, PremiumRequiredError, PremiumService, plan_public_dict
-from .media_processor import TASK_TITLES, ffmpeg_available, process_media, whisper_available
+from .media_processor import TASK_TITLES, ffmpeg_available, probe_media_duration, process_media, whisper_available
 from .media_tasks import MediaTaskService
 from .youtube_media import (
     DOWNLOAD_TYPES,
@@ -113,6 +113,10 @@ WEATHER_RE = re.compile(r"^погода\s+(.+)$", re.IGNORECASE)
 ALARM_STATUS_QUERY_RE = re.compile(r"^\s*тревога[?!.]?\s*$", re.IGNORECASE)
 ALARM_CLEAR_QUERY_RE = re.compile(r"^\s*отбой[?!.]?\s*$", re.IGNORECASE)
 ALARM_STATUS_COMMAND_RE = re.compile(r"^\s*состояние\s+тревоги[?!.]?\s*$", re.IGNORECASE)
+ALARM_TOPIC_COMMAND_RE = re.compile(
+    r"^\s*(?:[!/])?тревога\s+тема(?:\s+(основной|сброс|сбросить))?[?!.]?\s*$",
+    re.IGNORECASE,
+)
 ALERTS_LOCATION_UID = "46"
 ALERTS_LOCATION_TITLE = "Криворізький район"
 ALERTS_POLL_INTERVAL_SECONDS = 60
@@ -2378,6 +2382,17 @@ async def is_chat_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
     return member.status in ADMIN_STATUSES or member_status_text(member.status) in ADMIN_STATUS_TEXTS
 
 
+async def has_chat_admin_permission(bot: Bot, chat_id: int, user_id: int, permission: str) -> bool:
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        return False
+    status = member_status_text(member.status)
+    if status == "creator":
+        return True
+    return status == "administrator" and bool(getattr(member, permission, False))
+
+
 async def resolve_command_target(message: Message, username: str | None) -> tuple[int | None, str | None, str | None]:
     if username:
         user = db.get_seen_user_by_username(message.chat.id, username)
@@ -2959,17 +2974,14 @@ async def start(message: Message, state: FSMContext) -> None:
                 return
         login_id = parse_app_login_start_payload(message.text)
         if login_id is not None and message.from_user:
-            approved = db.approve_user_login(
-                login_id,
-                message.from_user.id,
-                message.from_user.username,
-                message.from_user.full_name,
-            )
             await message.answer(
-                "Вход в приложение подтверждён. Вернись в MonkeyDin."
-                if approved
-                else "Ссылка входа устарела или уже использована.",
-                reply_markup=main_menu(),
+                "<b>Запрос входа в MonkeyDin</b>\n\n"
+                "Подтверждай только если ты сам прямо сейчас начал вход в приложении. "
+                "Пересланная ссылка может дать отправителю доступ к твоему профилю.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Подтвердить вход", callback_data=f"app_login:{login_id}")],
+                    [InlineKeyboardButton(text="Отмена", callback_data="ui:home")],
+                ]),
             )
             return
         chat_id = parse_donate_start_payload(message.text)
@@ -3071,6 +3083,27 @@ def telegram_user_profile_text(
 ) -> str:
     profile = build_user_profile(db, premium_service, user_id, username, full_name, chat_id=chat_id)
     return profile_chat_text(profile, short=short)
+
+
+@router.callback_query(F.data.startswith("app_login:"))
+async def confirm_app_login(callback: CallbackQuery) -> None:
+    if not callback.from_user or not callback.data:
+        return
+    login_id = callback.data.partition(":")[2]
+    approved = db.approve_user_login(
+        login_id,
+        callback.from_user.id,
+        callback.from_user.username,
+        callback.from_user.full_name,
+    )
+    await callback.answer("Вход подтверждён." if approved else "Ссылка устарела.", show_alert=not approved)
+    if callback.message:
+        await callback.message.edit_text(
+            "Вход в приложение подтверждён. Вернись в MonkeyDin."
+            if approved
+            else "Ссылка входа устарела или уже использована.",
+            reply_markup=await main_menu_for_user(callback.bot, callback.from_user.id),
+        )
 
 
 @router.callback_query(F.data == "ui:home")
@@ -5757,15 +5790,35 @@ async def media_file_received(message: Message, state: FSMContext) -> None:
     progress = await message.answer("Загружаю файл и ставлю задачу в очередь...")
     service = MediaTaskService(str(premium_service.path))
     task = None
+    output_path: str | None = None
     try:
+        declared_size = int(getattr(media_file, "file_size", 0) or 0)
+        if declared_size <= 0:
+            telegram_file = await message.bot.get_file(media_file.file_id)
+            declared_size = int(getattr(telegram_file, "file_size", 0) or 0)
+        if declared_size <= 0:
+            raise PremiumLimitError("Telegram не сообщил размер файла; безопасная проверка лимита невозможна.")
+        declared_duration = getattr(media_file, "duration", None)
+        premium_service.check_media_limits(
+            message.from_user.id, declared_size, declared_duration, task_type
+        )
         await message.bot.download(media_file.file_id, destination=source_path)
+        actual_size = source_path.stat().st_size
+        duration_seconds = declared_duration
+        if task_type in {"transcription", "transcription_timestamps"} and duration_seconds is None:
+            duration_seconds = await asyncio.to_thread(probe_media_duration, str(source_path))
+            if duration_seconds is None:
+                raise PremiumLimitError("Не удалось определить длительность файла для проверки лимита расшифровки.")
+        premium_service.check_media_limits(
+            message.from_user.id, actual_size, duration_seconds, task_type
+        )
         task = service.create_media_task(
             user_id=message.from_user.id,
             task_type=task_type,
             source_file_id=media_file.file_id,
             source_file_path=str(source_path),
-            file_size_bytes=int(getattr(media_file, "file_size", 0) or source_path.stat().st_size),
-            duration_seconds=getattr(media_file, "duration", None),
+            file_size_bytes=actual_size,
+            duration_seconds=duration_seconds,
         )
         service.update_media_task_status(task.id, "processing")
         await progress.edit_text(f"Задача #{task.id}: FFmpeg обрабатывает файл...")
@@ -5798,7 +5851,14 @@ async def media_file_received(message: Message, state: FSMContext) -> None:
         )
         await state.clear()
     finally:
+        if output_path:
+            with suppress(OSError):
+                Path(output_path).unlink(missing_ok=True)
+            if task is not None:
+                with suppress(Exception):
+                    service.set_output_file_path(task.id, None)
         service.close()
+        source_path.unlink(missing_ok=True)
 
 
 @router.message(F.chat.type == "private", F.text.regexp(SUPPORTED_MEDIA_URL_RE))
@@ -5901,7 +5961,9 @@ async def cb_youtube_download(callback: CallbackQuery, state: FSMContext) -> Non
         service.update_media_task_status(task.id, "processing")
         premium_service.log("INFO", f"YouTube task created: id={task.id}, user={callback.from_user.id}, type={download_type}")
         await callback.message.edit_text(f"\u0417\u0430\u0434\u0430\u0447\u0430 #{task.id}: yt-dlp \u0441\u043a\u0430\u0447\u0438\u0432\u0430\u0435\u0442 \u0438 \u043e\u0431\u0440\u0430\u0431\u0430\u0442\u044b\u0432\u0430\u0435\u0442 \u0444\u0430\u0439\u043b...")
-        output_path = await asyncio.to_thread(download_youtube, url, download_type, task.id)
+        output_path = await asyncio.to_thread(
+            download_youtube, url, download_type, task.id, plan.max_file_size_bytes
+        )
         actual_size = Path(output_path).stat().st_size
         if actual_size > plan.max_file_size_bytes:
             raise YoutubeMediaError(
@@ -6010,6 +6072,12 @@ async def pre_checkout(pre_checkout_query: PreCheckoutQuery) -> None:
             error_message="Группа для публикации больше не найдена.",
         )
         return
+    if not await is_chat_member(pre_checkout_query.bot, pending.chat_id, pending.user_id):
+        await pre_checkout_query.answer(
+            ok=False,
+            error_message="Публикация доступна только участникам выбранной группы.",
+        )
+        return
     if pre_checkout_query.currency != "XTR" or pre_checkout_query.total_amount != 1:
         await pre_checkout_query.answer(
             ok=False,
@@ -6044,17 +6112,24 @@ async def handle_dig_star_payment(message: Message, payment: SuccessfulPayment) 
 
     if action == "luck":
         now = datetime.now(timezone.utc)
-        db.set_dig_luck(chat_id, user_id, 100, now.isoformat(timespec="seconds"))
+        purchase_action = "luck"
+        item_key = None
+        quantity = 1
+        luck_at = now.isoformat(timespec="seconds")
         result = "Оплата прошла. Удача восстановлена до <b>100</b>/100."
     elif action == "cooldown":
-        db.clear_dig_cooldown(chat_id, user_id)
+        purchase_action = "cooldown"
+        item_key = None
+        quantity = 1
+        luck_at = None
         result = "Оплата прошла. Ожидание между раскопками сброшено, можно писать <code>копай</code>."
     else:
         _, _, _, item_key, quantity = DIG_STAR_ACTIONS[action]
         if item_key is None:
             await message.answer("Оплата прошла, но пакет раскопок не найден. Напиши администратору бота.")
             return True
-        db.add_dig_item(chat_id, user_id, item_key, quantity)
+        purchase_action = "item"
+        luck_at = None
         if item_key == "star_depth_10":
             result = "Оплата прошла. Следующая раскопка гарантированно пройдет <b>10 м</b> без ожидания."
         elif item_key == "star_lucky_dig":
@@ -6062,7 +6137,7 @@ async def handle_dig_star_payment(message: Message, payment: SuccessfulPayment) 
         else:
             result = f"Оплата прошла. Начислено дополнительных раскопок без ожидания: <b>{quantity}</b>."
 
-    db.add_star_payment(
+    applied = db.apply_dig_star_purchase_once(
         user_id=message.from_user.id,
         username=message.from_user.username,
         full_name=message.from_user.full_name,
@@ -6070,7 +6145,14 @@ async def handle_dig_star_payment(message: Message, payment: SuccessfulPayment) 
         amount=payment.total_amount,
         currency=payment.currency,
         charge_id=payment.telegram_payment_charge_id,
+        action=purchase_action,
+        item_key=item_key,
+        quantity=quantity,
+        luck_at=luck_at,
     )
+    if not applied:
+        await message.answer("Эта оплата уже была обработана ранее.")
+        return True
     await message.answer(result)
     return True
 
@@ -6168,6 +6250,18 @@ async def successful_paid_message(message: Message, state: FSMContext) -> None:
         await message.answer("Оплата прошла, но сумма публикации не совпала. Напиши администратору бота.")
         await state.clear()
         return
+    if not message.from_user or not await is_chat_member(message.bot, chat_id, message.from_user.id):
+        await message.answer(
+            "Оплата получена, но публикация отменена: ты больше не состоишь в выбранной группе. "
+            "Обратись к владельцу бота для возврата Stars."
+        )
+        await state.clear()
+        return
+    claimed_pending = db.claim_pending_star_message(payment.invoice_payload)
+    if claimed_pending is None:
+        await message.answer("Эта оплата уже обрабатывается или была обработана ранее.")
+        await state.clear()
+        return
 
     sender = "пользователя"
     if message.from_user:
@@ -6198,7 +6292,6 @@ async def successful_paid_message(message: Message, state: FSMContext) -> None:
             charge_id=payment.telegram_payment_charge_id,
         )
 
-    db.delete_pending_star_message(payment.invoice_payload)
     await state.clear()
     await message.answer("Оплата прошла. Сообщение опубликовано.", reply_markup=main_menu())
 
@@ -6388,20 +6481,21 @@ async def apply_alarm_restrictions(bot: Bot, chat_id: int) -> None:
 
 
 async def send_alarm_notification(bot: Bot, chat_id: int, text: str) -> bool:
-    topics = db.list_topics(chat_id)
-    destinations: list[int | None] = [None, *[topic.thread_id for topic in topics]]
-    last_error: Exception | None = None
-    for thread_id in destinations:
-        try:
-            kwargs = {"chat_id": chat_id, "text": text}
-            if thread_id is not None:
-                kwargs["message_thread_id"] = thread_id
-            await bot.send_message(**kwargs)
-            return True
-        except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as exc:
-            last_error = exc
-    logging.warning("Could not send alarm notification to chat %s: %s", chat_id, last_error)
-    return False
+    thread_id = db.get_alarm_settings(chat_id).alarm_thread_id
+    try:
+        kwargs = {"chat_id": chat_id, "text": text}
+        if thread_id is not None:
+            kwargs["message_thread_id"] = thread_id
+        await bot.send_message(**kwargs)
+        return True
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as exc:
+        logging.warning(
+            "Could not send alarm notification in chat %s, thread %s: %s",
+            chat_id,
+            thread_id,
+            exc,
+        )
+        return False
 
 
 async def activate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
@@ -6514,22 +6608,64 @@ async def alerts_monitor_loop(bot: Bot) -> None:
 
 
 def alarm_status_text(chat_id: int) -> str:
+    settings = db.get_alarm_settings(chat_id)
+    destination = (
+        "основной чат"
+        if settings.alarm_thread_id is None
+        else f"тема <code>{settings.alarm_thread_id}</code>"
+    )
     if not db.alarm_api_enabled(chat_id):
-        return "Автоматическое отслеживание тревоги для этой группы не включено."
+        return (
+            "Автоматическое отслеживание тревоги для этой группы не включено.\n"
+            f"Тревожные оповещения: {destination}."
+        )
 
     status = db.alarm_api_last_status(chat_id)
     if status == "A":
-        return f"В <b>{ALERTS_LOCATION_TITLE}</b> сейчас воздушная тревога."
+        return f"В <b>{ALERTS_LOCATION_TITLE}</b> сейчас воздушная тревога.\nОповещения: {destination}."
     if status == "P":
-        return f"В <b>{ALERTS_LOCATION_TITLE}</b> сейчас частичная воздушная тревога."
+        return f"В <b>{ALERTS_LOCATION_TITLE}</b> сейчас частичная воздушная тревога.\nОповещения: {destination}."
     if status == "N":
-        return f"В <b>{ALERTS_LOCATION_TITLE}</b> сейчас нет воздушной тревоги."
-    return "Статус тревоги еще не получен. Попробуй снова через минуту."
+        return f"В <b>{ALERTS_LOCATION_TITLE}</b> сейчас нет воздушной тревоги.\nОповещения: {destination}."
+    return f"Статус тревоги еще не получен. Попробуй снова через минуту.\nОповещения: {destination}."
 
 
 async def handle_alarm_mode(message: Message) -> bool:
     if not message.text:
         return False
+
+    topic_match = ALARM_TOPIC_COMMAND_RE.fullmatch(message.text)
+    if topic_match:
+        if message.chat.type not in SUPPORTED_CHAT_TYPES:
+            return True
+        if not message.from_user or not await is_chat_admin(
+            message.bot, message.chat.id, message.from_user.id
+        ):
+            await safe_reply(
+                message,
+                "Тему для тревожных оповещений может назначить только администратор группы.",
+            )
+            return True
+
+        reset = topic_match.group(1) in {"основной", "сброс", "сбросить"}
+        thread_id = None if reset else message.message_thread_id
+        if thread_id is None and not reset:
+            await safe_reply(
+                message,
+                "Выполни команду внутри нужной темы. Для основного чата: "
+                "<code>тревога тема основной</code>.",
+            )
+            return True
+
+        db.set_alarm_thread(message.chat.id, thread_id, message.from_user.id)
+        if thread_id is None:
+            await safe_reply(message, "Тревожные оповещения снова будут приходить в основной чат.")
+        else:
+            await safe_reply(
+                message,
+                f"Тема для тревожных оповещений закреплена: <code>{thread_id}</code>.",
+            )
+        return True
 
     if ALARM_STATUS_COMMAND_RE.fullmatch(message.text):
         await safe_reply(message, alarm_status_text(message.chat.id))
@@ -7529,6 +7665,10 @@ async def roll_mute(message: Message) -> None:
         return
 
     random.shuffle(candidates)
+    cutoff_at = (now - timedelta(minutes=settings.cooldown_minutes)).isoformat(timespec="seconds")
+    if not db.claim_roll_mute(message.chat.id, now.isoformat(timespec="seconds"), cutoff_at):
+        await safe_reply(message, "Roll mute уже запустил другой участник. Дождись окончания перезарядки.")
+        return
     until_date = now + timedelta(minutes=settings.mute_minutes)
     picked = None
     last_error = None
@@ -7575,7 +7715,6 @@ async def roll_mute(message: Message) -> None:
         )
         return
 
-    db.set_roll_mute_last_used(message.chat.id, now.isoformat(timespec="seconds"))
     db.increment_roll_mute_stat(message.chat.id, picked.user_id)
     name = f"@{picked.username}" if picked.username else picked.full_name
     await safe_reply(message, f"Roll mute выбрал {escape(name)}. Мут на <b>{settings.mute_minutes}</b> мин.")
@@ -7598,7 +7737,9 @@ async def roll_mute_top(message: Message) -> None:
 async def quiet_admin_user(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
         return
-    if not message.from_user or not await is_chat_admin(message.bot, message.chat.id, message.from_user.id):
+    if not message.from_user or not await has_chat_admin_permission(
+        message.bot, message.chat.id, message.from_user.id, "can_delete_messages"
+    ):
         return
 
     await remember_sender(message)
@@ -7619,6 +7760,9 @@ async def quiet_admin_user(message: Message) -> None:
         return
     if member.status not in ADMIN_STATUSES and member_status_text(member.status) not in ADMIN_STATUS_TEXTS:
         await safe_reply(message, "Команда <code>затихни админ</code> нужна только для администраторов. Для обычных участников используй <code>затихни 10 - причина</code>.")
+        return
+    if member_status_text(member.status) == "creator":
+        await safe_reply(message, "Владельца группы переводить в тихий режим нельзя.")
         return
 
     until_at = datetime.now(timezone.utc) + timedelta(minutes=minutes)
@@ -7644,7 +7788,9 @@ async def quiet_admin_user(message: Message) -> None:
 async def quiet_user(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
         return
-    if not message.from_user or not await is_chat_admin(message.bot, message.chat.id, message.from_user.id):
+    if not message.from_user or not await has_chat_admin_permission(
+        message.bot, message.chat.id, message.from_user.id, "can_restrict_members"
+    ):
         return
 
     await remember_sender(message)
@@ -7702,7 +7848,9 @@ async def quiet_user(message: Message) -> None:
 async def unquiet_user(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
         return
-    if not message.from_user or not await is_chat_admin(message.bot, message.chat.id, message.from_user.id):
+    if not message.from_user or not await has_chat_admin_permission(
+        message.bot, message.chat.id, message.from_user.id, "can_restrict_members"
+    ):
         return
 
     await remember_sender(message)
@@ -7960,7 +8108,7 @@ async def handle_auto_reply(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
         return
 
-    if message.text and message.text.startswith("/"):
+    if message.text and message.text.startswith("/") and not ALARM_TOPIC_COMMAND_RE.fullmatch(message.text):
         await remember_sender(message)
         return
 
@@ -8125,7 +8273,9 @@ async def main() -> None:
     try:
         await bot.get_me()
         if staff_service.chat_id is not None:
-            missing_topics = staff_service.sync_known_topics()
+            # Startup is not an owner-authorized binding action. Never rewrite
+            # staff routing from the general topic cache here.
+            missing_topics = staff_service.missing_topics()
             for topic in missing_topics:
                 await staff_service.log(bot, "WARNING", f"Staff-тема не найдена: {topic}")
         await staff_service.send(bot, "status", "🟢 Бот запущен")

@@ -103,6 +103,7 @@ class AlarmSettings:
     reactions_json: str | None
     alarm_text: str | None
     clear_text: str | None
+    alarm_thread_id: int | None
     updated_by: int | None
     updated_at: str
 
@@ -483,6 +484,7 @@ class Database:
                 reactions_json text,
                 alarm_text text,
                 clear_text text,
+                alarm_thread_id integer,
                 updated_by integer,
                 updated_at text not null,
                 foreign key (chat_id) references chats(chat_id) on delete cascade
@@ -797,6 +799,14 @@ class Database:
         self._migrate_alarm_api_settings()
         self._migrate_advertisements()
         self._migrate_global_dig_game()
+        self._conn.execute(
+            "delete from star_payments where charge_id <> '' and id not in "
+            "(select min(id) from star_payments where charge_id <> '' group by charge_id)"
+        )
+        self._conn.execute(
+            "create unique index if not exists star_payments_charge_uidx "
+            "on star_payments(charge_id) where charge_id <> ''"
+        )
         self._conn.commit()
 
     def _migrate_reply_media(self) -> None:
@@ -821,6 +831,8 @@ class Database:
             self._conn.execute("alter table alarm_settings add column clear_text text")
         if "reactions_json" not in columns:
             self._conn.execute("alter table alarm_settings add column reactions_json text")
+        if "alarm_thread_id" not in columns:
+            self._conn.execute("alter table alarm_settings add column alarm_thread_id integer")
 
     def _migrate_alarm_api_settings(self) -> None:
         columns = {
@@ -1670,7 +1682,7 @@ class Database:
     def get_alarm_settings(self, chat_id: int) -> AlarmSettings:
         row = self._conn.execute(
             """
-            select chat_id, enabled, permissions_json, reactions_json, alarm_text, clear_text, updated_by, updated_at
+            select chat_id, enabled, permissions_json, reactions_json, alarm_text, clear_text, alarm_thread_id, updated_by, updated_at
             from alarm_settings
             where chat_id = ?
             """,
@@ -1685,9 +1697,38 @@ class Database:
             reactions_json=None,
             alarm_text=None,
             clear_text=None,
+            alarm_thread_id=None,
             updated_by=None,
             updated_at=utc_now(),
         )
+
+    def set_alarm_thread(self, chat_id: int, thread_id: int | None, updated_by: int | None) -> None:
+        current = self.get_alarm_settings(chat_id)
+        self._conn.execute(
+            """
+            insert into alarm_settings (
+                chat_id, enabled, permissions_json, reactions_json, alarm_text,
+                clear_text, alarm_thread_id, updated_by, updated_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(chat_id) do update set
+                alarm_thread_id = excluded.alarm_thread_id,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (
+                chat_id,
+                current.enabled,
+                current.permissions_json,
+                current.reactions_json,
+                current.alarm_text,
+                current.clear_text,
+                thread_id,
+                updated_by,
+                utc_now(),
+            ),
+        )
+        self._conn.commit()
 
     def set_alarm_enabled(self, chat_id: int, enabled: bool, updated_by: int | None) -> None:
         current = self.get_alarm_settings(chat_id)
@@ -1899,15 +1940,78 @@ class Database:
         amount: int,
         currency: str,
         charge_id: str,
-    ) -> None:
-        self._conn.execute(
+    ) -> bool:
+        cur = self._conn.execute(
             """
-            insert into star_payments (user_id, username, full_name, chat_id, amount, currency, charge_id, created_at)
+            insert or ignore into star_payments (user_id, username, full_name, chat_id, amount, currency, charge_id, created_at)
             values (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (user_id, normalize_username(username) if username else None, full_name, chat_id, amount, currency, charge_id, utc_now()),
         )
         self._conn.commit()
+        return cur.rowcount > 0
+
+    def apply_dig_star_purchase_once(
+        self,
+        *,
+        user_id: int,
+        username: str | None,
+        full_name: str,
+        chat_id: int,
+        amount: int,
+        currency: str,
+        charge_id: str,
+        action: str,
+        item_key: str | None = None,
+        quantity: int = 1,
+        luck_at: str | None = None,
+    ) -> bool:
+        now = utc_now()
+        self._conn.execute("begin immediate")
+        try:
+            if self._conn.execute("select 1 from star_payments where charge_id = ?", (charge_id,)).fetchone():
+                self._conn.rollback()
+                return False
+            player = self._conn.execute(
+                "select 1 from dig_players where chat_id = ? and user_id = ?",
+                (DIG_GLOBAL_CHAT_ID, user_id),
+            ).fetchone()
+            if player is None:
+                self._conn.rollback()
+                raise ValueError("Игрок не найден")
+            if action == "luck":
+                self._conn.execute(
+                    "update dig_players set luck = 100, last_luck_at = ?, updated_at = ? where chat_id = ? and user_id = ?",
+                    (luck_at or now, now, DIG_GLOBAL_CHAT_ID, user_id),
+                )
+            elif action == "cooldown":
+                self._conn.execute(
+                    "update dig_players set last_dig_at = null, updated_at = ? where chat_id = ? and user_id = ?",
+                    (now, DIG_GLOBAL_CHAT_ID, user_id),
+                )
+            elif action == "item" and item_key:
+                self._conn.execute(
+                    """
+                    insert into dig_items(chat_id,user_id,item_key,quantity,updated_at) values(?,?,?,?,?)
+                    on conflict(chat_id,user_id,item_key) do update set
+                        quantity = quantity + excluded.quantity, updated_at = excluded.updated_at
+                    """,
+                    (DIG_GLOBAL_CHAT_ID, user_id, item_key, max(1, int(quantity)), now),
+                )
+            else:
+                raise ValueError("Неизвестная покупка шахты")
+            self._conn.execute(
+                """
+                insert into star_payments(user_id,username,full_name,chat_id,amount,currency,charge_id,created_at)
+                values(?,?,?,?,?,?,?,?)
+                """,
+                (user_id, normalize_username(username) if username else None, full_name, chat_id, amount, currency, charge_id, now),
+            )
+            self._conn.commit()
+            return True
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def has_star_payment_charge(self, charge_id: str) -> bool:
         row = self._conn.execute(
@@ -1948,6 +2052,26 @@ class Database:
             (payload,),
         ).fetchone()
         return PendingStarMessage(**dict(row)) if row else None
+
+    def claim_pending_star_message(self, payload: str) -> PendingStarMessage | None:
+        self._conn.execute("begin immediate")
+        try:
+            row = self._conn.execute(
+                "select payload, user_id, chat_id, text, created_at from pending_star_messages where payload = ?",
+                (payload,),
+            ).fetchone()
+            if row is None:
+                self._conn.rollback()
+                return None
+            cur = self._conn.execute("delete from pending_star_messages where payload = ?", (payload,))
+            if cur.rowcount != 1:
+                self._conn.rollback()
+                return None
+            self._conn.commit()
+            return PendingStarMessage(**dict(row))
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def delete_pending_star_message(self, payload: str) -> None:
         self._conn.execute("delete from pending_star_messages where payload = ?", (payload,))
@@ -1992,6 +2116,51 @@ class Database:
         )
         self._conn.commit()
         return cur.rowcount > 0
+
+    def consume_user_login_and_create_session(
+        self,
+        login_id: str,
+        secret_hash: str,
+        token_hash: str,
+        user_id: int,
+        username: str | None,
+        full_name: str,
+        expires_at: str,
+    ) -> bool:
+        now = utc_now()
+        self._conn.execute("begin immediate")
+        try:
+            cur = self._conn.execute(
+                """
+                update user_login_requests
+                set consumed_at = ?
+                where login_id = ? and secret_hash = ? and approved_at is not null
+                  and consumed_at is null and expires_at > ?
+                """,
+                (now, login_id, secret_hash, now),
+            )
+            if cur.rowcount != 1:
+                self._conn.rollback()
+                return False
+            self._conn.execute(
+                """
+                insert into user_sessions (token_hash, user_id, username, full_name, created_at, expires_at, revoked_at)
+                values (?, ?, ?, ?, ?, ?, null)
+                """,
+                (
+                    token_hash,
+                    user_id,
+                    normalize_username(username) if username else None,
+                    full_name,
+                    now,
+                    expires_at,
+                ),
+            )
+            self._conn.commit()
+            return True
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def create_user_session(
         self,
@@ -2268,13 +2437,22 @@ class Database:
         self._conn.commit()
 
     def delete_advertisement(self, chat_id: int, ad_id: int) -> bool:
-        self._conn.execute("delete from advertisement_attachments where advertisement_id = ?", (ad_id,))
-        cur = self._conn.execute(
-            "delete from advertisements where chat_id = ? and id = ?",
-            (chat_id, ad_id),
-        )
-        self._conn.commit()
-        return cur.rowcount > 0
+        self._conn.execute("begin immediate")
+        try:
+            owned = self._conn.execute(
+                "select 1 from advertisements where chat_id = ? and id = ?",
+                (chat_id, ad_id),
+            ).fetchone()
+            if owned is None:
+                self._conn.rollback()
+                return False
+            self._conn.execute("delete from advertisement_attachments where advertisement_id = ?", (ad_id,))
+            self._conn.execute("delete from advertisements where chat_id = ? and id = ?", (chat_id, ad_id))
+            self._conn.commit()
+            return True
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def get_advertisement_settings(self, chat_id: int) -> AdvertisementSettings:
         row = self._conn.execute(
@@ -2455,6 +2633,38 @@ class Database:
             (chat_id, current.mute_minutes, current.cooldown_minutes, current.updated_by, current.updated_at, used_at),
         )
         self._conn.commit()
+
+    def claim_roll_mute(self, chat_id: int, used_at: str, cutoff_at: str) -> bool:
+        self._conn.execute("begin immediate")
+        try:
+            current = self._conn.execute(
+                """
+                select mute_minutes, cooldown_minutes, updated_by, updated_at, last_used_at
+                from roll_mute_settings where chat_id = ?
+                """,
+                (chat_id,),
+            ).fetchone()
+            if current and current["last_used_at"] and current["last_used_at"] > cutoff_at:
+                self._conn.rollback()
+                return False
+            mute_minutes = int(current["mute_minutes"]) if current else 60
+            cooldown_minutes = int(current["cooldown_minutes"]) if current else 30
+            updated_by = current["updated_by"] if current else None
+            updated_at = current["updated_at"] if current else used_at
+            self._conn.execute(
+                """
+                insert into roll_mute_settings
+                    (chat_id, mute_minutes, cooldown_minutes, updated_by, updated_at, last_used_at)
+                values (?, ?, ?, ?, ?, ?)
+                on conflict(chat_id) do update set last_used_at = excluded.last_used_at
+                """,
+                (chat_id, mute_minutes, cooldown_minutes, updated_by, updated_at, used_at),
+            )
+            self._conn.commit()
+            return True
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def increment_roll_mute_stat(self, chat_id: int, user_id: int) -> None:
         self._conn.execute(

@@ -68,6 +68,28 @@ def whisper_available() -> bool:
         return False
 
 
+def probe_media_duration(source_path: str) -> int | None:
+    ffmpeg = Path(find_ffmpeg())
+    executable = ffmpeg.with_name("ffprobe.exe" if ffmpeg.suffix.lower() == ".exe" else "ffprobe")
+    if not executable.is_file():
+        found = shutil.which("ffprobe")
+        if not found:
+            return None
+        executable = Path(found)
+    try:
+        completed = subprocess.run(
+            [str(executable), "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", source_path],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=True,
+        )
+        value = float(completed.stdout.strip())
+        return max(0, int(value + 0.999))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 def get_whisper_model():
     global _WHISPER_MODEL
     if _WHISPER_MODEL is None:

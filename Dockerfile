@@ -12,6 +12,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         ffmpeg \
+        gosu \
         libgomp1 \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
@@ -22,13 +23,20 @@ RUN python -m pip install --upgrade pip \
 
 COPY app ./app
 COPY README.md ./
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN mkdir -p /data /app/downloads /app/logs /app/media_storage
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /data /app/downloads /app/logs /app/media_storage \
+    && chown -R app:app /data /app /home/app \
+    && chmod 0755 /usr/local/bin/docker-entrypoint.sh
 
 ENV DB_PATH=/data/bot.sqlite3 \
     ADMIN_ACCESS_KEYS_FILE=/data/admin_access_keys.json \
     FFMPEG_PATH=/usr/bin/ffmpeg
 
 EXPOSE 8000
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
 CMD ["python", "-m", "app.bot"]

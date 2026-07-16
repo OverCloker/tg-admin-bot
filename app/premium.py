@@ -164,6 +164,16 @@ class PremiumService:
                 on radio_track_history(user_id, id desc);
             """
         )
+        self._conn.execute(
+            "delete from subscriptions where telegram_payment_charge_id is not null "
+            "and telegram_payment_charge_id <> '' and id not in "
+            "(select min(id) from subscriptions where telegram_payment_charge_id is not null "
+            "and telegram_payment_charge_id <> '' group by telegram_payment_charge_id)"
+        )
+        self._conn.execute(
+            "create unique index if not exists subscriptions_charge_uidx on subscriptions(telegram_payment_charge_id) "
+            "where telegram_payment_charge_id is not null and telegram_payment_charge_id <> ''"
+        )
         self._conn.commit()
 
     def get_plan_config(self, plan: str) -> PlanConfig:
@@ -249,7 +259,7 @@ class PremiumService:
         expiry = expires_at or (base + timedelta(days=PREMIUM_PERIOD_DAYS))
         self._conn.execute(
             """
-            insert into subscriptions (
+            insert or ignore into subscriptions (
                 user_id, plan, status, started_at, expires_at,
                 telegram_payment_charge_id, provider_payment_charge_id
             ) values (?, ?, 'active', ?, ?, ?, ?)
@@ -316,6 +326,48 @@ class PremiumService:
         if self.daily_radio_recognition_usage(user_id) >= plan.daily_radio_recognitions:
             raise PremiumLimitError("Дневной лимит распознаваний исчерпан.")
         return plan
+
+    def claim_radio_recognition_slot(self, user_id: int) -> PlanConfig:
+        plan = self.get_user_plan(user_id)
+        if plan is None:
+            raise PremiumRequiredError("Для распознавания треков нужен Premium.")
+        today = utc_now().date().isoformat()
+        self._conn.execute("begin immediate")
+        try:
+            row = self._conn.execute(
+                "select recognitions_count from radio_usage_daily where user_id = ? and date = ?",
+                (user_id, today),
+            ).fetchone()
+            current = int(row["recognitions_count"]) if row else 0
+            if current >= plan.daily_radio_recognitions:
+                self._conn.rollback()
+                raise PremiumLimitError("Дневной лимит распознаваний исчерпан.")
+            self._conn.execute(
+                """
+                insert into radio_usage_daily(user_id, date, recognitions_count) values (?, ?, 1)
+                on conflict(user_id, date) do update set recognitions_count = radio_usage_daily.recognitions_count + 1
+                """,
+                (user_id, today),
+            )
+            self._conn.commit()
+            return plan
+        except (PremiumLimitError, PremiumRequiredError):
+            raise
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def release_radio_recognition_slot(self, user_id: int) -> None:
+        today = utc_now().date().isoformat()
+        self._conn.execute(
+            """
+            update radio_usage_daily
+            set recognitions_count = max(0, recognitions_count - 1)
+            where user_id = ? and date = ?
+            """,
+            (user_id, today),
+        )
+        self._conn.commit()
 
     def increment_radio_recognition_usage(self, user_id: int) -> int:
         today = utc_now().date().isoformat()

@@ -24,6 +24,8 @@ SUPPORTED_MEDIA_URL_RE = re.compile(
     re.IGNORECASE,
 )
 DOWNLOAD_TYPES = {"video_mp4", "audio_mp3", "music_mp3", "music_m4a"}
+YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}
+INSTAGRAM_HOSTS = {"instagram.com", "www.instagram.com"}
 
 
 @dataclass(frozen=True)
@@ -60,7 +62,30 @@ def extract_instagram_url(text: str | None) -> str | None:
 
 def extract_supported_media_url(text: str | None) -> str | None:
     match = SUPPORTED_MEDIA_URL_RE.search(text or "")
-    return match.group(0).rstrip(".,);]") if match else None
+    if not match:
+        return None
+    candidate = match.group(0).rstrip(".,);]")
+    return candidate if validate_supported_media_url(candidate) else None
+
+
+def validate_supported_media_url(url: str) -> str | None:
+    try:
+        parsed = urlparse(url.strip())
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").casefold().rstrip(".")
+    if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+        return None
+    if host in YOUTUBE_HOSTS:
+        if host == "youtu.be":
+            return url if parsed.path.strip("/") else None
+        if host == "music.youtube.com":
+            return url if parsed.path == "/watch" else None
+        return url if parsed.path == "/watch" or parsed.path.startswith("/shorts/") else None
+    if host in INSTAGRAM_HOSTS:
+        parts = [part for part in parsed.path.split("/") if part]
+        return url if len(parts) >= 2 and parts[0].casefold() in {"reel", "reels", "p"} else None
+    return None
 
 
 def is_youtube_music(url: str) -> bool:
@@ -69,7 +94,7 @@ def is_youtube_music(url: str) -> bool:
 
 def is_instagram_url(url: str) -> bool:
     host = urlparse(url).hostname or ""
-    return host.endswith("instagram.com")
+    return host.casefold().rstrip(".") in INSTAGRAM_HOSTS
 
 
 def friendly_error(exc: Exception) -> YoutubeMediaError:
@@ -119,8 +144,10 @@ def _download_attempts(base_options: dict, url: str):
 
 
 def inspect_youtube(url: str, download_type: str | None = None) -> YoutubeInfo:
-    if not extract_supported_media_url(url):
+    validated_url = validate_supported_media_url(url)
+    if not validated_url:
         raise YoutubeMediaError("Поддерживаются ссылки YouTube, YouTube Music и Instagram Reels.")
+    url = validated_url
     options = {
         "quiet": True,
         "no_warnings": True,
@@ -165,9 +192,13 @@ def inspect_youtube(url: str, download_type: str | None = None) -> YoutubeInfo:
     )
 
 
-def download_youtube(url: str, download_type: str, task_id: int) -> str:
+def download_youtube(url: str, download_type: str, task_id: int, max_file_size: int | None = None) -> str:
     if download_type not in DOWNLOAD_TYPES:
         raise YoutubeMediaError("Неизвестный формат скачивания.")
+    validated_url = validate_supported_media_url(url)
+    if not validated_url:
+        raise YoutubeMediaError("Unsupported or unsafe media URL.")
+    url = validated_url
     root = Path("downloads")
     output_dir = root / "youtube"
     temp_dir = root / "temp" / f"task_{task_id}"
@@ -187,6 +218,8 @@ def download_youtube(url: str, download_type: str, task_id: int) -> str:
         "fragment_retries": 3,
         "file_access_retries": 3,
     }
+    if max_file_size and max_file_size > 0:
+        options["max_filesize"] = int(max_file_size)
     if is_instagram_url(url) and download_type != "video_mp4":
         raise YoutubeMediaError("Instagram Reels можно скачать только как MP4.")
     if is_instagram_url(url):

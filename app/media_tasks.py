@@ -1,7 +1,7 @@
 import sqlite3
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .premium import PremiumLimitError, PremiumService
@@ -68,6 +68,7 @@ class MediaTaskService:
         duration_seconds: int | None = None,
         source_file_path: str | None = None,
     ) -> MediaTask:
+        self.cleanup_stale_files(max_age_hours=24)
         if task_type not in SUPPORTED_TASK_TYPES:
             raise ValueError(f"Неподдерживаемый task_type: {task_type}")
         try:
@@ -107,6 +108,40 @@ class MediaTaskService:
             self.premium.log("ERROR", f"Media task creation failed: user={user_id}, type={task_type}, error={exc}")
             raise
 
+    def cleanup_stale_files(self, max_age_hours: int = 24) -> int:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, max_age_hours))).isoformat(timespec="seconds")
+        rows = self._conn.execute(
+            """
+            select id, source_file_path, output_file_path from media_tasks
+            where status in ('completed','failed','cancelled')
+              and coalesce(finished_at, created_at) < ?
+              and (source_file_path is not null or output_file_path is not null)
+            """,
+            (cutoff,),
+        ).fetchall()
+        roots = [(Path.cwd() / name).resolve() for name in ("media_storage", "downloads")]
+        removed = 0
+        for row in rows:
+            for raw_path in (row["source_file_path"], row["output_file_path"]):
+                if not raw_path:
+                    continue
+                try:
+                    path = Path(raw_path).resolve()
+                    if not any(path.is_relative_to(root) for root in roots):
+                        continue
+                    if path.is_file():
+                        path.unlink()
+                        removed += 1
+                except OSError:
+                    continue
+            self._conn.execute(
+                "update media_tasks set source_file_path = null, output_file_path = null where id = ?",
+                (int(row["id"]),),
+            )
+        if rows:
+            self._conn.commit()
+        return removed
+
     def get_user_media_tasks(self, user_id: int, limit: int = 20) -> list[MediaTask]:
         rows = self._conn.execute(
             "select * from media_tasks where user_id = ? order by id desc limit ?",
@@ -136,7 +171,7 @@ class MediaTaskService:
         self._conn.commit()
         return cur.rowcount > 0
 
-    def set_output_file_path(self, task_id: int, output_file_path: str) -> bool:
+    def set_output_file_path(self, task_id: int, output_file_path: str | None) -> bool:
         cur = self._conn.execute(
             "update media_tasks set output_file_path = ? where id = ?",
             (output_file_path, task_id),

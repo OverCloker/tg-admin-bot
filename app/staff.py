@@ -56,6 +56,9 @@ class StaffService:
             self.remember_topic(int(row["thread_id"]), str(row["title"]))
         return [key for key in STAFF_TOPICS.values() if self.topic_id(key) is None]
 
+    def missing_topics(self) -> list[str]:
+        return [key for key in STAFF_TOPICS.values() if self.topic_id(key) is None]
+
     def remember_topic(self, thread_id: int, title: str) -> bool:
         key = STAFF_TOPICS.get(title.strip().casefold())
         if not key:
@@ -65,6 +68,10 @@ class StaffService:
 
     def observe_message(self, message: Message) -> None:
         if self.chat_id != message.chat.id or not message.message_thread_id:
+            return
+        # Topic routing is owner-controlled. Telegram administrators may manage
+        # topics, but that must not implicitly grant permission to reroute logs.
+        if self.owner_id is None or not message.from_user or message.from_user.id != self.owner_id:
             return
         title = None
         if message.forum_topic_created:
