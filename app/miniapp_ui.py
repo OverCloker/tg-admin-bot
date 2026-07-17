@@ -183,14 +183,56 @@ MINI_APP_HTML = r"""<!doctype html>
     .super-cell { border-radius: 5px; font-size: 17px; }
     .super-cell .cat { font-size: clamp(15px, 5vw, 23px); }
     .super-cell .hammer { font-size: 22px; }
-    .inventory { display: grid; gap: 7px; margin-top: 12px; }
-    .inventory-row {
+    .bag-screen { margin-top: 14px; }
+    .bag-summary {
       display: flex;
+      align-items: center;
       justify-content: space-between;
       gap: 12px;
-      padding: 10px 0;
-      border-bottom: 1px solid var(--line);
+      padding: 15px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
     }
+    .bag-summary h2 { margin: 0; font-size: 22px; }
+    .bag-balance { color: #ffd37d; font-size: 18px; font-weight: 800; white-space: nowrap; }
+    .bag-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+    .bag-actions .btn { min-height: 44px; margin: 0; }
+    .inventory { display: grid; gap: 8px; margin-top: 12px; }
+    .inventory-group {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .inventory-group summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 48px;
+      padding: 11px 14px;
+      cursor: pointer;
+      font-weight: 800;
+      list-style: none;
+    }
+    .inventory-group summary::-webkit-details-marker { display: none; }
+    .inventory-group summary::after { content: "⌄"; color: var(--muted); font-size: 20px; }
+    .inventory-group[open] summary::after { transform: rotate(180deg); }
+    .inventory-group-count { color: var(--muted); font-size: 13px; font-weight: 600; }
+    .inventory-list { padding: 0 14px 5px; border-top: 1px solid var(--line); }
+    .inventory-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 42px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+    }
+    .inventory-row:last-child { border-bottom: 0; }
+    .inventory-row b { flex: 0 0 auto; color: #dbe7f2; }
     .shop-screen {
       min-height: calc(100vh - 112px);
       margin-top: 14px;
@@ -449,6 +491,10 @@ MINI_APP_HTML = r"""<!doctype html>
     }
   }
 
+  function scrollToTop() {
+    window.scrollTo(0, 0);
+  }
+
   if (telegram) {
     telegram.ready();
     telegram.expand();
@@ -655,6 +701,7 @@ MINI_APP_HTML = r"""<!doctype html>
     if (!state) return;
     setScreenHeader("mine");
     content.innerHTML = mineHtml();
+    scrollToTop();
   }
 
   async function load() {
@@ -811,20 +858,37 @@ MINI_APP_HTML = r"""<!doctype html>
 
   async function showBag() {
     setScreenHeader("bag");
+    scrollToTop();
     try {
       const shop = await api("/miniapp/shop");
-      const names = {};
-      shop.categories.forEach(category => category.items.forEach(item => { names[item.key] = item.name; }));
-      const entries = Object.entries(state.items || {}).filter(([, quantity]) => quantity > 0);
-      const inventory = entries.length
-        ? entries.map(([key, quantity]) => `<div class="inventory-row"><span>${escapeHtml(names[key] || key)}</span><b>× ${quantity}</b></div>`).join("")
+      const inventory = shop.inventory && shop.inventory.length
+        ? shop.inventory.map((group, index) => {
+          const rows = group.items.map(item => `
+            <div class="inventory-row">
+              <span>${escapeHtml(item.name)}</span>
+              <b>× ${item.quantity}</b>
+            </div>`).join("");
+          return `<details class="inventory-group" ${index === 0 ? "open" : ""}>
+            <summary>
+              <span>${escapeHtml(group.icon)} ${escapeHtml(group.title)}</span>
+              <span class="inventory-group-count">${group.items.length}</span>
+            </summary>
+            <div class="inventory-list">${rows}</div>
+          </details>`;
+        }).join("")
         : `<div class="muted">Сумка пока пустая.</div>`;
-      content.innerHTML = `<section class="panel">
-        <div class="section-title"><h2>Сумка шахтёра</h2><span class="counter">🪙 ${state.coins}</span></div>
+      content.innerHTML = `<section class="bag-screen">
+        <div class="bag-summary">
+          <h2>Снаряжение</h2>
+          <div class="bag-balance">🪙 ${state.coins}</div>
+        </div>
+        <div class="bag-actions">
+          <button class="btn" onclick="showShop()">Открыть магазин</button>
+          <button class="btn secondary" onclick="renderMine()">Вернуться в шахту</button>
+        </div>
         <div class="inventory">${inventory}</div>
-        <button class="btn" onclick="showShop()">Магазин</button>
-        <button class="btn secondary" onclick="renderMine()">Назад к шахте</button>
       </section>`;
+      scrollToTop();
     } catch (error) {
       showError(error);
     }
@@ -832,6 +896,7 @@ MINI_APP_HTML = r"""<!doctype html>
 
   async function showShop(categoryKey = "") {
     setScreenHeader("shop");
+    scrollToTop();
     try {
       const shop = await api("/miniapp/shop");
       renderShop(shop, categoryKey);
@@ -858,7 +923,7 @@ MINI_APP_HTML = r"""<!doctype html>
         ? `<div class="owned">Уже куплено</div>`
         : item.quantity ? `<div class="owned">В сумке: ${item.quantity}</div>` : `<div class="muted">Доступно к покупке</div>`;
       const requirement = item.requirement
-        ? `<div class="muted">Нужно: ${escapeHtml(item.requirement)}</div>` : "";
+        ? `<div class="muted">Нужно: ${escapeHtml(item.requirementName || item.requirement)}</div>` : "";
       const buy = item.owned ? "" : `
         <button class="btn shop-buy" ${item.canBuy ? "" : "disabled"} onclick="buyShop('${item.key}')">
           Купить
@@ -884,6 +949,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <div class="shop-products">${products}</div>
       <div class="shop-back"><button class="btn secondary" onclick="showBag()">Назад в сумку</button></div>
     </section>`;
+    scrollToTop();
   }
 
   async function buyShop(itemKey) {

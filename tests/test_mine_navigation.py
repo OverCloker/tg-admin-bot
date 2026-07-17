@@ -63,3 +63,5 @@ def test_shop_deep_link_opens_a_distinct_compact_screen() -> None:
     assert 'class="shop-products"' in MINI_APP_HTML
     assert "overflow-x: auto" in MINI_APP_HTML
     assert 'class="btn shop-buy"' in MINI_APP_HTML
+    assert 'window.scrollTo(0, 0)' in MINI_APP_HTML
+    assert 'class="inventory-group"' in MINI_APP_HTML

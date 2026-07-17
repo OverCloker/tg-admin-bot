@@ -204,7 +204,7 @@ def miniapp_shop_background() -> FileResponse:
 def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
     from . import bot as game
 
-    items = game.dig_items_map(0, user_id)
+    items = {item.item_key: item.quantity for item in db.list_dig_items(0, user_id)}
     categories: list[dict[str, Any]] = []
     for category_key in game.DIG_SHOP_CATEGORY_ORDER:
         title, item_keys = game.DIG_SHOP_CATEGORIES[category_key]
@@ -226,12 +226,76 @@ def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
                     "quantity": items.get(item_key, 0),
                     "owned": item_key in game.DIG_PERMANENT_ITEMS and items.get(item_key, 0) > 0,
                     "requirement": game.DIG_ITEM_REQUIREMENTS.get(item_key),
+                    "requirementName": (
+                        game.DIG_SHOP_ITEMS[game.DIG_ITEM_REQUIREMENTS[item_key]][0]
+                        if item_key in game.DIG_ITEM_REQUIREMENTS
+                        else None
+                    ),
                     "canBuy": not game.dig_purchase_error(items, item_key),
                 }
             )
         if products:
             categories.append({"key": category_key, "title": title, "items": products})
-    return {"coins": db.get_dig_player(0, user_id).coins, "categories": categories}
+
+    names = {key: value[0] for key, value in game.DIG_SHOP_ITEMS.items()}
+    names.update(game.DIG_ARTIFACTS)
+    names.update(
+        {
+            "artifact_set_reward": "Бонус полной коллекции",
+            "super_game_pass": "Доступ к супер-игре 9×9",
+            "super_mute30": "Право на мут 30 минут",
+            "super_tag": "Право выбрать тег",
+        }
+    )
+    paid_keys = {"star_dig", "star_lucky_dig", "star_depth_10", "super_game_pass", "super_mute30", "super_tag"}
+    artifact_keys = set(game.DIG_ARTIFACTS) | {"artifact_set_reward"}
+    chain_keys = {key for chain in game.DIG_SHOP_UPGRADE_CHAINS for key in chain}
+    best_chain_keys = {
+        owned_key
+        for chain in game.DIG_SHOP_UPGRADE_CHAINS
+        for owned_key in [next((key for key in reversed(chain) if items.get(key, 0) > 0), "")]
+        if owned_key
+    }
+    supply_keys = set(game.DIG_SHOP_CATEGORIES["consumables"][1]) | set(game.DIG_SHOP_CATEGORIES["gear"][1]) | {
+        "golden_ticket"
+    }
+    grouped: dict[str, list[dict[str, Any]]] = {
+        "Коллекция": [],
+        "Постоянные улучшения": [],
+        "Припасы и билеты": [],
+        "Особые награды": [],
+    }
+    for key, quantity in items.items():
+        if quantity <= 0 or key not in names:
+            continue
+        if key in chain_keys and key not in best_chain_keys:
+            continue
+        entry = {"key": key, "name": names[key], "quantity": quantity}
+        if key in artifact_keys:
+            grouped["Коллекция"].append(entry)
+        elif key in game.DIG_PERMANENT_ITEMS:
+            grouped["Постоянные улучшения"].append(entry)
+        elif key in supply_keys:
+            grouped["Припасы и билеты"].append(entry)
+        elif key in paid_keys:
+            grouped["Особые награды"].append(entry)
+
+    icons = {
+        "Коллекция": "💎",
+        "Постоянные улучшения": "⚙️",
+        "Припасы и билеты": "🎟️",
+        "Особые награды": "🏆",
+    }
+    inventory = [
+        {"title": title, "icon": icons[title], "items": values}
+        for title, values in grouped.items()
+        if values
+    ]
+    return {
+        "coins": db.get_dig_player(0, user_id).coins,
+        "categories": categories,
+        "inventory": inventory,
+    }
 
 
 @router.get("/miniapp/shop")
