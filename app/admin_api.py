@@ -251,6 +251,7 @@ ADMIN_PANEL_HTML = r"""
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f8fb">
   <title>Панель бота</title>
   <style>
     :root {
@@ -2520,11 +2521,27 @@ ADMIN_PANEL_HTML = r"""
 
     function applyAppSettings() {
       const settings = loadAppSettings();
-      document.body.classList.toggle("theme-dark", settings.theme === "dark");
-      document.body.classList.toggle("theme-green", settings.theme === "green");
-      document.body.classList.toggle("theme-oled", settings.theme === "oled");
+      const theme = settings.theme || "light";
+      const themeColors = {
+        light: "#f6f8fb",
+        dark: "#111827",
+        green: "#f3faf6",
+        oled: "#000000"
+      };
+      document.body.classList.toggle("theme-dark", theme === "dark");
+      document.body.classList.toggle("theme-green", theme === "green");
+      document.body.classList.toggle("theme-oled", theme === "oled");
+      document.documentElement.style.backgroundColor = themeColors[theme] || themeColors.light;
+      const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+      if (themeColorMeta) {
+        themeColorMeta.setAttribute("content", themeColors[theme] || themeColors.light);
+      }
       if (window.AndroidApp) {
-        window.AndroidApp.setThemeBars(settings.theme || "light");
+        try {
+          window.AndroidApp.setThemeBars(theme);
+        } catch (_) {
+          // The browser version has no native system bars to update.
+        }
       }
       if (settings.background) {
         document.body.style.setProperty("--bg-image", `url("${settings.background}")`);
