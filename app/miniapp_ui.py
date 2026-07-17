@@ -534,14 +534,9 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   function readStartParam() {
-    const direct =
-      (telegram && telegram.initDataUnsafe && telegram.initDataUnsafe.start_param) ||
-      (telegram && telegram.initData && new URLSearchParams(telegram.initData).get("start_param"));
-    if (direct) return direct;
-
     const query = new URLSearchParams(location.search);
     const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
-    const launchParam =
+    const urlParam =
       query.get("tgWebAppStartParam") ||
       hash.get("tgWebAppStartParam") ||
       query.get("start_param") ||
@@ -550,15 +545,22 @@ MINI_APP_HTML = r"""<!doctype html>
       hash.get("startapp") ||
       query.get("view") ||
       hash.get("view");
-    if (launchParam) return launchParam;
+    if (urlParam) return urlParam.trim().toLowerCase();
 
     const encodedInitData = query.get("tgWebAppData") || hash.get("tgWebAppData");
-    if (!encodedInitData) return "";
-    try {
-      return new URLSearchParams(decodeURIComponent(encodedInitData)).get("start_param") || "";
-    } catch (_) {
-      return "";
+    if (encodedInitData) {
+      try {
+        const nestedParam = new URLSearchParams(decodeURIComponent(encodedInitData)).get("start_param");
+        if (nestedParam) return nestedParam.trim().toLowerCase();
+      } catch (_) {
+        // Fall through to Telegram's parsed launch data.
+      }
     }
+
+    const direct =
+      (telegram && telegram.initDataUnsafe && telegram.initDataUnsafe.start_param) ||
+      (telegram && telegram.initData && new URLSearchParams(telegram.initData).get("start_param"));
+    return direct ? direct.trim().toLowerCase() : "";
   }
 
   function isCoolingDown() {
@@ -660,8 +662,8 @@ MINI_APP_HTML = r"""<!doctype html>
     setScreenHeader(initialView === "shop" ? "shop" : initialView === "bag" ? "bag" : "mine");
     try {
       state = await api("/miniapp/mine");
-      if (initialView === "shop" && state.registered) await showShop();
-      else if (initialView === "bag" && state.registered) await showBag();
+      if (initialView === "shop") await showShop();
+      else if (initialView === "bag") await showBag();
       else renderMine();
     } catch (error) {
       nameNode.textContent = "Ошибка загрузки";

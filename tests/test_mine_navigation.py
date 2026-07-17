@@ -38,6 +38,15 @@ def test_miniapp_handles_deep_links_and_plain_text_results() -> None:
     assert 'node.textContent = cleanText' in MINI_APP_HTML
 
 
+def test_current_telegram_url_wins_over_stale_launch_data() -> None:
+    url_param = MINI_APP_HTML.index('query.get("tgWebAppStartParam")')
+    parsed_launch_data = MINI_APP_HTML.index("telegram.initDataUnsafe && telegram.initDataUnsafe.start_param")
+
+    assert url_param < parsed_launch_data
+    assert 'if (initialView === "shop") await showShop();' in MINI_APP_HTML
+    assert 'initialView === "shop" && state.registered' not in MINI_APP_HTML
+
+
 def test_miniapp_contains_requested_animations() -> None:
     assert 'overlay.className = "dig-animation"' in MINI_APP_HTML
     assert 'class="cat-figure"' in MINI_APP_HTML
