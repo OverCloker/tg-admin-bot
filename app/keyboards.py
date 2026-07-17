@@ -14,15 +14,7 @@ MINI_APP_SHOP_START_PARAM = "shop"
 
 def miniapp_deep_link(start_param: str) -> str:
     bot_username = os.getenv("BOT_USERNAME", DEFAULT_BOT_USERNAME).strip().lstrip("@") or DEFAULT_BOT_USERNAME
-    short_name = os.getenv("MINI_APP_SHORT_NAME", "").strip().strip("/")
-    if short_name:
-        return f"https://t.me/{bot_username}/{short_name}?startapp={start_param}"
-
-    # Some third-party Telegram clients ignore Main Mini App startapp links and
-    # only open the private bot chat. A /start payload lets the bot present the
-    # correct private Web App button instead of falling back to the main menu.
-    payload = "miniapp_shop" if start_param.startswith("shop") else "miniapp_mine"
-    return f"https://t.me/{bot_username}?start={payload}"
+    return f"https://t.me/{bot_username}?startapp={start_param}"
 
 
 def miniapp_deep_link_button(label: str, start_param: str) -> InlineKeyboardButton:

@@ -2,23 +2,23 @@ from app.keyboards import dig_bag_menu, miniapp_private_menu, user_bag_menu, use
 from app.miniapp_ui import MINI_APP_HTML
 
 
-def test_group_dig_mode_uses_callback_and_start_fallback(monkeypatch) -> None:
+def test_group_dig_mode_uses_callback_and_main_miniapp_link(monkeypatch) -> None:
     monkeypatch.delenv("MINI_APP_SHORT_NAME", raising=False)
     buttons = [button for row in user_dig_mode_menu(-1001).inline_keyboard for button in row]
 
     assert len(buttons) == 2
     assert [button.text for button in buttons[:2]] == ["Автоматически", "Вручную"]
     assert buttons[0].callback_data == "user:dig:auto:-1001"
-    assert buttons[1].url == "https://t.me/ypominanieBot?start=miniapp_mine"
+    assert buttons[1].url == "https://t.me/ypominanieBot?startapp=mine"
     assert all(button.web_app is None for button in buttons)
 
 
-def test_group_bag_opens_store_via_private_delivery(monkeypatch) -> None:
+def test_group_bag_opens_main_miniapp_store(monkeypatch) -> None:
     monkeypatch.delenv("MINI_APP_SHORT_NAME", raising=False)
     button = dig_bag_menu(42).inline_keyboard[0][0]
 
     assert button.text == "Магазин"
-    assert button.url == "https://t.me/ypominanieBot?start=miniapp_shop"
+    assert button.url == "https://t.me/ypominanieBot?startapp=shop"
     assert button.web_app is None
 
 
@@ -29,19 +29,7 @@ def test_private_store_button_opens_shop_view(monkeypatch) -> None:
     bag_button = user_bag_menu(-1001, 42).inline_keyboard[0][0]
 
     assert private_button.web_app.url == "https://example.test/miniapp?view=shop"
-    assert bag_button.url == "https://t.me/ypominanieBot?start=miniapp_shop"
-
-
-def test_named_miniapp_link_opens_requested_view_directly(monkeypatch) -> None:
-    monkeypatch.setenv("MINI_APP_SHORT_NAME", "mine")
-
-    mine_button = user_dig_mode_menu(-1001).inline_keyboard[1][0]
-    shop_button = dig_bag_menu(42).inline_keyboard[0][0]
-
-    assert mine_button.url == "https://t.me/ypominanieBot/mine?startapp=mine"
-    assert shop_button.url == "https://t.me/ypominanieBot/mine?startapp=shop"
-
-
+    assert bag_button.url == "https://t.me/ypominanieBot?startapp=shop"
 def test_miniapp_handles_deep_links_and_plain_text_results() -> None:
     assert 'telegram.initDataUnsafe.start_param' in MINI_APP_HTML
     assert 'query.get("tgWebAppStartParam")' in MINI_APP_HTML

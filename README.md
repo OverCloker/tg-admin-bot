@@ -260,13 +260,10 @@ Mini App использует общую шахту и серверную про
 
 ```env
 MINI_APP_URL=https://bot.example.com/miniapp
-MINI_APP_SHORT_NAME=mine
 ```
 
-`MINI_APP_SHORT_NAME` is the short name created for this bot with BotFather
-(`/newapp`). When it is configured, group buttons open the requested Mini App
-screen directly, for example `.../mine?startapp=shop`. Without it, the bot uses
-a compatible `/start` fallback and sends the requested private Web App button.
+Group buttons use the bot's Main Mini App URL with a screen parameter, for
+example `.../ypominanieBot?startapp=shop`.
 
 Ручки: `GET /miniapp/mine`, `POST /miniapp/mine/register`, `POST /miniapp/mine/dig`. ID пользователя извлекается из подписанного `X-Telegram-Init-Data`, поэтому клиент не может подменить игрока.
 
