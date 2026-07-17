@@ -44,3 +44,13 @@ def test_miniapp_contains_requested_animations() -> None:
     assert 'class="treasure-chest"' in MINI_APP_HTML
     assert "@keyframes pickaxe-swing" in MINI_APP_HTML
     assert "@keyframes chest-open" in MINI_APP_HTML
+
+
+def test_shop_deep_link_opens_a_distinct_compact_screen() -> None:
+    assert 'setScreenHeader(initialView === "shop" ? "shop"' in MINI_APP_HTML
+    assert 'screenTitle.textContent = "🛒 Магазин"' in MINI_APP_HTML
+    assert 'setScreenHeader("shop");' in MINI_APP_HTML
+    assert 'class="shop-hero"' in MINI_APP_HTML
+    assert 'class="shop-products"' in MINI_APP_HTML
+    assert "overflow-x: auto" in MINI_APP_HTML
+    assert 'class="btn shop-buy"' in MINI_APP_HTML

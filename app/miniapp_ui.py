@@ -192,44 +192,110 @@ MINI_APP_HTML = r"""<!doctype html>
       border-bottom: 1px solid var(--line);
     }
     .shop-screen {
-      min-height: calc(100vh - 32px);
+      min-height: calc(100vh - 112px);
       margin-top: 14px;
-      padding: 16px;
+      overflow: hidden;
+      border: 1px solid #604224;
       border-radius: 8px;
-      background: linear-gradient(#120d09b8, #120d09e8), url("/miniapp/shop-bg.png") center top / cover;
+      background: #100d0b;
     }
-    .shop-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .shop-hero {
+      position: relative;
+      display: flex;
+      min-height: 176px;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 18px;
+      background:
+        linear-gradient(180deg, #0806041a 15%, #100d0bf2 100%),
+        url("/miniapp/shop-bg.png") center 28% / cover;
+    }
+    .shop-hero-copy { position: relative; z-index: 1; max-width: 68%; }
+    .shop-kicker { margin-bottom: 4px; color: #f2c987; font-size: 13px; font-weight: 800; text-transform: uppercase; }
+    .shop-hero h2 { margin: 0; font-size: 25px; }
+    .shop-hero p { margin: 5px 0 0; color: #e1d5c7; font-size: 14px; line-height: 1.35; }
     .shop-coins {
+      position: relative;
+      z-index: 1;
       padding: 8px 10px;
       border: 1px solid #d49a50;
       border-radius: 8px;
-      background: #15100cd9;
+      background: #15100cef;
       font-weight: 800;
       white-space: nowrap;
     }
-    .shop-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 14px 0; }
+    .shop-toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      padding: 10px 12px;
+      border-bottom: 1px solid #48321f;
+      background: #100d0bf7;
+    }
+    .shop-tabs {
+      display: flex;
+      gap: 7px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      scroll-snap-type: x proximity;
+    }
+    .shop-tabs::-webkit-scrollbar { display: none; }
     .shop-tab {
-      min-height: 43px;
-      padding: 8px;
+      flex: 0 0 auto;
+      min-height: 38px;
+      padding: 8px 12px;
       border: 1px solid #c98e49;
       border-radius: 8px;
-      background: #241a14e8;
+      background: #211811;
       color: white;
       font-weight: 700;
+      scroll-snap-align: start;
     }
     .shop-tab.active { background: #a9652d; }
+    .shop-products { padding: 0 14px; }
     .product {
-      margin-top: 9px;
-      padding: 13px;
-      border: 1px solid #b57c42;
-      border-radius: 8px;
-      background: #16283bed;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 6px 12px;
+      padding: 14px 0;
+      border-bottom: 1px solid #48321f;
     }
-    .product-head { display: flex; justify-content: space-between; gap: 10px; }
-    .product-name { font-weight: 800; }
+    .product:last-child { border-bottom: 0; }
+    .product-name { min-width: 0; font-weight: 800; }
     .price { color: #ffd37d; font-weight: 800; white-space: nowrap; }
-    .description { margin-top: 6px; color: #d0d8e1; font-size: 14px; line-height: 1.4; }
-    .owned { margin-top: 7px; color: var(--ok); font-size: 14px; }
+    .description {
+      grid-column: 1 / -1;
+      display: -webkit-box;
+      overflow: hidden;
+      color: #d0c6bb;
+      font-size: 14px;
+      line-height: 1.4;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+    }
+    .product-meta { min-width: 0; align-self: center; }
+    .product-meta .muted { font-size: 13px; }
+    .owned { color: var(--ok); font-size: 13px; }
+    .shop-buy {
+      width: auto;
+      min-height: 38px;
+      margin: 0;
+      padding: 8px 13px;
+      align-self: end;
+      background: #b66c2c;
+      font-size: 14px;
+      white-space: nowrap;
+    }
+    .shop-back { padding: 0 14px 14px; }
+    @media (max-width: 390px) {
+      .shop-hero { min-height: 154px; padding: 14px; }
+      .shop-hero-copy { max-width: 64%; }
+      .shop-hero h2 { font-size: 22px; }
+      .shop-coins { padding: 7px 8px; font-size: 14px; }
+      .product { grid-template-columns: minmax(0, 1fr) auto; gap: 5px 8px; }
+      .shop-buy { padding-inline: 10px; }
+    }
     .error { border-color: var(--danger); color: #ffd8da; }
     .dig-animation {
       position: fixed;
@@ -353,7 +419,7 @@ MINI_APP_HTML = r"""<!doctype html>
 <main>
   <header class="top">
     <div>
-      <h1>⛏️ Шахта</h1>
+      <h1 id="screen-title">⛏️ Шахта</h1>
       <div id="name" class="muted">Загрузка...</div>
     </div>
     <button class="btn secondary" style="width:auto;margin:0" type="button" id="close">Закрыть</button>
@@ -364,9 +430,24 @@ MINI_APP_HTML = r"""<!doctype html>
   const telegram = window.Telegram && window.Telegram.WebApp;
   const content = document.getElementById("content");
   const nameNode = document.getElementById("name");
+  const screenTitle = document.getElementById("screen-title");
   let state = null;
   let busy = false;
   let shopCategory = "";
+
+  function setScreenHeader(view) {
+    document.body.dataset.view = view;
+    if (view === "shop") {
+      screenTitle.textContent = "🛒 Магазин";
+      nameNode.textContent = "Лавка шахтёра";
+    } else if (view === "bag") {
+      screenTitle.textContent = "🎒 Сумка";
+      nameNode.textContent = "Инвентарь шахтёра";
+    } else {
+      screenTitle.textContent = "⛏️ Шахта";
+      nameNode.textContent = state && state.registered ? state.name : "Новая вылазка";
+    }
+  }
 
   if (telegram) {
     telegram.ready();
@@ -570,14 +651,15 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function renderMine() {
     if (!state) return;
-    nameNode.textContent = state.registered ? state.name : "Новая вылазка";
+    setScreenHeader("mine");
     content.innerHTML = mineHtml();
   }
 
   async function load() {
+    const initialView = readStartParam();
+    setScreenHeader(initialView === "shop" ? "shop" : initialView === "bag" ? "bag" : "mine");
     try {
       state = await api("/miniapp/mine");
-      const initialView = readStartParam();
       if (initialView === "shop" && state.registered) await showShop();
       else if (initialView === "bag" && state.registered) await showBag();
       else renderMine();
@@ -726,6 +808,7 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   async function showBag() {
+    setScreenHeader("bag");
     try {
       const shop = await api("/miniapp/shop");
       const names = {};
@@ -746,6 +829,7 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   async function showShop(categoryKey = "") {
+    setScreenHeader("shop");
     try {
       const shop = await api("/miniapp/shop");
       renderShop(shop, categoryKey);
@@ -755,6 +839,7 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   function renderShop(shop, categoryKey = "") {
+    setScreenHeader("shop");
     shopCategory = categoryKey || shopCategory || (shop.categories[0] && shop.categories[0].key);
     const category = shop.categories.find(item => item.key === shopCategory) || shop.categories[0];
     if (!category) {
@@ -769,27 +854,33 @@ MINI_APP_HTML = r"""<!doctype html>
     const products = category.items.map(item => {
       const status = item.owned
         ? `<div class="owned">Уже куплено</div>`
-        : item.quantity ? `<div class="owned">В сумке: ${item.quantity}</div>` : "";
+        : item.quantity ? `<div class="owned">В сумке: ${item.quantity}</div>` : `<div class="muted">Доступно к покупке</div>`;
       const requirement = item.requirement
-        ? `<div class="muted" style="margin-top:6px">Нужно: ${escapeHtml(item.requirement)}</div>` : "";
+        ? `<div class="muted">Нужно: ${escapeHtml(item.requirement)}</div>` : "";
       const buy = item.owned ? "" : `
-        <button class="btn" ${item.canBuy ? "" : "disabled"} onclick="buyShop('${item.key}')">
-          Купить за ${item.price} 🪙
+        <button class="btn shop-buy" ${item.canBuy ? "" : "disabled"} onclick="buyShop('${item.key}')">
+          Купить
         </button>`;
       return `<article class="product">
-        <div class="product-head">
-          <div class="product-name">${escapeHtml(item.name)}</div>
-          <div class="price">${item.price} 🪙</div>
-        </div>
+        <div class="product-name">${escapeHtml(item.name)}</div>
+        <div class="price">${item.price} 🪙</div>
         <div class="description">${escapeHtml(item.description)}</div>
-        ${status}${requirement}${buy}
+        <div class="product-meta">${status}${requirement}</div>
+        ${buy}
       </article>`;
     }).join("");
     content.innerHTML = `<section class="shop-screen">
-      <div class="shop-head"><h2>Магазин шахты</h2><div class="shop-coins">🪙 ${shop.coins}</div></div>
-      <div class="shop-tabs">${tabs}</div>
-      ${products}
-      <button class="btn secondary" onclick="showBag()">Назад в сумку</button>
+      <div class="shop-hero">
+        <div class="shop-hero-copy">
+          <div class="shop-kicker">Лавка шахтёра</div>
+          <h2>${escapeHtml(category.title)}</h2>
+          <p>Снаряжение и припасы для новых вылазок.</p>
+        </div>
+        <div class="shop-coins">🪙 ${shop.coins}</div>
+      </div>
+      <div class="shop-toolbar"><div class="shop-tabs">${tabs}</div></div>
+      <div class="shop-products">${products}</div>
+      <div class="shop-back"><button class="btn secondary" onclick="showBag()">Назад в сумку</button></div>
     </section>`;
   }
 
