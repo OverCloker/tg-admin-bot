@@ -22,7 +22,7 @@ h1{font-size:28px;margin:0}.muted{color:#9ba8b8}.stats{display:grid;grid-templat
 </style>
 </head>
 <body><main>
-<div class="top"><div><h1>⛏️ Шахта</h1><div class="muted" id="name">Загрузка...</div></div><button class="btn secondary" onclick="tg&&tg.close()">Закрыть</button></div>
+<div class="top"><div><h1>⛏️ Шахта</h1><div class="muted" id="name">Загрузка...</div></div><button class="btn secondary" type="button" onclick="if(window.Telegram&&window.Telegram.WebApp){window.Telegram.WebApp.close()}">Закрыть</button></div>
 <div id="content"></div>
 </main>
 <script>
@@ -40,4 +40,3 @@ async function pickTicket(cell){if(busy)return;busy=true;try{const d=await api('
 load();
 </script>
 </body></html>"""
-

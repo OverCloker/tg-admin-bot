@@ -3066,7 +3066,7 @@ async def audit_api_request(request: Request, call_next):
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org; style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: https:; media-src 'self' blob: https: http:; connect-src 'self' https:; "
         "object-src 'none'; frame-src 'none'; base-uri 'none'; frame-ancestors 'none'",
     )
