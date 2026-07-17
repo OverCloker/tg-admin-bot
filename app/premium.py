@@ -3,7 +3,9 @@ import os
 import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 
@@ -73,6 +75,15 @@ class PremiumLimitError(PremiumError):
     pass
 
 
+def synchronized(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapped
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -93,13 +104,16 @@ class PremiumService:
     def __init__(self, db_path: str) -> None:
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path, timeout=30)
+        self._lock = RLock()
+        self._conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self.init()
 
+    @synchronized
     def close(self) -> None:
         self._conn.close()
 
+    @synchronized
     def init(self) -> None:
         self._conn.executescript(
             """
@@ -176,12 +190,14 @@ class PremiumService:
         )
         self._conn.commit()
 
+    @synchronized
     def get_plan_config(self, plan: str) -> PlanConfig:
         config = PLANS.get(plan)
         if not config:
             raise PremiumError(f"Неизвестный Premium-тариф: {plan}")
         return config
 
+    @synchronized
     def ensure_user(self, user_id: int, username: str | None = None) -> None:
         self._conn.execute(
             """
@@ -192,6 +208,7 @@ class PremiumService:
         )
         self._conn.commit()
 
+    @synchronized
     def get_user_subscription(self, user_id: int) -> sqlite3.Row | None:
         return self._conn.execute(
             """
@@ -205,6 +222,7 @@ class PremiumService:
             (user_id,),
         ).fetchone()
 
+    @synchronized
     def list_subscriptions(self, limit: int = 500) -> list[sqlite3.Row]:
         return self._conn.execute(
             """
@@ -218,9 +236,11 @@ class PremiumService:
             (max(1, min(2000, int(limit))),),
         ).fetchall()
 
+    @synchronized
     def has_active_premium(self, user_id: int) -> bool:
         return self.get_user_plan(user_id) is not None
 
+    @synchronized
     def get_user_plan(self, user_id: int) -> PlanConfig | None:
         subscription = self.get_user_subscription(user_id)
         if not subscription or subscription["status"] != "active":
@@ -235,6 +255,7 @@ class PremiumService:
             return None
         return PLANS.get(subscription["plan"])
 
+    @synchronized
     def activate_subscription(
         self,
         user_id: int,
@@ -277,6 +298,7 @@ class PremiumService:
         self.log("INFO", f"Premium purchased: user={user_id}, plan={plan}, expires={utc_iso(expiry)}")
         return self.get_user_subscription(user_id)
 
+    @synchronized
     def check_media_limits(
         self,
         user_id: int,
@@ -300,6 +322,7 @@ class PremiumService:
             raise PremiumLimitError(f"Расшифровка превышает лимит тарифа: {plan.max_transcription_seconds // 60} мин.")
         return plan
 
+    @synchronized
     def increment_daily_media_usage(self, user_id: int) -> int:
         today = utc_now().date().isoformat()
         self._conn.execute(
@@ -312,6 +335,7 @@ class PremiumService:
         self._conn.commit()
         return self.daily_media_usage(user_id)
 
+    @synchronized
     def daily_media_usage(self, user_id: int) -> int:
         row = self._conn.execute(
             "select media_tasks_count from usage_daily where user_id = ? and date = ?",
@@ -319,6 +343,7 @@ class PremiumService:
         ).fetchone()
         return int(row["media_tasks_count"]) if row else 0
 
+    @synchronized
     def check_radio_recognition_limit(self, user_id: int) -> PlanConfig:
         plan = self.get_user_plan(user_id)
         if plan is None:
@@ -327,6 +352,7 @@ class PremiumService:
             raise PremiumLimitError("Дневной лимит распознаваний исчерпан.")
         return plan
 
+    @synchronized
     def claim_radio_recognition_slot(self, user_id: int) -> PlanConfig:
         plan = self.get_user_plan(user_id)
         if plan is None:
@@ -357,6 +383,7 @@ class PremiumService:
             self._conn.rollback()
             raise
 
+    @synchronized
     def release_radio_recognition_slot(self, user_id: int) -> None:
         today = utc_now().date().isoformat()
         self._conn.execute(
@@ -369,6 +396,7 @@ class PremiumService:
         )
         self._conn.commit()
 
+    @synchronized
     def increment_radio_recognition_usage(self, user_id: int) -> int:
         today = utc_now().date().isoformat()
         self._conn.execute(
@@ -381,6 +409,7 @@ class PremiumService:
         self._conn.commit()
         return self.daily_radio_recognition_usage(user_id)
 
+    @synchronized
     def daily_radio_recognition_usage(self, user_id: int) -> int:
         row = self._conn.execute(
             "select recognitions_count from radio_usage_daily where user_id = ? and date = ?",
@@ -388,6 +417,7 @@ class PremiumService:
         ).fetchone()
         return int(row["recognitions_count"]) if row else 0
 
+    @synchronized
     def add_radio_track(
         self,
         user_id: int,
@@ -406,6 +436,7 @@ class PremiumService:
         )
         self._conn.commit()
 
+    @synchronized
     def radio_track_history(self, user_id: int, limit: int = 100) -> list[sqlite3.Row]:
         return self._conn.execute(
             """
@@ -415,6 +446,7 @@ class PremiumService:
             (user_id, max(1, min(500, int(limit)))),
         ).fetchall()
 
+    @synchronized
     def get_mine_bonuses(self, user_id: int) -> dict[str, float | str | None]:
         plan = self.get_user_plan(user_id)
         if plan is None:
@@ -431,6 +463,7 @@ class PremiumService:
             "luck_regen_multiplier": plan.luck_regen_multiplier,
         }
 
+    @synchronized
     def log(self, level: str, text: str) -> None:
         try:
             self._conn.execute(
