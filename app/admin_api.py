@@ -795,6 +795,7 @@ ADMIN_PANEL_HTML = r"""
     let radioResults = [];
     let analyticsAppOpenSent = false;
     let ownerActionsAllowed = false;
+    let ownerOnlyActionsAllowed = false;
     let adminPermissions = {};
     let adminFeaturePermissions = {};
     let editingButtonId = null;
@@ -1335,6 +1336,7 @@ ADMIN_PANEL_HTML = r"""
         }
         const status = await api("/admin/status");
         ownerActionsAllowed = Boolean(status.ownerActionsAllowed);
+        ownerOnlyActionsAllowed = Boolean(status.ownerOnlyActionsAllowed);
         adminPermissions = status.permissions || {};
         adminFeaturePermissions = status.featurePermissions || {};
         document.getElementById("status").textContent =
@@ -1989,7 +1991,17 @@ ADMIN_PANEL_HTML = r"""
         ["luck", "input", "Удача 0-100"],
         ["extraDigs", "input", "Доп. копания (+/-)"]
       ], "grantDig()") : `<p class="muted">Начислять или забирать ресурсы может только главный админ бота.</p>`;
-      return grantForm + `<h2 style="margin-top:16px">Игроки шахты</h2>${pager}${rows || `<p class="muted">Пока нет игроков.</p>`}${pager}`;
+      const ticketGrantForm = ownerOnlyActionsAllowed ? `
+        <div class="form-stack" style="margin-top:16px">
+          <h2>Выдать билеты</h2>
+          <p class="muted">Доступно только владельцу бота. Укажи User ID игрока шахты.</p>
+          <input id="ticketUserId" placeholder="User ID">
+          <input id="goldenTickets" type="number" min="1" placeholder="Количество золотых билетов">
+          <input id="superPasses" type="number" min="1" placeholder="Количество супер-игр">
+          <button onclick="grantTickets()">Выдать билеты</button>
+        </div>
+      ` : "";
+      return grantForm + ticketGrantForm + `<h2 style="margin-top:16px">Игроки шахты</h2>${pager}${rows || `<p class="muted">Пока нет игроков.</p>`}${pager}`;
     }
 
     function premiumSubscriptionsForm() {
@@ -2404,6 +2416,19 @@ ADMIN_PANEL_HTML = r"""
       afterAction("Игрок обновлен");
     }
 
+    async function grantTickets() {
+      const payload = { userId: Number(val("ticketUserId")), clearCooldown: false };
+      if (val("goldenTickets")) payload.goldenTickets = Number(val("goldenTickets"));
+      if (val("superPasses")) payload.superPasses = Number(val("superPasses"));
+      if (payload.goldenTickets === undefined && payload.superPasses === undefined) {
+        throw new Error("Укажи количество билетов или доступов.");
+      }
+      await api(`/admin/dig/grant`, { method: "POST", body: JSON.stringify(payload) });
+      digPlayers = await api(`/admin/dig/players?page=${digPlayers.page || 1}&per_page=20`);
+      document.getElementById("actionBody").innerHTML = mineForm();
+      toast("Билеты выданы");
+    }
+
     async function grantPremium() {
       const payload = {
         userId: Number(val("premiumUserId")),
@@ -2698,6 +2723,8 @@ class DigGrantPayload(BaseModel):
     coins: int | None = None
     luck: int | None = Field(default=None, ge=0, le=100)
     extraDigs: int | None = None
+    goldenTickets: int | None = None
+    superPasses: int | None = None
     clearCooldown: bool = False
 
 
@@ -4109,6 +4136,12 @@ def require_owner_action() -> None:
         raise HTTPException(status_code=403, detail="Only bot owner admins can do this")
 
 
+def require_owner_only() -> None:
+    config = load_config()
+    if config.owner_id is None or current_actor_id() != config.owner_id:
+        raise HTTPException(status_code=403, detail="Только владелец бота может выдавать билеты.")
+
+
 def current_actor_id() -> int | None:
     return CURRENT_ADMIN_ACTOR_ID.get()
 
@@ -4213,6 +4246,7 @@ async def status() -> dict[str, Any]:
         "starAmount": sum(int(item.amount) for item in stars),
         "digPlayers": len(dig_players),
         "ownerActionsAllowed": owner_actions_allowed(),
+        "ownerOnlyActionsAllowed": config.owner_id is not None and current_actor_id() == config.owner_id,
         "currentUserId": current_actor_id(),
         "permissions": permissions,
         "featurePermissions": feature_permissions,
@@ -5062,12 +5096,20 @@ def dig_grant(payload: DigGrantPayload) -> dict[str, Any]:
     require_owner_action()
     with open_db() as db:
         require_admin_feature(db, "mine.grant")
+        if payload.goldenTickets is not None or payload.superPasses is not None:
+            require_owner_only()
+            if db.get_dig_player(0, payload.userId) is None:
+                raise HTTPException(status_code=404, detail="Игрок шахты с таким User ID не зарегистрирован.")
         if payload.coins is not None:
             db.add_dig_coins(0, payload.userId, payload.coins)
         if payload.luck is not None:
             db.set_dig_luck(0, payload.userId, payload.luck, utc_now())
         if payload.extraDigs is not None:
             db.adjust_dig_item(0, payload.userId, "star_dig", payload.extraDigs)
+        if payload.goldenTickets is not None:
+            db.adjust_dig_item(0, payload.userId, "golden_ticket", payload.goldenTickets)
+        if payload.superPasses is not None:
+            db.adjust_dig_item(0, payload.userId, "super_game_pass", payload.superPasses)
         if payload.clearCooldown:
             db.clear_dig_cooldown(0, payload.userId)
     return ok("dig player updated")

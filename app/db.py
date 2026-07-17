@@ -785,6 +785,15 @@ class Database:
                 updated_at text not null
             );
 
+            create table if not exists super_ticket_games (
+                user_id integer primary key,
+                cells_json text not null,
+                opened_json text not null default '[]',
+                attempts_left integer not null default 10,
+                created_at text not null,
+                updated_at text not null
+            );
+
             create table if not exists dig_contracts (
                 user_id integer not null,
                 contract_date text not null,
@@ -1099,6 +1108,36 @@ class Database:
 
     def clear_gold_ticket_game(self, user_id: int) -> None:
         self._conn.execute("delete from gold_ticket_games where user_id = ?", (int(user_id),))
+        self._conn.commit()
+
+    def get_super_ticket_game(self, user_id: int) -> dict | None:
+        row = self._conn.execute(
+            "select user_id, cells_json, opened_json, attempts_left, created_at, updated_at "
+            "from super_ticket_games where user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def save_super_ticket_game(
+        self, user_id: int, cells_json: str, opened_json: str, attempts_left: int, created_at: str
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into super_ticket_games
+                (user_id, cells_json, opened_json, attempts_left, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?)
+            on conflict(user_id) do update set
+                cells_json = excluded.cells_json,
+                opened_json = excluded.opened_json,
+                attempts_left = excluded.attempts_left,
+                updated_at = excluded.updated_at
+            """,
+            (int(user_id), cells_json, opened_json, max(0, int(attempts_left)), created_at, utc_now()),
+        )
+        self._conn.commit()
+
+    def clear_super_ticket_game(self, user_id: int) -> None:
+        self._conn.execute("delete from super_ticket_games where user_id = ?", (int(user_id),))
         self._conn.commit()
 
     def list_chats(self) -> list[RegisteredChat]:
@@ -3143,6 +3182,20 @@ class Database:
             where chat_id = ? and user_id = ? and item_key = ? and quantity > 0
             """,
             (utc_now(), chat_id, user_id, item_key),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def consume_dig_items(self, chat_id: int, user_id: int, item_key: str, quantity: int) -> bool:
+        chat_id = DIG_GLOBAL_CHAT_ID
+        quantity = max(1, int(quantity))
+        cur = self._conn.execute(
+            """
+            update dig_items
+            set quantity = quantity - ?, updated_at = ?
+            where chat_id = ? and user_id = ? and item_key = ? and quantity >= ?
+            """,
+            (quantity, utc_now(), chat_id, user_id, item_key, quantity),
         )
         self._conn.commit()
         return cur.rowcount > 0

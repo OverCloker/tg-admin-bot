@@ -8,6 +8,8 @@ from threading import Lock
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl
+from aiogram import Bot
+from aiogram.types import LabeledPrice
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
@@ -23,8 +25,23 @@ class TicketPick(BaseModel):
     cell: int = Field(ge=0, le=8)
 
 
+class SuperTicketPick(BaseModel):
+    cell: int = Field(ge=0, le=80)
+
+
 def _ticket_public(db: Database, user_id: int) -> dict[str, Any] | None:
     game = db.get_gold_ticket_game(user_id)
+    if not game:
+        return None
+    return {
+        "active": True,
+        "opened": json.loads(game["opened_json"] or "[]"),
+        "attemptsLeft": int(game["attempts_left"]),
+    }
+
+
+def _super_ticket_public(db: Database, user_id: int) -> dict[str, Any] | None:
+    game = db.get_super_ticket_game(user_id)
     if not game:
         return None
     return {
@@ -80,7 +97,13 @@ def _state(db: Database, user_id: int) -> dict[str, Any]:
             "cooldownUntil": cooldown,
             "items": {x.item_key: x.quantity for x in db.list_dig_items(0, user_id)},
             "goldenTickets": db.get_dig_item_quantity(0, user_id, "golden_ticket"),
-            "ticketGame": _ticket_public(db, user_id)}
+            "ticketGame": _ticket_public(db, user_id),
+            "superPasses": db.get_dig_item_quantity(0, user_id, "super_game_pass"),
+            "superGame": _super_ticket_public(db, user_id),
+            "superRewards": {
+                "mute30": db.get_dig_item_quantity(0, user_id, "super_mute30"),
+                "tag": db.get_dig_item_quantity(0, user_id, "super_tag"),
+            }}
 
 
 def _begin(db: Database, game: Any, user: dict[str, Any], now: datetime) -> None:
@@ -229,6 +252,99 @@ def gold_ticket_pick(
                 db.save_gold_ticket_game(user["id"], game["cells_json"], json.dumps(opened), attempts_left, game["created_at"])
                 next_game = _ticket_public(db, user["id"])
             return {"ok": True, "cell": payload.cell, "prize": prize, "attemptsLeft": attempts_left, "game": next_game, "state": _state(db, user["id"])}
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/super-game/start")
+def super_game_start(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    with DIG_LOCK:
+        db = _db()
+        try:
+            active = _super_ticket_public(db, user["id"])
+            if active:
+                return {"ok": True, "game": active, "state": _state(db, user["id"])}
+            if db.get_dig_item_quantity(0, user["id"], "golden_ticket") >= 3:
+                db.consume_dig_items(0, user["id"], "golden_ticket", 3)
+                source = "tickets"
+            elif db.consume_dig_item(0, user["id"], "super_game_pass"):
+                source = "stars"
+            else:
+                raise HTTPException(400, "Нужно 3 золотых билета или доступ к супер-игре за 10 ⭐.")
+
+            cells: list[int | str] = [0] * 81
+            positions = secrets.SystemRandom().sample(range(81), 11)
+            for cell, prize in zip(positions[:10], (50, 75, 100, 125, 150, 175, 200, 225, 250, 250)):
+                cells[cell] = prize
+            cells[positions[10]] = secrets.choice(("super:mute30", "super:tag", "super:coins500"))
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            db.save_super_ticket_game(user["id"], json.dumps(cells), "[]", 10, now)
+            return {"ok": True, "source": source, "game": _super_ticket_public(db, user["id"]), "state": _state(db, user["id"])}
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/super-game/invoice")
+async def super_game_invoice(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict[str, str]:
+    user = _telegram_user(x_telegram_init_data)
+    bot = Bot(token=load_config().bot_token)
+    try:
+        link = await bot.create_invoice_link(
+            title="Супер-игра 9×9",
+            description="10 попыток, 10 денежных призов и один сундук с особой наградой.",
+            payload=f"dig_star:super_game:{user['id']}:0:{secrets.token_hex(12)}",
+            currency="XTR",
+            prices=[LabeledPrice(label="Супер-игра 9×9", amount=10)],
+            provider_token="",
+        )
+        return {"url": link}
+    finally:
+        await bot.session.close()
+
+
+@router.post("/miniapp/super-game/pick")
+def super_game_pick(
+    payload: SuperTicketPick,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    with DIG_LOCK:
+        db = _db()
+        try:
+            game = db.get_super_ticket_game(user["id"])
+            if not game:
+                raise HTTPException(400, "Сначала открой супер-игру.")
+            opened = json.loads(game["opened_json"] or "[]")
+            if payload.cell in opened:
+                raise HTTPException(400, "Эта клетка уже открыта.")
+            if int(game["attempts_left"]) <= 0:
+                raise HTTPException(400, "Попытки закончились.")
+            cells = json.loads(game["cells_json"])
+            reward = cells[payload.cell]
+            opened.append(payload.cell)
+            attempts_left = int(game["attempts_left"]) - 1
+            reward_key = None
+            if isinstance(reward, int) and reward > 0:
+                db.add_dig_coins(0, user["id"], reward)
+            elif reward == "super:mute30":
+                db.add_dig_item(0, user["id"], "super_mute30", 1)
+                reward_key = "mute30"
+            elif reward == "super:tag":
+                db.add_dig_item(0, user["id"], "super_tag", 1)
+                reward_key = "tag"
+            elif reward == "super:coins500":
+                db.add_dig_coins(0, user["id"], 500)
+                reward_key = "coins500"
+            if attempts_left <= 0:
+                db.clear_super_ticket_game(user["id"])
+                next_game = None
+            else:
+                db.save_super_ticket_game(user["id"], game["cells_json"], json.dumps(opened), attempts_left, game["created_at"])
+                next_game = _super_ticket_public(db, user["id"])
+            return {"ok": True, "cell": payload.cell, "coins": reward if isinstance(reward, int) else 0,
+                    "reward": reward_key, "attemptsLeft": attempts_left, "game": next_game,
+                    "state": _state(db, user["id"])}
         finally:
             db.close()
 

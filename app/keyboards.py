@@ -14,11 +14,15 @@ def miniapp_button() -> InlineKeyboardButton | None:
     if not url:
         base = os.getenv("ADMIN_PUBLIC_URL", "").strip().rstrip("/")
         url = f"{base}/miniapp" if base else ""
+    if not url:
+        return InlineKeyboardButton(text="Шахта Mini App", callback_data="miniapp:open")
     return InlineKeyboardButton(text="Шахта Mini App", web_app=WebAppInfo(url=url)) if url else None
 
 
 def main_menu(show_server_address: bool = False) -> InlineKeyboardMarkup:
     rows = [
+        [miniapp_button()],
+        [InlineKeyboardButton(text="Купить золотой билет - 2 ⭐", callback_data="gold_ticket:buy")],
         [InlineKeyboardButton(text="Панель владельца", callback_data="ui:chats")],
         [InlineKeyboardButton(text="Я пользователь", callback_data="user:chats")],
         [InlineKeyboardButton(text="\u041f\u0440\u043e\u0444\u0438\u043b\u044c", callback_data="profile:me")],
@@ -265,6 +269,7 @@ def user_donate_menu(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Копать 5 раз - 5 ⭐", callback_data=f"user:star:digs5:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Копать 5 раз со 100 удачей - 15 ⭐", callback_data=f"user:star:lucky_digs5:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Прокопать 10 м - 50 ⭐", callback_data=f"user:star:depth10:{chat_id}:{user_id}")],
+            [InlineKeyboardButton(text="Супер-игра 9×9 - 10 ⭐", callback_data=f"user:star:super_game:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Назад", callback_data=f"user:mine:{chat_id}")],
         ]
     )

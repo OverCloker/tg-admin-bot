@@ -27,7 +27,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, LabeledPrice, Message, MessageReactionUpdated, PreCheckoutQuery, SuccessfulPayment, User
+from aiogram.types import CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, LabeledPrice, MenuButtonWebApp, Message, MessageReactionUpdated, PreCheckoutQuery, SuccessfulPayment, User, WebAppInfo
 
 from .config import load_config
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
@@ -152,6 +152,8 @@ DIG_STAR_ACTIONS = {
     "digs5": ("Копать 5 раз", "Пять дополнительных раскопок без ожидания между попытками.", 5, "star_dig", 5),
     "lucky_digs5": ("Копать 5 раз со 100 удачей", "Пять дополнительных раскопок без ожидания. В каждой действует 100 удачи.", 15, "star_lucky_dig", 5),
     "depth10": ("Прокопать 10 м", "Следующая раскопка гарантированно пройдет все 10 метров без ожидания.", 50, "star_depth_10", 1),
+    "golden_ticket": ("Золотой билет", "Одна игра 3×3 с тремя призами: 10, 25 и 50 котоинов.", 2, "golden_ticket", 1),
+    "super_game": ("Супер-игра 9×9", "Одна супер-игра: 10 попыток, 10 денежных призов и один сундук с особой наградой.", 10, "super_game_pass", 1),
 }
 DIG_SUCCESS_CHANCES = [90.0, 88.89, 87.5, 85.71, 83.33, 82.0, 75.61, 67.74, 52.38, 9.09]
 DIG_REWARDS = {
@@ -1222,16 +1224,21 @@ def dig_effects_text(items: dict[str, int]) -> str:
         "Оплаченные": [],
         "Прочее": [],
     }
-    paid_keys = {"star_dig", "star_lucky_dig", "star_depth_10"}
+    paid_keys = {"star_dig", "star_lucky_dig", "star_depth_10", "super_game_pass"}
+    special_names = {
+        "super_game_pass": "Супер-игра 9×9",
+        "super_mute30": "Право на мут 30 минут",
+        "super_tag": "Право выбрать тег",
+    }
 
-    for key in DIG_ITEM_ORDER + list(paid_keys):
+    for key in DIG_ITEM_ORDER + list(paid_keys) + list(special_names):
         count = items.get(key, 0)
         if count <= 0 or key in hidden_keys:
             continue
         if key in chain_keys and key not in best_chain_keys:
             continue
 
-        name = DIG_SHOP_ITEMS.get(key, (key, 0, ""))[0]
+        name = special_names.get(key, DIG_SHOP_ITEMS.get(key, (key, 0, ""))[0])
         if key in paid_keys:
             groups["Оплаченные"].append(f"{name} x{count}")
         elif key in DIG_PERMANENT_ITEMS:
@@ -1291,6 +1298,7 @@ def dig_bag_text(chat_id: int, user_id: int) -> str | None:
         f"Копать: <b>{escape(cooldown)}</b>\n"
         f"Артефакты: <b>{escape(dig_artifact_text(items))}</b>\n\n"
         f"Золотые билеты: <b>{items.get('golden_ticket', 0)}</b>\n"
+        f"Супер-игры: <b>{items.get('super_game_pass', 0)}</b>\n"
         f"<b>Эффекты:</b>\n{escape(dig_effects_text(items))}"
     )
 
@@ -2666,6 +2674,36 @@ def configured_server_urls() -> list[str]:
     return urls
 
 
+def public_miniapp_url() -> str:
+    """Return the HTTPS URL used by Telegram's native bot menu button."""
+    url = os.getenv("MINI_APP_URL", "").strip().rstrip("/")
+    if url:
+        return url
+    base = os.getenv("ADMIN_PUBLIC_URL", "").strip().rstrip("/")
+    return f"{base}/miniapp" if base else ""
+
+
+async def configure_miniapp_menu_button(bot: Bot) -> None:
+    """Expose the Mini App in the Telegram input-area menu for private chats."""
+    url = public_miniapp_url()
+    if not url:
+        logging.warning("Mini App menu button is not configured: set MINI_APP_URL in .env")
+        return
+    if not url.lower().startswith("https://"):
+        logging.warning("Mini App menu button requires an HTTPS URL: %s", url)
+        return
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="Шахта",
+                web_app=WebAppInfo(url=url),
+            )
+        )
+        logging.info("Mini App menu button configured: %s", url)
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        logging.warning("Could not configure Mini App menu button: %s", exc)
+
+
 def local_ipv4_addresses() -> list[str]:
     addresses: list[str] = []
 
@@ -3844,6 +3882,36 @@ async def cb_user_dig_star(callback: CallbackQuery) -> None:
         await callback.answer("Не получилось отправить счет. Нажми /start и попробуй снова.", show_alert=True)
         return
     await callback.answer("Счет отправлен.")
+
+
+@router.callback_query(F.data == "miniapp:open")
+async def cb_miniapp_open(callback: CallbackQuery) -> None:
+    await callback.answer(
+        "Mini App пока не настроен. Укажи MINI_APP_URL или ADMIN_PUBLIC_URL в .env и перезапусти бота.",
+        show_alert=True,
+    )
+
+
+@router.callback_query(F.data == "gold_ticket:buy")
+async def cb_buy_golden_ticket(callback: CallbackQuery) -> None:
+    if not callback.from_user:
+        await callback.answer("Не получилось определить пользователя.", show_alert=True)
+        return
+    title, description, price = dig_star_invoice("golden_ticket")
+    try:
+        await callback.bot.send_invoice(
+            chat_id=callback.from_user.id,
+            title=title,
+            description=description,
+            payload=dig_star_payload("golden_ticket", callback.from_user.id, 0),
+            currency="XTR",
+            prices=[LabeledPrice(label=title, amount=price)],
+            provider_token="",
+        )
+    except (TelegramBadRequest, TelegramForbiddenError):
+        await callback.answer("Открой личный чат с ботом и нажми /start.", show_alert=True)
+        return
+    await callback.answer("Счет на 2 ⭐ отправлен в личку.")
 
 
 @router.callback_query(F.data.startswith("dig:achievements:"))
@@ -6068,7 +6136,7 @@ async def pre_checkout(pre_checkout_query: PreCheckoutQuery) -> None:
                 error_message="Этот счет создан для другого пользователя.",
             )
             return
-        if db.get_dig_player(chat_id, user_id) is None:
+        if db.get_dig_player(chat_id, user_id) is None and dig_star[0] != "golden_ticket":
             await pre_checkout_query.answer(
                 ok=False,
                 error_message="Сначала зарегистрируйся в игре.",
@@ -6130,8 +6198,12 @@ async def handle_dig_star_payment(message: Message, payment: SuccessfulPayment) 
 
     player = db.get_dig_player(chat_id, user_id)
     if player is None:
-        await message.answer("Оплата прошла, но игрок не найден. Напиши администратору бота.")
-        return True
+        if action == "golden_ticket" and message.from_user:
+            db.register_dig_player(0, message.from_user.id, message.from_user.username, message.from_user.full_name)
+            player = db.get_dig_player(0, user_id)
+        else:
+            await message.answer("Оплата прошла, но игрок не найден. Напиши администратору бота.")
+            return True
 
     if action == "luck":
         now = datetime.now(timezone.utc)
@@ -6153,7 +6225,11 @@ async def handle_dig_star_payment(message: Message, payment: SuccessfulPayment) 
             return True
         purchase_action = "item"
         luck_at = None
-        if item_key == "star_depth_10":
+        if item_key == "golden_ticket":
+            result = "Оплата прошла. Золотой билет добавлен в шахту Mini App."
+        elif item_key == "super_game_pass":
+            result = "Оплата прошла. Добавлен доступ к супер-игре 9×9."
+        elif item_key == "star_depth_10":
             result = "Оплата прошла. Следующая раскопка гарантированно пройдет <b>10 м</b> без ожидания."
         elif item_key == "star_lucky_dig":
             result = f"Оплата прошла. Начислено дополнительных раскопок со <b>100 удачей</b>: <b>{quantity}</b>."
@@ -8294,6 +8370,7 @@ async def main() -> None:
     dispatcher.errors.register(staff_error_handler)
 
     try:
+        await configure_miniapp_menu_button(bot)
         await bot.get_me()
         if staff_service.chat_id is not None:
             # Startup is not an owner-authorized binding action. Never rewrite
