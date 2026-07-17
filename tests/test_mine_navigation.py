@@ -82,6 +82,24 @@ def test_miniapp_contains_requested_animations() -> None:
     assert "@keyframes chest-open" in MINI_APP_HTML
 
 
+def test_ticket_picks_update_in_place_without_scrolling_or_full_render() -> None:
+    gold_pick = MINI_APP_HTML.split("async function pickGoldTicket", 1)[1].split(
+        "async function startSuperGame", 1
+    )[0]
+    super_pick = MINI_APP_HTML.split("async function pickSuper", 1)[1].split(
+        "async function showBag", 1
+    )[0]
+
+    assert "updateGameUi(" in gold_pick and '"gold",' in gold_pick
+    assert "updateGameUi(" in super_pick and '"super",' in super_pick
+    assert "renderMine()" not in gold_pick
+    assert "renderMine()" not in super_pick
+    assert "scrollToTop()" not in gold_pick
+    assert "scrollToTop()" not in super_pick
+    assert "await sleep(700)" not in gold_pick
+    assert "await sleep(700)" not in super_pick
+
+
 def test_shop_deep_link_opens_a_distinct_compact_screen() -> None:
     assert 'setScreenHeader(initialView === "shop" ? "shop"' in MINI_APP_HTML
     assert 'screenTitle.textContent = "🛒 Магазин"' in MINI_APP_HTML

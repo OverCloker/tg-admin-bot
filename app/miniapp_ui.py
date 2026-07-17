@@ -150,6 +150,12 @@ MINI_APP_HTML = r"""<!doctype html>
     .super-cell { border-radius: 5px; font-size: 17px; }
     .super-cell .cat { font-size: clamp(15px, 5vw, 23px); }
     .super-cell .hammer { font-size: 22px; }
+    .game-result {
+      min-height: 1.35em;
+      margin-top: 10px;
+      color: var(--ok);
+      font-weight: 700;
+    }
     .bag-screen { margin-top: 14px; }
     .bag-summary {
       display: flex;
@@ -620,7 +626,7 @@ MINI_APP_HTML = r"""<!doctype html>
       : "Одно нажатие проверяет один следующий метр.";
     return `
       <div class="stats">
-        <div class="stat">🪙<b>${state.coins}</b></div>
+        <div class="stat">🪙<b id="mineCoins">${state.coins}</b></div>
         <div class="stat">🍀<b>${state.luck}/100</b></div>
         <div class="stat">🏆<b>${state.record} м</b></div>
       </div>
@@ -656,9 +662,10 @@ MINI_APP_HTML = r"""<!doctype html>
         <span class="hammer">🔨</span>${opened ? '<span class="cell-prize">✓</span>' : catFigure(index)}
       </button>`;
     }).join("");
-    return `<section class="panel">
-      <div class="section-title"><h2>🎟️ Золотой билет</h2><span class="counter">${game.attemptsLeft} попытки</span></div>
+    return `<section class="panel" id="goldGamePanel">
+      <div class="section-title"><h2>🎟️ Золотой билет</h2><span class="counter" id="goldAttempts">${game.attemptsLeft} попытки</span></div>
       <div class="ticket-grid">${cells}</div>
+      <div class="game-result" id="goldResult" aria-live="polite"></div>
     </section>`;
   }
 
@@ -681,9 +688,10 @@ MINI_APP_HTML = r"""<!doctype html>
         <span class="hammer">🔨</span>${opened ? '<span class="cell-prize">✓</span>' : catFigure(index)}
       </button>`;
     }).join("");
-    return `<section class="panel">
-      <div class="section-title"><h2>🏆 Супер-игра</h2><span class="counter">${game.attemptsLeft} попыток</span></div>
+    return `<section class="panel" id="superGamePanel">
+      <div class="section-title"><h2>🏆 Супер-игра</h2><span class="counter" id="superAttempts">${game.attemptsLeft} попыток</span></div>
       <div class="super-grid">${cells}</div>
+      <div class="game-result" id="superResult" aria-live="polite"></div>
     </section>`;
   }
 
@@ -766,9 +774,23 @@ MINI_APP_HTML = r"""<!doctype html>
 
   const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
+  function updateGameUi(kind, attemptsLeft, message) {
+    const attempts = document.getElementById(kind === "gold" ? "goldAttempts" : "superAttempts");
+    const result = document.getElementById(kind === "gold" ? "goldResult" : "superResult");
+    const coins = document.getElementById("mineCoins");
+    if (attempts) attempts.textContent = attemptsLeft > 0 ? `${attemptsLeft} попыток` : "Игра завершена";
+    if (result) result.textContent = message;
+    if (coins && state) coins.textContent = state.coins;
+    if (attemptsLeft <= 0) {
+      const panel = document.getElementById(kind === "gold" ? "goldGamePanel" : "superGamePanel");
+      if (panel) panel.querySelectorAll("button:not(:disabled)").forEach(item => { item.disabled = true; });
+    }
+  }
+
   async function pickGoldTicket(cell, button) {
     if (busy) return;
     busy = true;
+    button.disabled = true;
     button.classList.add("breaking");
     try {
       const [result] = await Promise.all([
@@ -779,11 +801,15 @@ MINI_APP_HTML = r"""<!doctype html>
       ]);
       button.classList.remove("breaking");
       button.innerHTML = `<span class="cell-prize">${result.prize ? `${result.prize} 🪙` : "Пусто"}</span>`;
-      await sleep(700);
       state = result.state;
-      renderMine();
-      showNotice(result.prize ? `Найдено ${result.prize} котоинов!` : "Под котиком пусто.");
+      updateGameUi(
+        "gold",
+        result.attemptsLeft,
+        result.prize ? `Найдено ${result.prize} котоинов!` : "Под котиком пусто."
+      );
     } catch (error) {
+      button.classList.remove("breaking");
+      button.disabled = false;
       alert(error.message);
     } finally {
       busy = false;
@@ -825,6 +851,7 @@ MINI_APP_HTML = r"""<!doctype html>
   async function pickSuper(cell, button) {
     if (busy) return;
     busy = true;
+    button.disabled = true;
     button.classList.add("breaking");
     try {
       const [result] = await Promise.all([
@@ -836,16 +863,20 @@ MINI_APP_HTML = r"""<!doctype html>
       button.classList.remove("breaking");
       const cellResult = result.reward ? "Сундук" : result.coins ? `${result.coins} 🪙` : "Пусто";
       button.innerHTML = `<span class="cell-prize">${cellResult}</span>`;
-      await sleep(700);
       state = result.state;
-      renderMine();
       const messages = {
         mute30: "Сундук открыт: право выдать мут на 30 минут.",
         tag: "Сундук открыт: право выбрать себе тег в чате.",
         coins500: "Сундук открыт: 500 котоинов."
       };
-      showNotice(messages[result.reward] || (result.coins ? `Найдено ${result.coins} котоинов.` : "Клетка пустая."), Boolean(result.reward));
+      updateGameUi(
+        "super",
+        result.attemptsLeft,
+        messages[result.reward] || (result.coins ? `Найдено ${result.coins} котоинов.` : "Клетка пустая.")
+      );
     } catch (error) {
+      button.classList.remove("breaking");
+      button.disabled = false;
       alert(error.message);
     } finally {
       busy = false;
