@@ -189,7 +189,7 @@ def manual_miniapp_button() -> InlineKeyboardButton:
         base = os.getenv("ADMIN_PUBLIC_URL", "").strip().rstrip("/")
         url = f"{base}/miniapp" if base else ""
     label = "\u0412\u0440\u0443\u0447\u043d\u0443\u044e"
-    if not url:
+    if not url or not url.lower().startswith("https://"):
         return InlineKeyboardButton(text=label, callback_data="miniapp:open")
     return InlineKeyboardButton(text=label, web_app=WebAppInfo(url=url))
 

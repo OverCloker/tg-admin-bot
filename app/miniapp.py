@@ -189,8 +189,11 @@ def _finish(db: Database, game: Any, user: dict[str, Any], session: dict[str, An
 
 
 @router.get("/miniapp", response_class=HTMLResponse)
-def miniapp_page() -> str:
-    return MINI_APP_UI_HTML
+def miniapp_page() -> HTMLResponse:
+    return HTMLResponse(
+        MINI_APP_UI_HTML,
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @router.get("/miniapp/shop-bg.png")
