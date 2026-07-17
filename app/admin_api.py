@@ -843,7 +843,10 @@ ADMIN_PANEL_HTML = r"""
 
     function key() {
       const field = document.getElementById("settingsApiKey") || document.getElementById("apiKey");
-      return localStorage.getItem("adminSessionToken") || (field ? field.value.trim() : "");
+      return localStorage.getItem("adminSessionToken")
+        || (field ? field.value.trim() : "")
+        || localStorage.getItem("adminApiKey")
+        || "";
     }
 
     function headers() {
@@ -946,16 +949,39 @@ ADMIN_PANEL_HTML = r"""
       });
       if (!response.ok) {
         localStorage.removeItem("adminSessionToken");
-        toast("Ключ не принят");
+        toast("Ключ не принят этим сервером");
         return;
       }
       const session = await response.json();
       localStorage.setItem("adminSessionToken", session.sessionToken);
-      localStorage.removeItem("adminApiKey");
+      // Keep the original key locally so a server restart can create a new session.
+      // It never leaves this WebView except in the login request.
+      localStorage.setItem("adminApiKey", accessKey);
       if (field) field.value = "";
       syncKeyFields();
       toast("Вход выполнен");
       loadAll();
+    }
+
+    async function loginWithStoredKey() {
+      const accessKey = (localStorage.getItem("adminApiKey") || "").trim();
+      if (!accessKey) return false;
+      try {
+        const response = await fetch("/admin/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accessKey })
+        });
+        if (!response.ok) {
+          localStorage.removeItem("adminSessionToken");
+          return false;
+        }
+        const session = await response.json();
+        localStorage.setItem("adminSessionToken", session.sessionToken);
+        return true;
+      } catch (_) {
+        return false;
+      }
     }
 
     function syncKeyFields() {
@@ -2596,7 +2622,14 @@ ADMIN_PANEL_HTML = r"""
 
     syncKeyFields();
     applyAppSettings();
-    if (key()) loadAll();
+    if (localStorage.getItem("adminApiKey")) {
+      loginWithStoredKey().then(ok => {
+        if (ok) loadAll();
+        else toast("Сохраненный ключ не найден на этом сервере");
+      });
+    } else if (key()) {
+      loadAll();
+    }
   </script>
 </body>
 </html>
