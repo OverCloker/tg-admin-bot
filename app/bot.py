@@ -424,7 +424,7 @@ db: Database
 BOT_ADMIN_IDS: set[int] = set()
 ALERTS_API_TOKEN: str | None = None
 staff_service: StaffService | None = None
-premium_service: PremiumService
+premium_service: PremiumService | None = None
 BOT_STARTED_AT = datetime.now(timezone.utc)
 DIG_PURCHASE_GUARD: dict[tuple[int, int, str, int], datetime] = {}
 SENDER_CACHE_SECONDS = 300
@@ -438,6 +438,14 @@ KNOWN_TOPICS: set[tuple[int, int]] = set()
 TRIGGER_CACHE: dict[int, tuple[float, list]] = {}
 REPLY_CACHE: dict[int, tuple[float, dict[str, object]]] = {}
 BLACKLIST_CACHE: dict[int, tuple[float, list]] = {}
+
+
+def get_premium_service() -> PremiumService:
+    """Return the shared Premium service for both bot and API processes."""
+    global premium_service
+    if premium_service is None:
+        premium_service = PremiumService(load_config().db_path)
+    return premium_service
 ALARM_RUNTIME_CACHE: dict[int, tuple[float, object]] = {}
 BIRTHDAY_CHECK_CACHE: dict[tuple[int, str], float] = {}
 
@@ -937,7 +945,7 @@ def refreshed_dig_luck(user_id: int, luck: int, last_luck_at: str, now: datetime
     except ValueError:
         return max(0, min(100, luck))
     elapsed = max(0, (now - last).total_seconds())
-    multiplier = float(premium_service.get_mine_bonuses(user_id)["luck_regen_multiplier"])
+    multiplier = float(get_premium_service().get_mine_bonuses(user_id)["luck_regen_multiplier"])
     restored = int((elapsed / 3600) * DIG_LUCK_REGEN_PER_HOUR * multiplier)
     return max(0, min(100, luck + restored))
 
@@ -1241,12 +1249,12 @@ def dig_effects_text(items: dict[str, int]) -> str:
 
 
 def user_dig_cooldown(user_id: int) -> timedelta:
-    multiplier = float(premium_service.get_mine_bonuses(user_id)["cooldown_multiplier"])
+    multiplier = float(get_premium_service().get_mine_bonuses(user_id)["cooldown_multiplier"])
     return timedelta(seconds=DIG_COOLDOWN.total_seconds() * multiplier)
 
 
 def apply_premium_coin_bonus(user_id: int, coins: int, used_effects: list[str]) -> int:
-    multiplier = float(premium_service.get_mine_bonuses(user_id)["coins_multiplier"])
+    multiplier = float(get_premium_service().get_mine_bonuses(user_id)["coins_multiplier"])
     if multiplier <= 1:
         return coins
     used_effects.append(f"Premium: +{round((multiplier - 1) * 100)}% котоинов")
