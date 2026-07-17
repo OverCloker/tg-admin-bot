@@ -76,24 +76,93 @@ MINI_APP_HTML = r"""<!doctype html>
       position: relative;
       display: grid;
       place-items: center;
+      perspective: 160px;
       aspect-ratio: 1;
       min-width: 0;
       border: 1px solid #50708d;
       border-radius: 8px;
-      background: #21384d;
+      background: linear-gradient(145deg, #2d4b65, #132638);
+      box-shadow: inset 0 2px 2px #ffffff1c, 0 5px 9px #02060b80;
       color: white;
       cursor: pointer;
+      overflow: hidden;
     }
-    .ticket-cell .cat { font-size: 42px; filter: drop-shadow(0 5px 3px #0007); }
     .ticket-cell .hammer, .super-cell .hammer {
       position: absolute;
-      z-index: 2;
+      z-index: 4;
       opacity: 0;
       font-size: 34px;
       transform: translate(30%, -45%) rotate(-35deg);
     }
     .breaking .hammer { animation: hammer .55s ease-in-out; }
-    .breaking .cat { animation: crack .55s ease-in-out; }
+    .breaking .cat-figure { animation: crack .55s ease-in-out; }
+    .cat-figure {
+      position: relative;
+      display: block;
+      width: 58%;
+      aspect-ratio: 1;
+      transform: rotateX(8deg) rotateY(-7deg);
+      filter: drop-shadow(0 8px 4px #0008);
+    }
+    .cat-face {
+      position: absolute;
+      inset: 13% 4% 2%;
+      z-index: 2;
+      border-radius: 48% 48% 44% 44%;
+      background: radial-gradient(circle at 37% 34%, #fff4ce 0 5%, transparent 6%),
+                  linear-gradient(145deg, #dca75d, #8b582b);
+      border: 2px solid #f1c57f;
+      box-shadow: inset -7px -9px 10px #5b321e80, inset 7px 5px 7px #ffe0a750;
+    }
+    .cat-ear {
+      position: absolute;
+      top: 1%;
+      z-index: 1;
+      width: 38%;
+      height: 42%;
+      background: linear-gradient(135deg, #dca75d, #71401f);
+      border: 2px solid #efc27a;
+      transform: rotate(45deg);
+    }
+    .cat-ear.left { left: 5%; }
+    .cat-ear.right { right: 5%; }
+    .cat-eye {
+      position: absolute;
+      top: 39%;
+      width: 13%;
+      height: 18%;
+      border-radius: 50%;
+      background: #d8ef5e;
+      box-shadow: inset 0 0 0 3px #253014;
+    }
+    .cat-eye.left { left: 25%; }
+    .cat-eye.right { right: 25%; }
+    .cat-nose {
+      position: absolute;
+      left: 45%;
+      top: 61%;
+      width: 12%;
+      height: 9%;
+      border-radius: 60% 60% 70% 70%;
+      background: #4b241f;
+    }
+    .super-cell .cat-figure { width: 72%; }
+    .super-cell .cat-face,
+    .super-cell .cat-ear { border-width: 1px; }
+    .cell-prize {
+      display: grid;
+      place-items: center;
+      position: absolute;
+      inset: 8px;
+      z-index: 5;
+      border-radius: 8px;
+      background: radial-gradient(circle, #ffe28b, #d19531 65%, #7b481c);
+      color: #201307;
+      font-weight: 900;
+      text-align: center;
+      animation: prize-reveal .65s cubic-bezier(.2,.85,.25,1.25);
+    }
+    .super-cell .cell-prize { inset: 2px; border-radius: 4px; font-size: 9px; }
     .opened { background: #101c28; color: var(--ok); cursor: default; }
     @keyframes hammer {
       0% { opacity: 0; transform: translate(45%, -65%) rotate(-45deg); }
@@ -103,8 +172,12 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     @keyframes crack {
       0%, 60% { transform: scale(1); }
-      80% { transform: scale(.82) rotate(-5deg); }
-      100% { transform: scale(1); }
+      80% { transform: scale(.72) rotate(-9deg); filter: brightness(1.8); }
+      100% { transform: scale(.12) rotate(16deg); opacity: 0; }
+    }
+    @keyframes prize-reveal {
+      from { opacity: 0; transform: scale(.2) rotateY(80deg); }
+      to { opacity: 1; transform: scale(1) rotateY(0); }
     }
     .super-grid { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 4px; margin-top: 12px; }
     .super-cell { border-radius: 5px; font-size: 17px; }
@@ -158,6 +231,119 @@ MINI_APP_HTML = r"""<!doctype html>
     .description { margin-top: 6px; color: #d0d8e1; font-size: 14px; line-height: 1.4; }
     .owned { margin-top: 7px; color: var(--ok); font-size: 14px; }
     .error { border-color: var(--danger); color: #ffd8da; }
+    .dig-animation {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: grid;
+      place-items: center;
+      background: #07101be8;
+      backdrop-filter: blur(4px);
+    }
+    .dig-scene {
+      position: relative;
+      width: min(78vw, 330px);
+      aspect-ratio: 1;
+      overflow: hidden;
+      border: 1px solid #765638;
+      border-radius: 50%;
+      background: radial-gradient(circle at 50% 38%, #594531 0 14%, #2e241c 38%, #100d0b 72%);
+      box-shadow: inset 0 0 55px #000, 0 18px 45px #000b;
+    }
+    .dig-pickaxe {
+      position: absolute;
+      left: 45%;
+      top: 17%;
+      z-index: 3;
+      font-size: 88px;
+      transform-origin: 18% 82%;
+      animation: pickaxe-swing .52s ease-in-out infinite;
+    }
+    .dig-rock {
+      position: absolute;
+      z-index: 2;
+      width: 22px;
+      height: 17px;
+      border-radius: 45%;
+      background: #a27b52;
+      box-shadow: inset -5px -5px 5px #543b27;
+      animation: rock-fall .8s ease-out infinite;
+    }
+    .dig-rock.r1 { left: 26%; top: 58%; }
+    .dig-rock.r2 { left: 58%; top: 64%; animation-delay: .18s; }
+    .dig-rock.r3 { left: 45%; top: 49%; animation-delay: .35s; }
+    .dig-caption {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 20%;
+      z-index: 5;
+      text-align: center;
+      font-size: 23px;
+      font-weight: 850;
+      text-shadow: 0 2px 5px #000;
+    }
+    .chest {
+      overflow: hidden;
+      border-color: #e3ac45;
+      background: radial-gradient(circle at 50% 0, #725620, var(--panel) 65%);
+      animation: chest-glow .8s ease-out;
+    }
+    .treasure-chest {
+      position: relative;
+      width: 92px;
+      height: 74px;
+      margin: 2px auto 17px;
+      filter: drop-shadow(0 12px 8px #0008);
+    }
+    .chest-base, .chest-lid {
+      position: absolute;
+      left: 8px;
+      width: 76px;
+      border: 4px solid #5d3515;
+      background: linear-gradient(90deg, #7c461d, #d49b42 48%, #754019);
+      box-shadow: inset 0 0 0 4px #f1c16455;
+    }
+    .chest-base { bottom: 0; height: 45px; border-radius: 4px 4px 10px 10px; }
+    .chest-lid {
+      top: 10px;
+      height: 31px;
+      border-radius: 34px 34px 5px 5px;
+      transform-origin: 50% 100%;
+      animation: chest-open .9s cubic-bezier(.25,.8,.25,1) forwards;
+    }
+    .chest-light {
+      position: absolute;
+      left: 20px;
+      top: 27px;
+      width: 52px;
+      height: 34px;
+      border-radius: 50%;
+      background: #ffe27e;
+      filter: blur(12px);
+      opacity: 0;
+      animation: treasure-light 1s .35s ease-out forwards;
+    }
+    @keyframes pickaxe-swing {
+      0% { transform: rotate(-42deg) translate(-8px, -8px); }
+      55% { transform: rotate(21deg) translate(4px, 10px); }
+      100% { transform: rotate(-42deg) translate(-8px, -8px); }
+    }
+    @keyframes rock-fall {
+      0% { opacity: 0; transform: translate(0, -18px) rotate(0); }
+      35% { opacity: 1; }
+      100% { opacity: 0; transform: translate(34px, 48px) rotate(150deg); }
+    }
+    @keyframes chest-open {
+      0% { transform: translateY(0) rotateX(0); }
+      65%, 100% { transform: translateY(-19px) rotateX(65deg); }
+    }
+    @keyframes treasure-light {
+      to { opacity: .95; transform: scale(1.5); }
+    }
+    @keyframes chest-glow {
+      45% { box-shadow: 0 0 35px #f8c34c99; }
+    }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation: none !important; transition: none !important; }
     }
@@ -212,15 +398,86 @@ MINI_APP_HTML = r"""<!doctype html>
     })[char]);
   }
 
+  function plainText(value) {
+    const template = document.createElement("template");
+    template.innerHTML = String(value ?? "").replace(/<br\s*\/?>/gi, "\n");
+    return (template.content.textContent || "").trim();
+  }
+
   function showError(error) {
-    content.innerHTML = `<section class="panel error">${escapeHtml(error.message || error)}</section>`;
+    content.innerHTML = `<section class="panel error">${escapeHtml(plainText(error.message || error))}</section>`;
   }
 
   function showNotice(text, special = false) {
     const node = document.createElement("section");
     node.className = `panel notice${special ? " chest" : ""}`;
-    node.textContent = text;
+    const cleanText = plainText(text);
+    if (special) {
+      node.innerHTML = `
+        <div class="treasure-chest" aria-hidden="true">
+          <span class="chest-light"></span>
+          <span class="chest-base"></span>
+          <span class="chest-lid"></span>
+        </div>
+        <div>${escapeHtml(cleanText)}</div>`;
+    } else {
+      node.textContent = cleanText;
+    }
     content.prepend(node);
+  }
+
+  function catFigure() {
+    return `<span class="cat-figure" aria-hidden="true">
+      <span class="cat-ear left"></span>
+      <span class="cat-ear right"></span>
+      <span class="cat-face">
+        <span class="cat-eye left"></span>
+        <span class="cat-eye right"></span>
+        <span class="cat-nose"></span>
+      </span>
+    </span>`;
+  }
+
+  function showDigAnimation() {
+    const overlay = document.createElement("div");
+    overlay.className = "dig-animation";
+    overlay.innerHTML = `<div class="dig-scene">
+      <span class="dig-pickaxe">⛏️</span>
+      <span class="dig-rock r1"></span>
+      <span class="dig-rock r2"></span>
+      <span class="dig-rock r3"></span>
+      <div class="dig-caption">Копаем метр...</div>
+    </div>`;
+    document.body.append(overlay);
+    return overlay;
+  }
+
+  function readStartParam() {
+    const direct =
+      (telegram && telegram.initDataUnsafe && telegram.initDataUnsafe.start_param) ||
+      (telegram && telegram.initData && new URLSearchParams(telegram.initData).get("start_param"));
+    if (direct) return direct;
+
+    const query = new URLSearchParams(location.search);
+    const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
+    const launchParam =
+      query.get("tgWebAppStartParam") ||
+      hash.get("tgWebAppStartParam") ||
+      query.get("start_param") ||
+      hash.get("start_param") ||
+      query.get("startapp") ||
+      hash.get("startapp") ||
+      query.get("view") ||
+      hash.get("view");
+    if (launchParam) return launchParam;
+
+    const encodedInitData = query.get("tgWebAppData") || hash.get("tgWebAppData");
+    if (!encodedInitData) return "";
+    try {
+      return new URLSearchParams(decodeURIComponent(encodedInitData)).get("start_param") || "";
+    } catch (_) {
+      return "";
+    }
   }
 
   function isCoolingDown() {
@@ -277,7 +534,7 @@ MINI_APP_HTML = r"""<!doctype html>
       const opened = game.opened.includes(index);
       return `<button class="ticket-cell ${opened ? "opened" : ""}" ${opened ? "disabled" : ""}
         onclick="pickGoldTicket(${index}, this)">
-        <span class="hammer">🔨</span><span class="cat">${opened ? "✓" : "🐱"}</span>
+        <span class="hammer">🔨</span>${opened ? '<span class="cell-prize">✓</span>' : catFigure()}
       </button>`;
     }).join("");
     return `<section class="panel">
@@ -302,7 +559,7 @@ MINI_APP_HTML = r"""<!doctype html>
       const opened = game.opened.includes(index);
       return `<button class="super-cell ${opened ? "opened" : ""}" ${opened ? "disabled" : ""}
         onclick="pickSuper(${index}, this)">
-        <span class="hammer">🔨</span><span class="cat">${opened ? "✓" : "🐱"}</span>
+        <span class="hammer">🔨</span>${opened ? '<span class="cell-prize">✓</span>' : catFigure()}
       </button>`;
     }).join("");
     return `<section class="panel">
@@ -320,12 +577,7 @@ MINI_APP_HTML = r"""<!doctype html>
   async function load() {
     try {
       state = await api("/miniapp/mine");
-      const query = new URLSearchParams(location.search);
-      const initialView =
-        (telegram && telegram.initDataUnsafe && telegram.initDataUnsafe.start_param) ||
-        query.get("tgWebAppStartParam") ||
-        query.get("startapp") ||
-        query.get("view");
+      const initialView = readStartParam();
       if (initialView === "shop" && state.registered) await showShop();
       else if (initialView === "bag" && state.registered) await showBag();
       else renderMine();
@@ -353,8 +605,12 @@ MINI_APP_HTML = r"""<!doctype html>
     busy = true;
     button.disabled = true;
     button.textContent = "⛏️ Копаем...";
+    const overlay = showDigAnimation();
     try {
-      const result = await api("/miniapp/mine/dig", { method: "POST" });
+      const [result] = await Promise.all([
+        api("/miniapp/mine/dig", { method: "POST" }),
+        sleep(1150)
+      ]);
       state = result.state;
       renderMine();
       showNotice(result.message);
@@ -362,6 +618,7 @@ MINI_APP_HTML = r"""<!doctype html>
       renderMine();
       showNotice(error.message);
     } finally {
+      overlay.remove();
       busy = false;
     }
   }
@@ -386,11 +643,16 @@ MINI_APP_HTML = r"""<!doctype html>
     if (busy) return;
     busy = true;
     button.classList.add("breaking");
-    await sleep(560);
     try {
-      const result = await api("/miniapp/gold-ticket/pick", {
-        method: "POST", body: JSON.stringify({ cell })
-      });
+      const [result] = await Promise.all([
+        api("/miniapp/gold-ticket/pick", {
+          method: "POST", body: JSON.stringify({ cell })
+        }),
+        sleep(560)
+      ]);
+      button.classList.remove("breaking");
+      button.innerHTML = `<span class="cell-prize">${result.prize ? `${result.prize} 🪙` : "Пусто"}</span>`;
+      await sleep(700);
       state = result.state;
       renderMine();
       showNotice(result.prize ? `Найдено ${result.prize} котоинов!` : "Под котиком пусто.");
@@ -437,11 +699,17 @@ MINI_APP_HTML = r"""<!doctype html>
     if (busy) return;
     busy = true;
     button.classList.add("breaking");
-    await sleep(560);
     try {
-      const result = await api("/miniapp/super-game/pick", {
-        method: "POST", body: JSON.stringify({ cell })
-      });
+      const [result] = await Promise.all([
+        api("/miniapp/super-game/pick", {
+          method: "POST", body: JSON.stringify({ cell })
+        }),
+        sleep(560)
+      ]);
+      button.classList.remove("breaking");
+      const cellResult = result.reward ? "Сундук" : result.coins ? `${result.coins} 🪙` : "Пусто";
+      button.innerHTML = `<span class="cell-prize">${cellResult}</span>`;
+      await sleep(700);
       state = result.state;
       renderMine();
       const messages = {

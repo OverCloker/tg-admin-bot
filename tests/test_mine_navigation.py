@@ -1,4 +1,5 @@
 from app.keyboards import dig_bag_menu, miniapp_private_menu, user_bag_menu, user_dig_mode_menu
+from app.miniapp_ui import MINI_APP_HTML
 
 
 def test_group_dig_mode_uses_callback_and_deep_link() -> None:
@@ -26,3 +27,20 @@ def test_private_store_button_opens_shop_view(monkeypatch) -> None:
 
     assert private_button.web_app.url == "https://example.test/miniapp?view=shop"
     assert bag_button.url == "https://t.me/ypominanieBot?startapp=shop"
+
+
+def test_miniapp_handles_deep_links_and_plain_text_results() -> None:
+    assert 'telegram.initDataUnsafe.start_param' in MINI_APP_HTML
+    assert 'query.get("tgWebAppStartParam")' in MINI_APP_HTML
+    assert 'hash.get("tgWebAppStartParam")' in MINI_APP_HTML
+    assert 'new URLSearchParams(decodeURIComponent(encodedInitData))' in MINI_APP_HTML
+    assert 'function plainText(value)' in MINI_APP_HTML
+    assert 'node.textContent = cleanText' in MINI_APP_HTML
+
+
+def test_miniapp_contains_requested_animations() -> None:
+    assert 'overlay.className = "dig-animation"' in MINI_APP_HTML
+    assert 'class="cat-figure"' in MINI_APP_HTML
+    assert 'class="treasure-chest"' in MINI_APP_HTML
+    assert "@keyframes pickaxe-swing" in MINI_APP_HTML
+    assert "@keyframes chest-open" in MINI_APP_HTML
