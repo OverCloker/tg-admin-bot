@@ -904,6 +904,17 @@ ADMIN_PANEL_HTML = r"""
           ...options,
           headers: { ...headers(), ...(options.headers || {}) }
         });
+        // A server restart clears in-memory sessions. Re-authenticate once with
+        // the locally stored access key instead of leaving the panel stuck at 401.
+        if (response.status === 401 && localStorage.getItem("adminApiKey")) {
+          const renewed = await loginWithStoredKey();
+          if (renewed) {
+            response = await fetch(path, {
+              ...options,
+              headers: { ...headers(), ...(options.headers || {}) }
+            });
+          }
+        }
         const durationMs = Math.round(performance.now() - started);
         if (!path.startsWith("/admin/analytics")) {
           reportAdminAnalytics(`api:${path}`, response.ok ? "api" : "error", {
@@ -942,14 +953,22 @@ ADMIN_PANEL_HTML = r"""
         toast("Введи ключ доступа");
         return;
       }
-      const response = await fetch("/admin/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accessKey })
-      });
+      let response;
+      try {
+        response = await fetch("/admin/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accessKey })
+        });
+      } catch (_) {
+        toast("Сервер API недоступен");
+        return;
+      }
       if (!response.ok) {
         localStorage.removeItem("adminSessionToken");
-        toast("Ключ не принят этим сервером");
+        toast(response.status === 401
+          ? "Ключ не найден на этом сервере"
+          : `Ошибка API: ${response.status}`);
         return;
       }
       const session = await response.json();
