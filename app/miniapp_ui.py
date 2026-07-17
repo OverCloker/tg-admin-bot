@@ -107,7 +107,7 @@ MINI_APP_HTML = r"""<!doctype html>
     .cat-figure .cat-muzzle { fill: var(--cat-muzzle); }
     .cat-figure .cat-inner-ear { fill: var(--cat-ear); }
     .cat-figure .cat-stripe { fill: none; stroke: var(--cat-stripe); stroke-width: 5; stroke-linecap: round; }
-    .cat-figure .cat-eye { fill: #d9f173; stroke: #172313; stroke-width: 3; }
+    .cat-figure .cat-eye { fill: var(--cat-eye, #d9f173); stroke: #172313; stroke-width: 3; }
     .cat-figure .cat-pupil { fill: #13200f; }
     .cat-figure .cat-nose { fill: #e88b96; }
     .cat-figure .cat-whiskers { stroke: #fff7e6; stroke-width: 3; stroke-linecap: round; opacity: .92; }
@@ -115,6 +115,11 @@ MINI_APP_HTML = r"""<!doctype html>
     .cat-tabby { --cat-main:#9b806a; --cat-outline:#493a31; --cat-muzzle:#e6d1b7; --cat-ear:#e7a6aa; --cat-stripe:#53443b; }
     .cat-black { --cat-main:#3e4851; --cat-outline:#172129; --cat-muzzle:#d0d7d7; --cat-ear:#c98f9d; --cat-stripe:#71808a; }
     .cat-cream { --cat-main:#e6c47c; --cat-outline:#765d30; --cat-muzzle:#fff0c9; --cat-ear:#efabb0; --cat-stripe:#b48743; }
+    .cat-white { --cat-main:#f4eee2; --cat-outline:#8f8270; --cat-muzzle:#ffffff; --cat-ear:#e7a7b2; --cat-stripe:#c7bda8; --cat-eye:#87d96d; }
+    .cat-blue { --cat-main:#6d7f91; --cat-outline:#273746; --cat-muzzle:#d6e0e5; --cat-ear:#c58b9d; --cat-stripe:#435463; --cat-eye:#d7f06e; }
+    .cat-calico { --cat-main:#f0c16b; --cat-outline:#56382a; --cat-muzzle:#fff0cf; --cat-ear:#e9a1aa; --cat-stripe:#252930; --cat-eye:#9feb78; }
+    .cat-tuxedo { --cat-main:#222830; --cat-outline:#0e151c; --cat-muzzle:#f2efe4; --cat-ear:#b97889; --cat-stripe:#f2efe4; --cat-eye:#bff06e; }
+    .cat-rust { --cat-main:#b85d42; --cat-outline:#4d251d; --cat-muzzle:#f5c79b; --cat-ear:#dc8d91; --cat-stripe:#5b2c22; --cat-eye:#c8f36d; }
     .super-cell .cat-figure { width: 83%; height: 83%; }
     .cell-prize {
       display: grid;
@@ -372,38 +377,125 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     .treasure-chest {
       position: relative;
-      width: 92px;
-      height: 74px;
-      margin: 2px auto 17px;
-      filter: drop-shadow(0 12px 8px #0008);
+      width: 156px;
+      height: 122px;
+      margin: 0 auto 18px;
+      filter: drop-shadow(0 17px 10px #0009);
     }
-    .chest-base, .chest-lid {
+    .treasure-chest::before {
+      content: "";
       position: absolute;
-      left: 8px;
-      width: 76px;
-      border: 4px solid #5d3515;
-      background: linear-gradient(90deg, #7c461d, #d49b42 48%, #754019);
-      box-shadow: inset 0 0 0 4px #f1c16455;
+      left: 12px;
+      right: 12px;
+      top: 39px;
+      height: 52px;
+      border-radius: 50%;
+      background: radial-gradient(circle, #fff9c7 0 18%, #ffd543 42%, #ff9b17 67%, transparent 72%);
+      filter: blur(9px);
+      opacity: 0;
+      animation: treasure-light 1s .28s ease-out forwards;
     }
-    .chest-base { bottom: 0; height: 45px; border-radius: 4px 4px 10px 10px; }
-    .chest-lid {
-      top: 10px;
-      height: 31px;
-      border-radius: 34px 34px 5px 5px;
-      transform-origin: 50% 100%;
-      animation: chest-open .9s cubic-bezier(.25,.8,.25,1) forwards;
+    .treasure-chest::after {
+      content: "";
+      position: absolute;
+      left: 17px;
+      right: 17px;
+      bottom: -8px;
+      height: 18px;
+      border-radius: 50%;
+      background: #0009;
+      filter: blur(8px);
     }
     .chest-light {
       position: absolute;
-      left: 20px;
-      top: 27px;
-      width: 52px;
-      height: 34px;
-      border-radius: 50%;
-      background: #ffe27e;
-      filter: blur(12px);
+      z-index: 1;
+      left: -17px;
+      right: -17px;
+      top: 30px;
+      height: 58px;
+      background:
+        radial-gradient(circle at 48% 55%, #fff 0 10%, #ffe16a 25%, transparent 53%),
+        linear-gradient(90deg, transparent, #ffe16a99 47%, #fff8c8 50%, #ffe16a99 53%, transparent);
+      filter: blur(4px);
       opacity: 0;
-      animation: treasure-light 1s .35s ease-out forwards;
+      transform: scaleX(.6);
+      animation: treasure-beam 1.1s .38s ease-out forwards;
+    }
+    .chest-shine {
+      position: absolute;
+      z-index: 5;
+      left: 50%;
+      top: 36px;
+      width: 9px;
+      height: 74px;
+      border-radius: 50%;
+      background: linear-gradient(#fffdf0, #ffe36c 45%, transparent);
+      box-shadow:
+        -38px 11px 0 -3px #ffd75a,
+        34px 7px 0 -4px #fff6b8,
+        0 0 22px 8px #fff09c;
+      opacity: 0;
+      transform: translateX(-50%) rotate(90deg) scale(.35);
+      animation: chest-spark .95s .45s ease-out forwards;
+    }
+    .chest-base, .chest-lid {
+      position: absolute;
+      left: 18px;
+      width: 120px;
+      border: 4px solid #f6d06a;
+      background:
+        linear-gradient(90deg, #f4c95d 0 8px, transparent 8px calc(100% - 8px), #f4c95d calc(100% - 8px)),
+        repeating-linear-gradient(0deg, #8a4b23 0 10px, #b46b2f 10px 15px, #7d401e 15px 25px);
+      box-shadow:
+        inset 0 0 0 2px #693716,
+        inset 0 12px 12px #ffcf6240,
+        0 4px 0 #5a2f15;
+    }
+    .chest-base {
+      bottom: 3px;
+      z-index: 3;
+      height: 55px;
+      border-radius: 7px 7px 13px 13px;
+    }
+    .chest-base::before, .chest-lid::before {
+      content: "";
+      position: absolute;
+      inset: 5px 0 auto;
+      height: 7px;
+      background:
+        radial-gradient(circle, #fff2a9 0 2px, #b87a22 2px 4px, transparent 4px) 0 0 / 16px 7px repeat-x,
+        linear-gradient(#ffd66e, #b47721);
+    }
+    .chest-base::after {
+      content: "";
+      position: absolute;
+      left: 49px;
+      top: 17px;
+      width: 22px;
+      height: 29px;
+      border-radius: 8px 8px 10px 10px;
+      background: linear-gradient(#ffdf74, #bd7b22);
+      border: 3px solid #6b3a16;
+      box-shadow: 0 -16px 0 -8px #f6d06a;
+    }
+    .chest-lid {
+      top: 11px;
+      z-index: 2;
+      height: 46px;
+      border-radius: 46px 46px 6px 6px;
+      transform-origin: 50% 100%;
+      animation: chest-open .9s cubic-bezier(.25,.8,.25,1) forwards;
+    }
+    .chest-lid::after {
+      content: "";
+      position: absolute;
+      left: 55px;
+      top: 2px;
+      width: 12px;
+      height: 48px;
+      border-radius: 8px;
+      background: linear-gradient(#fff0a8, #c18328);
+      box-shadow: 0 0 0 2px #77410f;
     }
     @keyframes pickaxe-swing {
       0% { transform: rotate(-42deg) translate(-8px, -8px); }
@@ -417,10 +509,18 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     @keyframes chest-open {
       0% { transform: translateY(0) rotateX(0); }
-      65%, 100% { transform: translateY(-19px) rotateX(65deg); }
+      65%, 100% { transform: translateY(-31px) rotateX(63deg); }
     }
     @keyframes treasure-light {
-      to { opacity: .95; transform: scale(1.5); }
+      to { opacity: .96; transform: scale(1.45); }
+    }
+    @keyframes treasure-beam {
+      to { opacity: .94; transform: scaleX(1); }
+    }
+    @keyframes chest-spark {
+      0% { opacity: 0; transform: translateX(-50%) rotate(90deg) scale(.2); }
+      45% { opacity: 1; }
+      100% { opacity: 0; transform: translateX(-50%) rotate(90deg) scale(1.15); }
     }
     @keyframes chest-glow {
       45% { box-shadow: 0 0 35px #f8c34c99; }
@@ -516,6 +616,7 @@ MINI_APP_HTML = r"""<!doctype html>
       node.innerHTML = `
         <div class="treasure-chest" aria-hidden="true">
           <span class="chest-light"></span>
+          <span class="chest-shine"></span>
           <span class="chest-base"></span>
           <span class="chest-lid"></span>
         </div>
@@ -527,8 +628,11 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   function catFigure(index = 0) {
-    const coats = ["cat-ginger", "cat-tabby", "cat-black", "cat-cream"];
-    const coat = coats[index % coats.length];
+    const coats = [
+      "cat-ginger", "cat-tabby", "cat-black", "cat-cream", "cat-white",
+      "cat-blue", "cat-calico", "cat-tuxedo", "cat-rust"
+    ];
+    const coat = coats[Math.abs(index) % coats.length];
     return `<svg class="cat-figure ${coat}" viewBox="0 0 100 100" role="img" aria-label="Котик">
       <path class="cat-head" d="M18 43 15 15 39 29Q50 22 61 29L85 15 82 43Q90 55 85 73 80 91 50 93 20 91 15 73 10 55 18 43Z"/>
       <path class="cat-inner-ear" d="M22 25 24 40 35 32Z"/>
@@ -542,6 +646,12 @@ MINI_APP_HTML = r"""<!doctype html>
       <path d="M50 73q-5 6-10 2M50 73q5 6 10 2" fill="none" stroke="#4b3434" stroke-width="2.5" stroke-linecap="round"/>
       <path class="cat-whiskers" d="M37 72 10 66M37 77 9 79M63 72 90 66M63 77 91 79"/>
     </svg>`;
+  }
+
+  function catForCell(index, width = 9) {
+    const row = Math.floor(index / width);
+    const column = index % width;
+    return (index * 7 + row * 5 + column * 3 + 11) % 9;
   }
 
   function showDigAnimation() {
@@ -659,7 +769,7 @@ MINI_APP_HTML = r"""<!doctype html>
       const opened = game.opened.includes(index);
       return `<button class="ticket-cell ${opened ? "opened" : ""}" ${opened ? "disabled" : ""}
         onclick="pickGoldTicket(${index}, this)">
-        <span class="hammer">🔨</span>${opened ? '<span class="cell-prize">✓</span>' : catFigure(index)}
+        <span class="hammer">🔨</span>${opened ? '<span class="cell-prize">✓</span>' : catFigure(catForCell(index, 3))}
       </button>`;
     }).join("");
     return `<section class="panel" id="goldGamePanel">
@@ -685,7 +795,7 @@ MINI_APP_HTML = r"""<!doctype html>
       const opened = game.opened.includes(index);
       return `<button class="super-cell ${opened ? "opened" : ""}" ${opened ? "disabled" : ""}
         onclick="pickSuper(${index}, this)">
-        <span class="hammer">🔨</span>${opened ? '<span class="cell-prize">✓</span>' : catFigure(index)}
+        <span class="hammer">🔨</span>${opened ? '<span class="cell-prize">✓</span>' : catFigure(catForCell(index, 9))}
       </button>`;
     }).join("");
     return `<section class="panel" id="superGamePanel">
