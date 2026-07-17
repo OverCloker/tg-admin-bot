@@ -75,7 +75,8 @@ def test_current_telegram_url_wins_over_stale_launch_data() -> None:
 
 def test_miniapp_contains_requested_animations() -> None:
     assert 'overlay.className = "dig-animation"' in MINI_APP_HTML
-    assert 'class="cat-figure"' in MINI_APP_HTML
+    assert 'class="cat-figure ${coat}"' in MINI_APP_HTML
+    assert 'class="cat-whiskers"' in MINI_APP_HTML
     assert 'class="treasure-chest"' in MINI_APP_HTML
     assert "@keyframes pickaxe-swing" in MINI_APP_HTML
     assert "@keyframes chest-open" in MINI_APP_HTML

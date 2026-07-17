@@ -97,58 +97,25 @@ MINI_APP_HTML = r"""<!doctype html>
     .breaking .hammer { animation: hammer .55s ease-in-out; }
     .breaking .cat-figure { animation: crack .55s ease-in-out; }
     .cat-figure {
-      position: relative;
       display: block;
-      width: 58%;
-      aspect-ratio: 1;
+      width: 66%;
+      height: 66%;
       transform: rotateX(8deg) rotateY(-7deg);
       filter: drop-shadow(0 8px 4px #0008);
     }
-    .cat-face {
-      position: absolute;
-      inset: 13% 4% 2%;
-      z-index: 2;
-      border-radius: 48% 48% 44% 44%;
-      background: radial-gradient(circle at 37% 34%, #fff4ce 0 5%, transparent 6%),
-                  linear-gradient(145deg, #dca75d, #8b582b);
-      border: 2px solid #f1c57f;
-      box-shadow: inset -7px -9px 10px #5b321e80, inset 7px 5px 7px #ffe0a750;
-    }
-    .cat-ear {
-      position: absolute;
-      top: 1%;
-      z-index: 1;
-      width: 38%;
-      height: 42%;
-      background: linear-gradient(135deg, #dca75d, #71401f);
-      border: 2px solid #efc27a;
-      transform: rotate(45deg);
-    }
-    .cat-ear.left { left: 5%; }
-    .cat-ear.right { right: 5%; }
-    .cat-eye {
-      position: absolute;
-      top: 39%;
-      width: 13%;
-      height: 18%;
-      border-radius: 50%;
-      background: #d8ef5e;
-      box-shadow: inset 0 0 0 3px #253014;
-    }
-    .cat-eye.left { left: 25%; }
-    .cat-eye.right { right: 25%; }
-    .cat-nose {
-      position: absolute;
-      left: 45%;
-      top: 61%;
-      width: 12%;
-      height: 9%;
-      border-radius: 60% 60% 70% 70%;
-      background: #4b241f;
-    }
-    .super-cell .cat-figure { width: 72%; }
-    .super-cell .cat-face,
-    .super-cell .cat-ear { border-width: 1px; }
+    .cat-figure .cat-head { fill: var(--cat-main); stroke: var(--cat-outline); stroke-width: 5; stroke-linejoin: round; }
+    .cat-figure .cat-muzzle { fill: var(--cat-muzzle); }
+    .cat-figure .cat-inner-ear { fill: var(--cat-ear); }
+    .cat-figure .cat-stripe { fill: none; stroke: var(--cat-stripe); stroke-width: 5; stroke-linecap: round; }
+    .cat-figure .cat-eye { fill: #d9f173; stroke: #172313; stroke-width: 3; }
+    .cat-figure .cat-pupil { fill: #13200f; }
+    .cat-figure .cat-nose { fill: #e88b96; }
+    .cat-figure .cat-whiskers { stroke: #fff7e6; stroke-width: 3; stroke-linecap: round; opacity: .92; }
+    .cat-ginger { --cat-main:#df9a4f; --cat-outline:#6e3b1e; --cat-muzzle:#ffe0aa; --cat-ear:#f3a6ae; --cat-stripe:#8d4b25; }
+    .cat-tabby { --cat-main:#9b806a; --cat-outline:#493a31; --cat-muzzle:#e6d1b7; --cat-ear:#e7a6aa; --cat-stripe:#53443b; }
+    .cat-black { --cat-main:#3e4851; --cat-outline:#172129; --cat-muzzle:#d0d7d7; --cat-ear:#c98f9d; --cat-stripe:#71808a; }
+    .cat-cream { --cat-main:#e6c47c; --cat-outline:#765d30; --cat-muzzle:#fff0c9; --cat-ear:#efabb0; --cat-stripe:#b48743; }
+    .super-cell .cat-figure { width: 83%; height: 83%; }
     .cell-prize {
       display: grid;
       place-items: center;
@@ -553,16 +520,22 @@ MINI_APP_HTML = r"""<!doctype html>
     content.prepend(node);
   }
 
-  function catFigure() {
-    return `<span class="cat-figure" aria-hidden="true">
-      <span class="cat-ear left"></span>
-      <span class="cat-ear right"></span>
-      <span class="cat-face">
-        <span class="cat-eye left"></span>
-        <span class="cat-eye right"></span>
-        <span class="cat-nose"></span>
-      </span>
-    </span>`;
+  function catFigure(index = 0) {
+    const coats = ["cat-ginger", "cat-tabby", "cat-black", "cat-cream"];
+    const coat = coats[index % coats.length];
+    return `<svg class="cat-figure ${coat}" viewBox="0 0 100 100" role="img" aria-label="Котик">
+      <path class="cat-head" d="M18 43 15 15 39 29Q50 22 61 29L85 15 82 43Q90 55 85 73 80 91 50 93 20 91 15 73 10 55 18 43Z"/>
+      <path class="cat-inner-ear" d="M22 25 24 40 35 32Z"/>
+      <path class="cat-inner-ear" d="M78 25 76 40 65 32Z"/>
+      <path class="cat-stripe" d="M42 31 47 41M50 29v12M58 31 53 41M24 49l10 4M76 49l-10 4"/>
+      <ellipse class="cat-eye" cx="35" cy="54" rx="8" ry="10"/>
+      <ellipse class="cat-eye" cx="65" cy="54" rx="8" ry="10"/>
+      <path class="cat-pupil" d="M35 47v14M65 47v14" stroke-linecap="round" stroke-width="3"/>
+      <path class="cat-muzzle" d="M31 67Q39 62 50 70 61 62 69 67 71 82 50 83 29 82 31 67Z"/>
+      <path class="cat-nose" d="M45 67Q50 63 55 67L50 73Z"/>
+      <path d="M50 73q-5 6-10 2M50 73q5 6 10 2" fill="none" stroke="#4b3434" stroke-width="2.5" stroke-linecap="round"/>
+      <path class="cat-whiskers" d="M37 72 10 66M37 77 9 79M63 72 90 66M63 77 91 79"/>
+    </svg>`;
   }
 
   function showDigAnimation() {
@@ -680,7 +653,7 @@ MINI_APP_HTML = r"""<!doctype html>
       const opened = game.opened.includes(index);
       return `<button class="ticket-cell ${opened ? "opened" : ""}" ${opened ? "disabled" : ""}
         onclick="pickGoldTicket(${index}, this)">
-        <span class="hammer">🔨</span>${opened ? '<span class="cell-prize">✓</span>' : catFigure()}
+        <span class="hammer">🔨</span>${opened ? '<span class="cell-prize">✓</span>' : catFigure(index)}
       </button>`;
     }).join("");
     return `<section class="panel">
@@ -705,7 +678,7 @@ MINI_APP_HTML = r"""<!doctype html>
       const opened = game.opened.includes(index);
       return `<button class="super-cell ${opened ? "opened" : ""}" ${opened ? "disabled" : ""}
         onclick="pickSuper(${index}, this)">
-        <span class="hammer">🔨</span>${opened ? '<span class="cell-prize">✓</span>' : catFigure()}
+        <span class="hammer">🔨</span>${opened ? '<span class="cell-prize">✓</span>' : catFigure(index)}
       </button>`;
     }).join("");
     return `<section class="panel">
