@@ -183,6 +183,7 @@ DIG_CONTRACT_REWARD_COINS = 60
 DIG_CONTRACT_REWARD_XP = 40
 DIG_EXPEDITION_TARGET = 50
 DIG_EXPEDITION_REWARD = 75
+DIG_GOLDEN_TICKET_MAX_CHANCE = 6
 DIG_SHOP_ITEMS = {
     "helmet": ("Каска шахтера", 40, "Старый расходник: +5 удачи на следующую раскопку."),
     "shovel": ("Крепкая лопата", 70, "Старый расходник: снижает шанс обвала на 50% в следующей раскопке."),
@@ -971,6 +972,13 @@ def dig_random_event(depth: int, coins: int) -> tuple[int, str | None]:
     return coins, "Событие: попалась старая табличка с надписью «Не копать». Разумеется, ты копнул рядом."
 
 
+def find_golden_ticket(depth: int) -> bool:
+    """The deeper the completed run, the better the chance to find one ticket."""
+    depth = max(0, min(10, int(depth)))
+    chance = min(DIG_GOLDEN_TICKET_MAX_CHANCE, 1 + depth // 2)
+    return depth > 0 and secrets.randbelow(100) < chance
+
+
 def dig_player_name(username: str | None, full_name: str) -> str:
     return f"@{username}" if username else full_name
 
@@ -1274,6 +1282,7 @@ def dig_bag_text(chat_id: int, user_id: int) -> str | None:
         f"Маршрут: <b>{escape(route_data[0])}</b>\n"
         f"Копать: <b>{escape(cooldown)}</b>\n"
         f"Артефакты: <b>{escape(dig_artifact_text(items))}</b>\n\n"
+        f"Золотые билеты: <b>{items.get('golden_ticket', 0)}</b>\n"
         f"<b>Эффекты:</b>\n{escape(dig_effects_text(items))}"
     )
 
@@ -1292,6 +1301,8 @@ def run_private_dig(chat_id: int, user: User) -> str:
     player = db.get_dig_player(chat_id, user.id)
     if player is None:
         return "Ты еще не зарегистрирован в раскопках. Сначала напиши <code>копай</code> внутри выбранной группы и нажми кнопку регистрации."
+    if db.get_dig_session(user.id):
+        return "У тебя уже идет пошаговая вылазка в шахте Mini App. Продолжи ее там или заверши текущую вылазку."
 
     now = datetime.now(timezone.utc)
     items = dig_items_map(chat_id, user.id)
@@ -1441,6 +1452,10 @@ def run_private_dig(chat_id: int, user: User) -> str:
         else:
             db.add_dig_item(chat_id, user.id, "repair_kit", 1)
     coins = apply_premium_coin_bonus(user.id, coins, used_effects)
+    golden_ticket_found = find_golden_ticket(dug)
+    if golden_ticket_found:
+        db.add_dig_item(chat_id, user.id, "golden_ticket", 1)
+        used_effects.append("Золотой билет: доступна игра в Mini App")
     db.update_dig_player_after_dig(
         chat_id=chat_id,
         user_id=user.id,

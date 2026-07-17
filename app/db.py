@@ -765,6 +765,26 @@ class Database:
                 updated_at text not null
             );
 
+            create table if not exists dig_sessions (
+                user_id integer primary key,
+                depth integer not null default 0,
+                luck_before integer not null default 100,
+                route_key text not null,
+                route_data text not null,
+                used_effects text not null default '[]',
+                started_at text not null,
+                updated_at text not null
+            );
+
+            create table if not exists gold_ticket_games (
+                user_id integer primary key,
+                cells_json text not null,
+                opened_json text not null default '[]',
+                attempts_left integer not null default 3,
+                created_at text not null,
+                updated_at text not null
+            );
+
             create table if not exists dig_contracts (
                 user_id integer not null,
                 contract_date text not null,
@@ -997,6 +1017,88 @@ class Database:
             """,
             (chat_id, title, chat_type, username, utc_now()),
         )
+        self._conn.commit()
+
+    def get_dig_session(self, user_id: int) -> dict | None:
+        row = self._conn.execute(
+            """
+            select user_id, depth, luck_before, route_key, route_data, used_effects,
+                   started_at, updated_at
+            from dig_sessions where user_id = ?
+            """,
+            (int(user_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def save_dig_session(
+        self,
+        user_id: int,
+        depth: int,
+        luck_before: int,
+        route_key: str,
+        route_data: str,
+        used_effects: str,
+        started_at: str,
+    ) -> None:
+        now = utc_now()
+        self._conn.execute(
+            """
+            insert into dig_sessions
+                (user_id, depth, luck_before, route_key, route_data, used_effects, started_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(user_id) do update set
+                depth = excluded.depth,
+                luck_before = excluded.luck_before,
+                route_key = excluded.route_key,
+                route_data = excluded.route_data,
+                used_effects = excluded.used_effects,
+                started_at = excluded.started_at,
+                updated_at = excluded.updated_at
+            """,
+            (int(user_id), int(depth), int(luck_before), route_key, route_data, used_effects, started_at, now),
+        )
+        self._conn.commit()
+
+    def clear_dig_session(self, user_id: int) -> None:
+        self._conn.execute("delete from dig_sessions where user_id = ?", (int(user_id),))
+        self._conn.commit()
+
+    def get_gold_ticket_game(self, user_id: int) -> dict | None:
+        row = self._conn.execute(
+            """
+            select user_id, cells_json, opened_json, attempts_left, created_at, updated_at
+            from gold_ticket_games where user_id = ?
+            """,
+            (int(user_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def save_gold_ticket_game(
+        self,
+        user_id: int,
+        cells_json: str,
+        opened_json: str,
+        attempts_left: int,
+        created_at: str,
+    ) -> None:
+        now = utc_now()
+        self._conn.execute(
+            """
+            insert into gold_ticket_games
+                (user_id, cells_json, opened_json, attempts_left, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?)
+            on conflict(user_id) do update set
+                cells_json = excluded.cells_json,
+                opened_json = excluded.opened_json,
+                attempts_left = excluded.attempts_left,
+                updated_at = excluded.updated_at
+            """,
+            (int(user_id), cells_json, opened_json, max(0, int(attempts_left)), created_at, now),
+        )
+        self._conn.commit()
+
+    def clear_gold_ticket_game(self, user_id: int) -> None:
+        self._conn.execute("delete from gold_ticket_games where user_id = ?", (int(user_id),))
         self._conn.commit()
 
     def list_chats(self) -> list[RegisteredChat]:

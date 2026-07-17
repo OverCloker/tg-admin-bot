@@ -38,9 +38,11 @@ from .premium import PLANS, PREMIUM_PERIOD_DAYS, PremiumError, PremiumLimitError
 from .staff import StaffService
 from .user_profile import build_user_profile
 from .youtube_media import DOWNLOAD_TYPES, YoutubeMediaError, cleanup_youtube_file, download_youtube, inspect_youtube
+from .miniapp import router as miniapp_router
 
 
 app = FastAPI(title="Telegram Autoreply Bot Admin API")
+app.include_router(miniapp_router)
 YOUTUBE_WORKER_TASK: asyncio.Task | None = None
 
 CURRENT_ADMIN_ACTOR_ID: ContextVar[int | None] = ContextVar("current_admin_actor_id", default=None)

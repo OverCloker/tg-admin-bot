@@ -1,10 +1,20 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+import os
+
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 from .db import ChatTopic, RegisteredChat
 
 TRIGGERS_PAGE_SIZE = 25
 QUOTES_PAGE_SIZE = 25
 TOP_PAGE_SIZE = 20
+
+
+def miniapp_button() -> InlineKeyboardButton | None:
+    url = os.getenv("MINI_APP_URL", "").strip().rstrip("/")
+    if not url:
+        base = os.getenv("ADMIN_PUBLIC_URL", "").strip().rstrip("/")
+        url = f"{base}/miniapp" if base else ""
+    return InlineKeyboardButton(text="Шахта Mini App", web_app=WebAppInfo(url=url)) if url else None
 
 
 def main_menu(show_server_address: bool = False) -> InlineKeyboardMarkup:
@@ -76,7 +86,7 @@ def user_chat_select_menu(chats: list[RegisteredChat]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def user_menu(chat_id: int) -> InlineKeyboardMarkup:
+def _base_user_menu(chat_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Сообщение за звезды", callback_data=f"paid:chat:{chat_id}")],
@@ -88,6 +98,14 @@ def user_menu(chat_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Назад", callback_data="ui:home")],
         ]
     )
+
+
+def user_menu(chat_id: int) -> InlineKeyboardMarkup:
+    markup = _base_user_menu(chat_id)
+    button = miniapp_button()
+    if button:
+        markup.inline_keyboard.insert(2, [button])
+    return markup
 
 
 def premium_menu() -> InlineKeyboardMarkup:
