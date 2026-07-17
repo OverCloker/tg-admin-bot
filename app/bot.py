@@ -3020,6 +3020,15 @@ def quote_page_text(chat_id: int, page: int) -> tuple[str, int, int]:
 async def start(message: Message, state: FSMContext) -> None:
     if message.chat.type == "private":
         start_parts = (message.text or "").split(maxsplit=1)
+        if len(start_parts) == 2 and start_parts[1] in {"miniapp_mine", "miniapp_shop"}:
+            view = "shop" if start_parts[1] == "miniapp_shop" else "mine"
+            title = "Магазин шахты" if view == "shop" else "Шахта"
+            await state.clear()
+            await message.answer(
+                f"<b>{title}</b>\n\nНажми кнопку ниже, чтобы открыть нужный раздел.",
+                reply_markup=miniapp_private_menu(f"Открыть: {title}", view=view),
+            )
+            return
         if len(start_parts) == 2 and start_parts[1] in {"youtube", "youtube_music", "instagram"}:
             service_name = {"youtube_music": "YouTube Music", "instagram": "Instagram Reels"}.get(start_parts[1], "YouTube")
             await state.clear()
