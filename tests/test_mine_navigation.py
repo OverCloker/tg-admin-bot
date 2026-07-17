@@ -16,7 +16,7 @@ def test_group_bag_opens_store_via_private_delivery() -> None:
     button = dig_bag_menu(42).inline_keyboard[0][0]
 
     assert button.text == "Магазин"
-    assert button.url == "https://t.me/ypominanieBot?startapp=shop"
+    assert button.url == "https://t.me/ypominanieBot?startapp=shop_v2"
     assert button.web_app is None
 
 
@@ -26,7 +26,7 @@ def test_private_store_button_opens_shop_view(monkeypatch) -> None:
     bag_button = user_bag_menu(-1001, 42).inline_keyboard[0][0]
 
     assert private_button.web_app.url == "https://example.test/miniapp?view=shop"
-    assert bag_button.url == "https://t.me/ypominanieBot?startapp=shop"
+    assert bag_button.url == "https://t.me/ypominanieBot?startapp=shop_v2"
 
 
 def test_miniapp_handles_deep_links_and_plain_text_results() -> None:
@@ -45,6 +45,7 @@ def test_current_telegram_url_wins_over_stale_launch_data() -> None:
     assert url_param < parsed_launch_data
     assert 'if (initialView === "shop") await showShop();' in MINI_APP_HTML
     assert 'initialView === "shop" && state.registered' not in MINI_APP_HTML
+    assert 'normalized.startsWith("shop_")' in MINI_APP_HTML
 
 
 def test_miniapp_contains_requested_animations() -> None:

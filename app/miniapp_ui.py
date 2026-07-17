@@ -579,6 +579,14 @@ MINI_APP_HTML = r"""<!doctype html>
     return overlay;
   }
 
+  function normalizeStartParam(value) {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (normalized === "shop" || normalized.startsWith("shop_")) return "shop";
+    if (normalized === "bag" || normalized.startsWith("bag_")) return "bag";
+    if (normalized === "mine" || normalized.startsWith("mine_")) return "mine";
+    return normalized;
+  }
+
   function readStartParam() {
     const query = new URLSearchParams(location.search);
     const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
@@ -591,13 +599,13 @@ MINI_APP_HTML = r"""<!doctype html>
       hash.get("startapp") ||
       query.get("view") ||
       hash.get("view");
-    if (urlParam) return urlParam.trim().toLowerCase();
+    if (urlParam) return normalizeStartParam(urlParam);
 
     const encodedInitData = query.get("tgWebAppData") || hash.get("tgWebAppData");
     if (encodedInitData) {
       try {
         const nestedParam = new URLSearchParams(decodeURIComponent(encodedInitData)).get("start_param");
-        if (nestedParam) return nestedParam.trim().toLowerCase();
+        if (nestedParam) return normalizeStartParam(nestedParam);
       } catch (_) {
         // Fall through to Telegram's parsed launch data.
       }
@@ -606,7 +614,7 @@ MINI_APP_HTML = r"""<!doctype html>
     const direct =
       (telegram && telegram.initDataUnsafe && telegram.initDataUnsafe.start_param) ||
       (telegram && telegram.initData && new URLSearchParams(telegram.initData).get("start_param"));
-    return direct ? direct.trim().toLowerCase() : "";
+    return normalizeStartParam(direct);
   }
 
   function isCoolingDown() {

@@ -9,6 +9,7 @@ TRIGGERS_PAGE_SIZE = 25
 QUOTES_PAGE_SIZE = 25
 TOP_PAGE_SIZE = 20
 MINI_APP_DEEP_LINK = "https://t.me/ypominanieBot?startapp="
+MINI_APP_SHOP_START_PARAM = "shop_v2"
 
 
 def miniapp_deep_link_button(label: str, start_param: str) -> InlineKeyboardButton:
@@ -229,7 +230,7 @@ def user_mine_menu(chat_id: int) -> InlineKeyboardMarkup:
 def user_bag_menu(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [miniapp_deep_link_button("Магазин", "shop")],
+            [miniapp_deep_link_button("Магазин", MINI_APP_SHOP_START_PARAM)],
             [InlineKeyboardButton(text="Маршруты", callback_data=f"user:routes:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Контракты", callback_data=f"user:contracts:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Экспедиция", callback_data=f"user:expedition:{chat_id}:{user_id}")],
@@ -532,7 +533,7 @@ def dig_register_menu() -> InlineKeyboardMarkup:
 def dig_bag_menu(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [miniapp_deep_link_button("Магазин", "shop")],
+            [miniapp_deep_link_button("Магазин", MINI_APP_SHOP_START_PARAM)],
             [InlineKeyboardButton(text="Маршруты", callback_data=f"dig:routes:{user_id}")],
             [InlineKeyboardButton(text="Контракты", callback_data=f"dig:contracts:{user_id}")],
             [InlineKeyboardButton(text="Экспедиция", callback_data=f"dig:expedition:{user_id}")],
