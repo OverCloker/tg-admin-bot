@@ -587,7 +587,7 @@ MINI_APP_HTML = r"""<!doctype html>
     return normalized;
   }
 
-  function readStartParam() {
+  function readRawStartParam() {
     const query = new URLSearchParams(location.search);
     const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
     const urlParam =
@@ -599,13 +599,13 @@ MINI_APP_HTML = r"""<!doctype html>
       hash.get("startapp") ||
       query.get("view") ||
       hash.get("view");
-    if (urlParam) return normalizeStartParam(urlParam);
+    if (urlParam) return String(urlParam).trim().toLowerCase();
 
     const encodedInitData = query.get("tgWebAppData") || hash.get("tgWebAppData");
     if (encodedInitData) {
       try {
         const nestedParam = new URLSearchParams(decodeURIComponent(encodedInitData)).get("start_param");
-        if (nestedParam) return normalizeStartParam(nestedParam);
+        if (nestedParam) return String(nestedParam).trim().toLowerCase();
       } catch (_) {
         // Fall through to Telegram's parsed launch data.
       }
@@ -614,7 +614,16 @@ MINI_APP_HTML = r"""<!doctype html>
     const direct =
       (telegram && telegram.initDataUnsafe && telegram.initDataUnsafe.start_param) ||
       (telegram && telegram.initData && new URLSearchParams(telegram.initData).get("start_param"));
-    return normalizeStartParam(direct);
+    return String(direct || "").trim().toLowerCase();
+  }
+
+  function readStartParam() {
+    return normalizeStartParam(readRawStartParam());
+  }
+
+  function readStartOwner() {
+    const match = readRawStartParam().match(/^(?:mine|shop|bag)_(\d+)$/);
+    return match ? Number(match[1]) : null;
   }
 
   function isCoolingDown() {
@@ -714,9 +723,15 @@ MINI_APP_HTML = r"""<!doctype html>
 
   async function load() {
     const initialView = readStartParam();
+    const intendedOwner = readStartOwner();
     setScreenHeader(initialView === "shop" ? "shop" : initialView === "bag" ? "bag" : "mine");
     try {
       state = await api("/miniapp/mine");
+      if (intendedOwner && Number(state.userId) !== intendedOwner) {
+        nameNode.textContent = "Чужая кнопка";
+        content.innerHTML = '<section class="panel"><h2>Эта кнопка принадлежит другому пользователю</h2><p class="muted">Вызови свою команду «копай» или «сумка» в чате.</p></section>';
+        return;
+      }
       if (initialView === "shop") await showShop();
       else if (initialView === "bag") await showBag();
       else renderMine();

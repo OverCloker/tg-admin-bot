@@ -212,35 +212,35 @@ def _legacy_user_mine_menu(chat_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def user_dig_mode_menu(chat_id: int) -> InlineKeyboardMarkup:
+def user_dig_mode_menu(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438", callback_data=f"user:dig:auto:{chat_id}")],
-            [miniapp_deep_link_button("\u0412\u0440\u0443\u0447\u043d\u0443\u044e", "mine")],
+            [InlineKeyboardButton(text="\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438", callback_data=f"user:dig:auto:{chat_id}:{user_id}")],
+            [miniapp_deep_link_button("\u0412\u0440\u0443\u0447\u043d\u0443\u044e", f"mine_{user_id}")],
         ]
     )
 
 
-def user_mine_menu(chat_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="\u041a\u043e\u043f\u0430\u0442\u044c", callback_data=f"user:dig:mode:{chat_id}")],
-            [InlineKeyboardButton(text="\u0421\u0443\u043c\u043a\u0430", callback_data=f"user:bag:{chat_id}")],
-            [InlineKeyboardButton(text="\u0414\u043e\u043d\u0430\u0442", callback_data=f"user:donate:{chat_id}")],
-            [InlineKeyboardButton(text="\u041d\u0430\u0437\u0430\u0434", callback_data=f"user:chat:{chat_id}")],
-        ]
-    )
+def user_mine_menu(chat_id: int, user_id: int, show_back: bool = True) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="\u041a\u043e\u043f\u0430\u0442\u044c", callback_data=f"user:dig:mode:{chat_id}:{user_id}")],
+        [InlineKeyboardButton(text="\u0421\u0443\u043c\u043a\u0430", callback_data=f"user:bag:{chat_id}:{user_id}")],
+        [InlineKeyboardButton(text="\u0414\u043e\u043d\u0430\u0442", callback_data=f"user:donate:{chat_id}:{user_id}")],
+    ]
+    if show_back:
+        rows.append([InlineKeyboardButton(text="\u041d\u0430\u0437\u0430\u0434", callback_data=f"user:chat:{chat_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def user_bag_menu(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [miniapp_deep_link_button("Магазин", MINI_APP_SHOP_START_PARAM)],
+            [miniapp_deep_link_button("Магазин", f"{MINI_APP_SHOP_START_PARAM}_{user_id}")],
             [InlineKeyboardButton(text="Маршруты", callback_data=f"user:routes:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Контракты", callback_data=f"user:contracts:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Экспедиция", callback_data=f"user:expedition:{chat_id}:{user_id}")],
-            [InlineKeyboardButton(text="Донат", callback_data=f"user:donate:{chat_id}")],
-            [InlineKeyboardButton(text="Назад", callback_data=f"user:mine:{chat_id}")],
+            [InlineKeyboardButton(text="Донат", callback_data=f"user:donate:{chat_id}:{user_id}")],
+            [InlineKeyboardButton(text="Назад", callback_data=f"user:mine:{chat_id}:{user_id}")],
         ]
     )
 
@@ -257,13 +257,16 @@ def user_shop_menu(chat_id: int, user_id: int, items: list[tuple[str, str, int]]
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(text="Назад к сумке", callback_data=f"user:bag:{chat_id}")])
+    rows.append([InlineKeyboardButton(text="Назад к сумке", callback_data=f"user:bag:{chat_id}:{user_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def user_shop_categories_menu(chat_id: int, categories: list[tuple[str, str]]) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(text=title, callback_data=f"user:shop:{chat_id}:{key}:0")] for key, title in categories]
-    rows.append([InlineKeyboardButton(text="Назад к сумке", callback_data=f"user:bag:{chat_id}")])
+def user_shop_categories_menu(chat_id: int, user_id: int, categories: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=title, callback_data=f"user:shop:{chat_id}:{user_id}:{key}:0")]
+        for key, title in categories
+    ]
+    rows.append([InlineKeyboardButton(text="Назад к сумке", callback_data=f"user:bag:{chat_id}:{user_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -284,13 +287,13 @@ def user_shop_items_menu(
         next_page = min(total_pages - 1, page + 1)
         rows.append(
             [
-                InlineKeyboardButton(text="<", callback_data=f"user:shop:{chat_id}:{category}:{prev_page}"),
-                InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data=f"user:shop:{chat_id}:{category}:{page}"),
-                InlineKeyboardButton(text=">", callback_data=f"user:shop:{chat_id}:{category}:{next_page}"),
+                InlineKeyboardButton(text="<", callback_data=f"user:shop:{chat_id}:{user_id}:{category}:{prev_page}"),
+                InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data=f"user:shop:{chat_id}:{user_id}:{category}:{page}"),
+                InlineKeyboardButton(text=">", callback_data=f"user:shop:{chat_id}:{user_id}:{category}:{next_page}"),
             ]
         )
-    rows.append([InlineKeyboardButton(text="Категории", callback_data=f"user:shop:{chat_id}")])
-    rows.append([InlineKeyboardButton(text="Назад к сумке", callback_data=f"user:bag:{chat_id}")])
+    rows.append([InlineKeyboardButton(text="Категории", callback_data=f"user:shop:{chat_id}:{user_id}")])
+    rows.append([InlineKeyboardButton(text="Назад к сумке", callback_data=f"user:bag:{chat_id}:{user_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -303,7 +306,7 @@ def user_buy_confirm_menu(chat_id: int, user_id: int, item_key: str) -> InlineKe
                     callback_data=f"user:confirm:{chat_id}:{user_id}:{item_key}",
                 )
             ],
-            [InlineKeyboardButton(text="Назад в магазин", callback_data=f"user:shop:{chat_id}")],
+            [InlineKeyboardButton(text="Назад в магазин", callback_data=f"user:shop:{chat_id}:{user_id}")],
         ]
     )
 
@@ -527,10 +530,10 @@ def feedback_reply_menu(user_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def dig_register_menu() -> InlineKeyboardMarkup:
+def dig_register_menu(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Зарегистрироваться в игре", callback_data="dig:register")],
+            [InlineKeyboardButton(text="Зарегистрироваться в игре", callback_data=f"dig:register:{user_id}")],
         ]
     )
 
@@ -538,7 +541,7 @@ def dig_register_menu() -> InlineKeyboardMarkup:
 def dig_bag_menu(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [miniapp_deep_link_button("Магазин", MINI_APP_SHOP_START_PARAM)],
+            [miniapp_deep_link_button("Магазин", f"{MINI_APP_SHOP_START_PARAM}_{user_id}")],
             [InlineKeyboardButton(text="Маршруты", callback_data=f"dig:routes:{user_id}")],
             [InlineKeyboardButton(text="Контракты", callback_data=f"dig:contracts:{user_id}")],
             [InlineKeyboardButton(text="Экспедиция", callback_data=f"dig:expedition:{user_id}")],

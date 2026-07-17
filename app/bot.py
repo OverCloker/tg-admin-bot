@@ -1803,9 +1803,20 @@ def backfill_dig_achievements() -> int:
 
 async def require_dig_button_owner(callback: CallbackQuery, owner_id: int) -> bool:
     if callback.from_user.id != owner_id:
-        await callback.answer("Это не твой магазин.", show_alert=True)
+        await callback.answer("Эта кнопка принадлежит другому пользователю.", show_alert=True)
         return False
     return True
+
+
+async def resolve_dig_button_owner(callback: CallbackQuery, owner_raw: str | None) -> int | None:
+    if owner_raw and owner_raw.isdigit():
+        owner_id = int(owner_raw)
+    elif callback.message and callback.message.chat.type == "private":
+        owner_id = callback.from_user.id
+    else:
+        await callback.answer("Эта старая кнопка больше не действует. Вызови команду заново.", show_alert=True)
+        return None
+    return owner_id if await require_dig_button_owner(callback, owner_id) else None
 
 
 WEATHER_CODES = {
@@ -3306,7 +3317,11 @@ async def cb_profile_chat(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("user:bag:"))
 async def cb_user_bag(callback: CallbackQuery) -> None:
-    chat_id = int(callback.data.split(":", 2)[2])
+    parts = callback.data.split(":")
+    chat_id = int(parts[2])
+    owner_id = await resolve_dig_button_owner(callback, parts[3] if len(parts) > 3 else None)
+    if owner_id is None:
+        return
     if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
         await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
         return
@@ -3322,7 +3337,11 @@ async def cb_user_bag(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("user:mine:"))
 async def cb_user_mine(callback: CallbackQuery) -> None:
-    chat_id = int(callback.data.split(":", 2)[2])
+    parts = callback.data.split(":")
+    chat_id = int(parts[2])
+    owner_id = await resolve_dig_button_owner(callback, parts[3] if len(parts) > 3 else None)
+    if owner_id is None:
+        return
     chat = db.get_chat(chat_id)
     if chat is None:
         await callback.answer("Группа не найдена.", show_alert=True)
@@ -3334,14 +3353,22 @@ async def cb_user_mine(callback: CallbackQuery) -> None:
     await safe_edit(
         callback,
         f"<b>Шахта</b>\nГруппа: <b>{mention_chat(chat)}</b>",
-        reply_markup=user_mine_menu(chat_id),
+        reply_markup=user_mine_menu(
+            chat_id,
+            owner_id,
+            show_back=bool(callback.message and callback.message.chat.type == "private"),
+        ),
     )
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("user:donate:"))
 async def cb_user_donate(callback: CallbackQuery) -> None:
-    chat_id = int(callback.data.split(":", 2)[2])
+    parts = callback.data.split(":")
+    chat_id = int(parts[2])
+    owner_id = await resolve_dig_button_owner(callback, parts[3] if len(parts) > 3 else None)
+    if owner_id is None:
+        return
     if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
         await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
         return
@@ -3364,11 +3391,16 @@ async def cb_user_shop(callback: CallbackQuery) -> None:
         await callback.answer("Кнопка магазина устарела.", show_alert=True)
         return
     chat_id = int(parts[2])
-    category = parts[3] if len(parts) > 3 else None
+    has_owner = len(parts) > 3 and parts[3].isdigit()
+    owner_id = await resolve_dig_button_owner(callback, parts[3] if has_owner else None)
+    if owner_id is None:
+        return
+    category_index = 4 if has_owner else 3
+    category = parts[category_index] if len(parts) > category_index else None
     if category not in DIG_SHOP_CATEGORIES:
         category = None
     try:
-        page = int(parts[4]) if len(parts) > 4 else 0
+        page = int(parts[category_index + 1]) if len(parts) > category_index + 1 else 0
     except ValueError:
         page = 0
     if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
@@ -3394,7 +3426,7 @@ async def cb_user_shop(callback: CallbackQuery) -> None:
     await safe_edit(
         callback,
         dig_shop_overview_text(player.coins, items),
-        reply_markup=user_shop_categories_menu(chat_id, dig_shop_categories_for_keyboard()),
+        reply_markup=user_shop_categories_menu(chat_id, owner_id, dig_shop_categories_for_keyboard()),
     )
     await callback.answer()
 
@@ -3503,7 +3535,7 @@ async def cb_user_confirm(callback: CallbackQuery) -> None:
                 callback,
                 "Не получилось отправить подставу, котоины возвращены.\n"
                 f"<code>{escape(str(exc))}</code>",
-                reply_markup=user_shop_categories_menu(chat_id, dig_shop_categories_for_keyboard()),
+                reply_markup=user_shop_categories_menu(chat_id, callback.from_user.id, dig_shop_categories_for_keyboard()),
             )
             return
         result = "Подстава куплена и отправлена в чат."
@@ -3543,14 +3575,19 @@ async def cb_user_confirm(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("user:dig:"))
 async def cb_user_dig(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
-    if len(parts) == 4:
+    owner_raw: str | None = None
+    if len(parts) >= 4:
         action = parts[2]
         chat_id = int(parts[3])
+        owner_raw = parts[4] if len(parts) > 4 else None
+        owner_id = await resolve_dig_button_owner(callback, owner_raw)
+        if owner_id is None:
+            return
         if action == "mode":
             if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
                 await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
                 return
-            await safe_edit(callback, "Выбери способ раскопки:", reply_markup=user_dig_mode_menu(chat_id))
+            await safe_edit(callback, "Выбери способ раскопки:", reply_markup=user_dig_mode_menu(chat_id, owner_id))
             await callback.answer()
             return
         if action == "manual":
@@ -3577,6 +3614,9 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
     else:
         # Старые сообщения с кнопкой «Копать» продолжают работать как автоматическая раскопка.
         chat_id = int(parts[2])
+        owner_id = await resolve_dig_button_owner(callback, None)
+        if owner_id is None:
+            return
     if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
         await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
         return
@@ -3584,7 +3624,7 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
     await safe_edit(
         callback,
         run_private_dig(chat_id, callback.from_user),
-        reply_markup=user_mine_menu(chat_id),
+        reply_markup=user_mine_menu(chat_id, owner_id, show_back=False),
     )
     await callback.answer()
 
@@ -3643,10 +3683,14 @@ async def cb_feedback_start(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
-@router.callback_query(F.data == "dig:register")
+@router.callback_query(F.data.startswith("dig:register"))
 async def cb_dig_register(callback: CallbackQuery) -> None:
     if not callback.message or callback.message.chat.type not in SUPPORTED_CHAT_TYPES:
         await callback.answer("Регистрироваться нужно в группе.", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    owner_id = await resolve_dig_button_owner(callback, parts[2] if len(parts) > 2 else None)
+    if owner_id is None:
         return
 
     await register_current_chat(callback.message)
@@ -3674,8 +3718,8 @@ async def cb_dig_bag(callback: CallbackQuery) -> None:
         return
 
     parts = callback.data.split(":")
-    owner_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else callback.from_user.id
-    if not await require_dig_button_owner(callback, owner_id):
+    owner_id = await resolve_dig_button_owner(callback, parts[2] if len(parts) > 2 else None)
+    if owner_id is None:
         return
 
     player = db.get_dig_player(callback.message.chat.id, callback.from_user.id)
@@ -3803,7 +3847,9 @@ async def cb_dig_shop(callback: CallbackQuery) -> None:
         return
 
     parts = callback.data.split(":")
-    owner_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else callback.from_user.id
+    owner_id = await resolve_dig_button_owner(callback, parts[2] if len(parts) > 2 else None)
+    if owner_id is None:
+        return
     category = parts[3] if len(parts) > 3 else None
     if category not in DIG_SHOP_CATEGORIES:
         category = None
@@ -3811,9 +3857,6 @@ async def cb_dig_shop(callback: CallbackQuery) -> None:
         page = int(parts[4]) if len(parts) > 4 else 0
     except ValueError:
         page = 0
-    if not await require_dig_button_owner(callback, owner_id):
-        return
-
     player = db.get_dig_player(callback.message.chat.id, callback.from_user.id)
     if player is None:
         await callback.answer("Сначала зарегистрируйся.", show_alert=True)
@@ -3996,8 +4039,8 @@ async def cb_dig_achievements(callback: CallbackQuery) -> None:
         return
 
     parts = callback.data.split(":")
-    owner_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else callback.from_user.id
-    if not await require_dig_button_owner(callback, owner_id):
+    owner_id = await resolve_dig_button_owner(callback, parts[2] if len(parts) > 2 else None)
+    if owner_id is None:
         return
 
     player = db.get_dig_player(callback.message.chat.id, callback.from_user.id)
@@ -4021,12 +4064,13 @@ async def cb_dig_buy(callback: CallbackQuery) -> None:
 
     parts = callback.data.split(":", 3)
     if len(parts) == 4 and parts[2].isdigit():
-        owner_id = int(parts[2])
+        owner_raw = parts[2]
         item_key = parts[3]
     else:
-        owner_id = callback.from_user.id
+        owner_raw = None
         item_key = callback.data.split(":", 2)[2]
-    if not await require_dig_button_owner(callback, owner_id):
+    owner_id = await resolve_dig_button_owner(callback, owner_raw)
+    if owner_id is None:
         return
 
     item = DIG_SHOP_ITEMS.get(item_key)
@@ -4059,12 +4103,13 @@ async def cb_dig_confirm(callback: CallbackQuery) -> None:
 
     parts = callback.data.split(":", 3)
     if len(parts) == 4 and parts[2].isdigit():
-        owner_id = int(parts[2])
+        owner_raw = parts[2]
         item_key = parts[3]
     else:
-        owner_id = callback.from_user.id
+        owner_raw = None
         item_key = callback.data.split(":", 2)[2]
-    if not await require_dig_button_owner(callback, owner_id):
+    owner_id = await resolve_dig_button_owner(callback, owner_raw)
+    if owner_id is None:
         return
 
     item = DIG_SHOP_ITEMS.get(item_key)
@@ -7362,14 +7407,14 @@ async def dig_command(message: Message) -> None:
         await temporary_reply(
             message,
             "Ты еще не зарегистрирован в раскопках. Нажми кнопку регистрации, потом снова напиши <code>копай</code>.",
-            reply_markup=dig_register_menu(),
+            reply_markup=dig_register_menu(message.from_user.id),
         )
         return
 
     await temporary_reply(
         message,
         "Выбери способ раскопки:",
-        reply_markup=user_dig_mode_menu(message.chat.id),
+        reply_markup=user_dig_mode_menu(message.chat.id, message.from_user.id),
     )
     return
 
@@ -7673,13 +7718,13 @@ async def dig_bag(message: Message) -> None:
         await temporary_reply(
             message,
             "Ты еще не зарегистрирован в раскопках. Нажми кнопку регистрации, потом снова напиши <code>сумка</code>.",
-            reply_markup=dig_register_menu(),
+            reply_markup=dig_register_menu(message.from_user.id),
         )
         return
 
     text = dig_bag_text(message.chat.id, message.from_user.id)
     if text is None:
-        await temporary_reply(message, "Сначала зарегистрируйся в шахте.", reply_markup=dig_register_menu())
+        await temporary_reply(message, "Сначала зарегистрируйся в шахте.", reply_markup=dig_register_menu(message.from_user.id))
         return
     await temporary_reply(
         message,
@@ -7693,7 +7738,7 @@ async def dig_routes_command(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
         return
     if db.get_dig_player(message.chat.id, message.from_user.id) is None:
-        await temporary_reply(message, "Сначала зарегистрируйся в шахте.", reply_markup=dig_register_menu())
+        await temporary_reply(message, "Сначала зарегистрируйся в шахте.", reply_markup=dig_register_menu(message.from_user.id))
         return
     progress = db.get_dig_progress(message.from_user.id)
     routes = [(key, data[0], key == progress["selected_route"]) for key, data in DIG_ROUTES.items()]
@@ -7705,7 +7750,7 @@ async def dig_contracts_command(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
         return
     if db.get_dig_player(message.chat.id, message.from_user.id) is None:
-        await temporary_reply(message, "Сначала зарегистрируйся в шахте.", reply_markup=dig_register_menu())
+        await temporary_reply(message, "Сначала зарегистрируйся в шахте.", reply_markup=dig_register_menu(message.from_user.id))
         return
     await temporary_reply(message, dig_contracts_text(message.from_user.id), reply_markup=dig_bag_menu(message.from_user.id))
 
@@ -7730,7 +7775,7 @@ async def dig_achievements_command(message: Message) -> None:
         await temporary_reply(
             message,
             "Ты еще не зарегистрирован в раскопках. Нажми кнопку регистрации.",
-            reply_markup=dig_register_menu(),
+            reply_markup=dig_register_menu(message.from_user.id),
         )
         return
 
