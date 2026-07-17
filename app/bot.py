@@ -91,6 +91,7 @@ from .keyboards import (
     user_buy_confirm_menu,
     user_chat_select_menu,
     user_donate_menu,
+    user_dig_mode_menu,
     user_mine_menu,
     user_menu,
     user_routes_menu,
@@ -230,6 +231,11 @@ DIG_SHOP_ITEMS = {
     "star_lucky_dig": ("Раскопка со 100 удачей", 0, "Позволяет копать без ожидания и защищает от обвала за счет 100 удачи."),
     "star_depth_10": ("Гарантированная раскопка 10 м", 0, "Следующая раскопка гарантированно пройдет 10 метров без ожидания."),
 }
+DIG_SHOP_ITEMS["golden_ticket"] = (
+    "Золотой билет",
+    1500,
+    "Один билет для игры 3×3 в шахте Mini App.",
+)
 DIG_ITEM_ORDER = [
     "tea", "insurance", "dynamite", "safe", "compass", "scanner", "drill", "medkit", "map", "talisman", "camp", "repair_kit", "mystery_chest",
     "shovel_1", "shovel_2", "shovel_3", "helmet_1", "helmet_2", "helmet_3",
@@ -261,8 +267,12 @@ DIG_SHOP_CATEGORIES = {
         "Ранги",
         ["rank_1", "rank_2", "rank_3", "rank_4"],
     ),
+    "games": (
+        "Игры",
+        ["golden_ticket"],
+    ),
 }
-DIG_SHOP_CATEGORY_ORDER = ["consumables", "gear", "upgrades", "ranks"]
+DIG_SHOP_CATEGORY_ORDER = ["consumables", "gear", "upgrades", "ranks", "games"]
 DIG_SHOP_UPGRADE_CHAINS = [
     ["shovel_1", "shovel_2", "shovel_3"],
     ["helmet_1", "helmet_2", "helmet_3"],
@@ -3522,7 +3532,23 @@ async def cb_user_confirm(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("user:dig:"))
 async def cb_user_dig(callback: CallbackQuery) -> None:
-    chat_id = int(callback.data.split(":", 2)[2])
+    parts = callback.data.split(":")
+    if len(parts) == 4:
+        action = parts[2]
+        chat_id = int(parts[3])
+        if action == "mode":
+            if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+                await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+                return
+            await safe_edit(callback, "Выбери способ раскопки:", reply_markup=user_dig_mode_menu(chat_id))
+            await callback.answer()
+            return
+        if action != "auto":
+            await callback.answer("Режим раскопки устарел.", show_alert=True)
+            return
+    else:
+        # Старые сообщения с кнопкой «Копать» продолжают работать как автоматическая раскопка.
+        chat_id = int(parts[2])
     if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
         await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
         return
@@ -7290,6 +7316,13 @@ async def dig_command(message: Message) -> None:
             reply_markup=dig_register_menu(),
         )
         return
+
+    await temporary_reply(
+        message,
+        "Выбери способ раскопки:",
+        reply_markup=user_dig_mode_menu(message.chat.id),
+    )
+    return
 
     now = datetime.now(timezone.utc)
     items = dig_items_map(message.chat.id, message.from_user.id)

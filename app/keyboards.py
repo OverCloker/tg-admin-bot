@@ -172,13 +172,45 @@ def instagram_download_menu() -> InlineKeyboardMarkup:
     )
 
 
-def user_mine_menu(chat_id: int) -> InlineKeyboardMarkup:
+def _legacy_user_mine_menu(chat_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Копать", callback_data=f"user:dig:{chat_id}")],
             [InlineKeyboardButton(text="Сумка", callback_data=f"user:bag:{chat_id}")],
             [InlineKeyboardButton(text="Донат", callback_data=f"user:donate:{chat_id}")],
             [InlineKeyboardButton(text="Назад", callback_data=f"user:chat:{chat_id}")],
+        ]
+    )
+
+
+def manual_miniapp_button() -> InlineKeyboardButton:
+    url = os.getenv("MINI_APP_URL", "").strip().rstrip("/")
+    if not url:
+        base = os.getenv("ADMIN_PUBLIC_URL", "").strip().rstrip("/")
+        url = f"{base}/miniapp" if base else ""
+    label = "\u0412\u0440\u0443\u0447\u043d\u0443\u044e"
+    if not url:
+        return InlineKeyboardButton(text=label, callback_data="miniapp:open")
+    return InlineKeyboardButton(text=label, web_app=WebAppInfo(url=url))
+
+
+def user_dig_mode_menu(chat_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438", callback_data=f"user:dig:auto:{chat_id}")],
+            [manual_miniapp_button()],
+            [InlineKeyboardButton(text="\u041d\u0430\u0437\u0430\u0434 \u043a \u0448\u0430\u0445\u0442\u0435", callback_data=f"user:mine:{chat_id}")],
+        ]
+    )
+
+
+def user_mine_menu(chat_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="\u041a\u043e\u043f\u0430\u0442\u044c", callback_data=f"user:dig:mode:{chat_id}")],
+            [InlineKeyboardButton(text="\u0421\u0443\u043c\u043a\u0430", callback_data=f"user:bag:{chat_id}")],
+            [InlineKeyboardButton(text="\u0414\u043e\u043d\u0430\u0442", callback_data=f"user:donate:{chat_id}")],
+            [InlineKeyboardButton(text="\u041d\u0430\u0437\u0430\u0434", callback_data=f"user:chat:{chat_id}")],
         ]
     )
 

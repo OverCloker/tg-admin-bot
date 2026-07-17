@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import secrets
+from pathlib import Path
 from threading import Lock
 from datetime import datetime, timezone
 from typing import Any
@@ -11,7 +12,7 @@ from urllib.parse import parse_qsl
 from aiogram import Bot
 from aiogram.types import LabeledPrice
 from fastapi import APIRouter, Header, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from .config import load_config
 from .db import Database
@@ -27,6 +28,10 @@ class TicketPick(BaseModel):
 
 class SuperTicketPick(BaseModel):
     cell: int = Field(ge=0, le=80)
+
+
+class ShopPurchase(BaseModel):
+    item_key: str = Field(min_length=1, max_length=64)
 
 
 def _ticket_public(db: Database, user_id: int) -> dict[str, Any] | None:
@@ -54,6 +59,11 @@ def _super_ticket_public(db: Database, user_id: int) -> dict[str, Any] | None:
 def _db() -> Database:
     db = Database(load_config().db_path)
     db.init()
+    # The legacy mine helpers in bot.py use its shared DB handle. The API
+    # process has its own request-scoped connection, so bind it before using
+    # those helpers from Mini App endpoints.
+    from . import bot as game
+    game.db = db
     return db
 
 
@@ -83,14 +93,17 @@ def _state(db: Database, user_id: int) -> dict[str, Any]:
     if not player:
         return {"registered": False, "userId": user_id}
     session = db.get_dig_session(user_id)
+    now = datetime.now(timezone.utc)
     cooldown = None
     if player.last_dig_at and not session:
-        cooldown = (datetime.fromisoformat(player.last_dig_at) + game.user_dig_cooldown(user_id)).isoformat()
+        cooldown_at = datetime.fromisoformat(player.last_dig_at) + game.user_dig_cooldown(user_id)
+        if cooldown_at > now:
+            cooldown = cooldown_at.isoformat()
     progress = db.get_dig_progress(user_id)
     return {"registered": True, "userId": user_id,
             "name": game.dig_player_name(player.username, player.full_name),
             "coins": player.coins,
-            "luck": game.refreshed_dig_luck(user_id, player.luck, player.last_luck_at, datetime.now(timezone.utc)),
+            "luck": game.refreshed_dig_luck(user_id, player.luck, player.last_luck_at, now),
             "totalDepth": player.total_depth, "record": player.best_session_depth,
             "level": progress["level"], "xp": progress["xp"], "streak": progress["streak"],
             "sessionDepth": int(session["depth"]) if session else 0, "inSession": bool(session),
@@ -178,6 +191,94 @@ def _finish(db: Database, game: Any, user: dict[str, Any], session: dict[str, An
 @router.get("/miniapp", response_class=HTMLResponse)
 def miniapp_page() -> str:
     return MINI_APP_UI_HTML
+
+
+@router.get("/miniapp/shop-bg.png")
+def miniapp_shop_background() -> FileResponse:
+    return FileResponse(Path(__file__).with_name("shop-bg.png"), media_type="image/png")
+
+
+def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
+    from . import bot as game
+
+    items = game.dig_items_map(0, user_id)
+    categories: list[dict[str, Any]] = []
+    for category_key in game.DIG_SHOP_CATEGORY_ORDER:
+        title, item_keys = game.DIG_SHOP_CATEGORIES[category_key]
+        products: list[dict[str, Any]] = []
+        for item_key in item_keys:
+            if item_key == "prank":
+                # This item sends a message to a selected group and remains a chat-only action.
+                continue
+            item = game.DIG_SHOP_ITEMS.get(item_key)
+            if not item:
+                continue
+            name, price, description = item
+            products.append(
+                {
+                    "key": item_key,
+                    "name": name,
+                    "price": price,
+                    "description": description,
+                    "quantity": items.get(item_key, 0),
+                    "owned": item_key in game.DIG_PERMANENT_ITEMS and items.get(item_key, 0) > 0,
+                    "requirement": game.DIG_ITEM_REQUIREMENTS.get(item_key),
+                    "canBuy": not game.dig_purchase_error(items, item_key),
+                }
+            )
+        if products:
+            categories.append({"key": category_key, "title": title, "items": products})
+    return {"coins": db.get_dig_player(0, user_id).coins, "categories": categories}
+
+
+@router.get("/miniapp/shop")
+def miniapp_shop(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not db.get_dig_player(0, user["id"]):
+            raise HTTPException(400, "Сначала зарегистрируйтесь в шахте.")
+        return _shop_catalog(db, user["id"])
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/shop/buy")
+def miniapp_shop_buy(
+    payload: ShopPurchase,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    from . import bot as game
+
+    with DIG_LOCK:
+        db = _db()
+        try:
+            player = db.get_dig_player(0, user["id"])
+            if not player:
+                raise HTTPException(400, "Сначала зарегистрируйтесь в шахте.")
+            item = game.DIG_SHOP_ITEMS.get(payload.item_key)
+            if not item or payload.item_key == "prank":
+                raise HTTPException(400, "Этот товар нельзя купить в Mini App.")
+            items = game.dig_items_map(0, user["id"])
+            purchase_error = game.dig_purchase_error(items, payload.item_key)
+            if purchase_error:
+                raise HTTPException(400, purchase_error)
+            status = db.purchase_dig_item(
+                0,
+                user["id"],
+                payload.item_key,
+                int(item[1]),
+                quantity=1,
+                unique=payload.item_key in game.DIG_PERMANENT_ITEMS,
+            )
+            if status == "owned":
+                raise HTTPException(400, "Это постоянное улучшение уже куплено.")
+            if status == "no_coins":
+                raise HTTPException(400, "Не хватает котоинов.")
+            return {"ok": True, "item": payload.item_key, "state": _state(db, user["id"]), "shop": _shop_catalog(db, user["id"])}
+        finally:
+            db.close()
 
 
 @router.get("/miniapp/mine")
