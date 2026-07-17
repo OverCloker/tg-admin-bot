@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlencode
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
@@ -7,6 +8,11 @@ from .db import ChatTopic, RegisteredChat
 TRIGGERS_PAGE_SIZE = 25
 QUOTES_PAGE_SIZE = 25
 TOP_PAGE_SIZE = 20
+MINI_APP_DEEP_LINK = "https://t.me/ypominanieBot?startapp="
+
+
+def miniapp_deep_link_button(label: str, start_param: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=label, url=f"{MINI_APP_DEEP_LINK}{start_param}")
 
 
 def miniapp_button() -> InlineKeyboardButton | None:
@@ -17,6 +23,23 @@ def miniapp_button() -> InlineKeyboardButton | None:
     if not url:
         return InlineKeyboardButton(text="Шахта Mini App", callback_data="miniapp:open")
     return InlineKeyboardButton(text="Шахта Mini App", web_app=WebAppInfo(url=url)) if url else None
+
+
+def miniapp_private_button(label: str = "Шахта Mini App", view: str | None = None) -> InlineKeyboardButton:
+    url = os.getenv("MINI_APP_URL", "").strip().rstrip("/")
+    if not url:
+        base = os.getenv("ADMIN_PUBLIC_URL", "").strip().rstrip("/")
+        url = f"{base}/miniapp" if base else ""
+    if view and url:
+        separator = "&" if "?" in url else "?"
+        url = f"{url}{separator}{urlencode({'view': view})}"
+    if not url or not url.lower().startswith("https://"):
+        return InlineKeyboardButton(text=label, callback_data="miniapp:open")
+    return InlineKeyboardButton(text=label, web_app=WebAppInfo(url=url))
+
+
+def miniapp_private_menu(label: str = "Шахта Mini App", view: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[miniapp_private_button(label, view)]])
 
 
 def main_menu(show_server_address: bool = False) -> InlineKeyboardMarkup:
@@ -183,23 +206,11 @@ def _legacy_user_mine_menu(chat_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def manual_miniapp_button() -> InlineKeyboardButton:
-    url = os.getenv("MINI_APP_URL", "").strip().rstrip("/")
-    if not url:
-        base = os.getenv("ADMIN_PUBLIC_URL", "").strip().rstrip("/")
-        url = f"{base}/miniapp" if base else ""
-    label = "\u0412\u0440\u0443\u0447\u043d\u0443\u044e"
-    if not url or not url.lower().startswith("https://"):
-        return InlineKeyboardButton(text=label, callback_data="miniapp:open")
-    return InlineKeyboardButton(text=label, web_app=WebAppInfo(url=url))
-
-
 def user_dig_mode_menu(chat_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="\u0410\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438", callback_data=f"user:dig:auto:{chat_id}")],
-            [manual_miniapp_button()],
-            [InlineKeyboardButton(text="\u041d\u0430\u0437\u0430\u0434 \u043a \u0448\u0430\u0445\u0442\u0435", callback_data=f"user:mine:{chat_id}")],
+            [miniapp_deep_link_button("\u0412\u0440\u0443\u0447\u043d\u0443\u044e", "mine")],
         ]
     )
 
@@ -218,7 +229,7 @@ def user_mine_menu(chat_id: int) -> InlineKeyboardMarkup:
 def user_bag_menu(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Магазин", callback_data=f"user:shop:{chat_id}")],
+            [miniapp_deep_link_button("Магазин", "shop")],
             [InlineKeyboardButton(text="Маршруты", callback_data=f"user:routes:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Контракты", callback_data=f"user:contracts:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Экспедиция", callback_data=f"user:expedition:{chat_id}:{user_id}")],
@@ -521,7 +532,7 @@ def dig_register_menu() -> InlineKeyboardMarkup:
 def dig_bag_menu(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Магазин", callback_data=f"dig:shop:{user_id}")],
+            [miniapp_deep_link_button("Магазин", "shop")],
             [InlineKeyboardButton(text="Маршруты", callback_data=f"dig:routes:{user_id}")],
             [InlineKeyboardButton(text="Контракты", callback_data=f"dig:contracts:{user_id}")],
             [InlineKeyboardButton(text="Экспедиция", callback_data=f"dig:expedition:{user_id}")],

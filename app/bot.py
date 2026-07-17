@@ -78,6 +78,7 @@ from .keyboards import (
     main_menu,
     media_cancel_menu,
     media_tools_menu,
+    miniapp_private_menu,
     paid_chat_select_menu,
     participant_top_menu,
     premium_menu,
@@ -3543,6 +3544,24 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
             await safe_edit(callback, "Выбери способ раскопки:", reply_markup=user_dig_mode_menu(chat_id))
             await callback.answer()
             return
+        if action == "manual":
+            if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+                await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+                return
+            try:
+                await callback.bot.send_message(
+                    callback.from_user.id,
+                    "Ручная шахта открывается в Mini App. Нажми кнопку ниже.",
+                    reply_markup=miniapp_private_menu(),
+                )
+            except (TelegramBadRequest, TelegramForbiddenError):
+                await callback.answer(
+                    "Сначала открой личный чат с ботом, нажми /start и повтори попытку.",
+                    show_alert=True,
+                )
+                return
+            await callback.answer("Кнопка шахты отправлена в личный чат.", show_alert=True)
+            return
         if action != "auto":
             await callback.answer("Режим раскопки устарел.", show_alert=True)
             return
@@ -3916,6 +3935,27 @@ async def cb_miniapp_open(callback: CallbackQuery) -> None:
         "Mini App пока не настроен. Укажи MINI_APP_URL или ADMIN_PUBLIC_URL в .env и перезапусти бота.",
         show_alert=True,
     )
+
+
+@router.callback_query(F.data.startswith("dig:open_store:"))
+async def cb_dig_open_store(callback: CallbackQuery) -> None:
+    requested_user_id = int(callback.data.rsplit(":", 1)[1])
+    if requested_user_id != callback.from_user.id:
+        await callback.answer("Эта кнопка принадлежит другому пользователю.", show_alert=True)
+        return
+    try:
+        await callback.bot.send_message(
+            callback.from_user.id,
+            "Магазин шахты находится в Mini App.",
+            reply_markup=miniapp_private_menu("Открыть магазин", view="shop"),
+        )
+    except (TelegramBadRequest, TelegramForbiddenError):
+        await callback.answer(
+            "Сначала открой личный чат с ботом, нажми /start и повтори попытку.",
+            show_alert=True,
+        )
+        return
+    await callback.answer("Кнопка магазина отправлена в личный чат.", show_alert=True)
 
 
 @router.callback_query(F.data == "gold_ticket:buy")

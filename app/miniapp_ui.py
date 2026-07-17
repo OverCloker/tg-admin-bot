@@ -1,70 +1,556 @@
-"""Mobile-first Telegram Mini App UI for the mine and golden-ticket game."""
+"""HTML interface for the Telegram mine Mini App."""
 
-MINI_APP_HTML = """<!doctype html>
+MINI_APP_HTML = r"""<!doctype html>
 <html lang="ru">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Шахта</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-<style>
-:root{color-scheme:dark;font-family:system-ui,-apple-system,sans-serif;background:#0b111b;color:#f4f7fb}
-*{box-sizing:border-box}body{margin:0;padding:16px;background:var(--tg-bg,#0b111b);color:var(--tg-text,#f4f7fb)}
-main{max-width:520px;margin:auto}.top{display:flex;justify-content:space-between;align-items:center}
-h1{font-size:28px;margin:0}.muted{color:#9ba8b8}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:16px}
-.panel,.stat{background:#172434;border:1px solid #26394d;border-radius:14px;padding:14px;margin-top:12px}
-.stat b{display:block;font-size:19px;margin-top:4px}.depth{text-align:center;font-size:44px;font-weight:800;padding:18px}
-.meter{height:10px;background:#0e1722;border-radius:9px;overflow:hidden}.fill{height:100%;background:#45b9ef}
-.btn{width:100%;border:0;border-radius:12px;padding:14px;margin-top:12px;background:#268bd2;color:#fff;font-size:17px;font-weight:700}
-.btn.secondary{background:#26394d;font-size:14px;padding:9px;width:auto;margin:0}.btn:disabled{opacity:.45}
-.notice{white-space:pre-line;line-height:1.45}.ticket-title{font-size:21px;font-weight:800}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}.cell{position:relative;aspect-ratio:1;border:0;border-radius:16px;background:linear-gradient(145deg,#496984,#1b3045);box-shadow:inset 0 2px 2px #7090a8aa, inset 0 -6px 10px #0a1724aa,0 5px 0 #102232,0 9px 14px #0005;color:#fff;overflow:hidden;transform:translateY(0);transition:transform .15s,box-shadow .15s}.cell:active{transform:translateY(4px);box-shadow:inset 0 2px 2px #7090a855,inset 0 -3px 6px #0a1724aa,0 2px 0 #102232,0 5px 8px #0005}.cat{display:block;font-size:42px;line-height:1;filter:drop-shadow(2px 4px 2px #07111bcc);transition:transform .2s,opacity .2s}.cell-label{display:block;margin-top:7px;font-size:12px;color:#dbe9f5}.cell.opened{background:linear-gradient(145deg,#26394b,#172534);box-shadow:inset 0 2px 4px #0b1722aa;color:#fff}.cell.opened .cat{transform:scale(.7);opacity:.35}.cell.empty .cat{opacity:.2;filter:grayscale(1)}.cell.breaking{animation:cell-shake .6s ease-in-out}.cell.breaking .cat{animation:cat-break .6s ease-in forwards}.hammer{position:absolute;z-index:2;left:50%;top:-8px;font-size:39px;opacity:0;transform:translate(-8px,-16px) rotate(-35deg);pointer-events:none}.cell.breaking .hammer{animation:hammer-hit .6s ease-in-out}@keyframes hammer-hit{0%{opacity:0;transform:translate(18px,-20px) rotate(-45deg)}35%{opacity:1;transform:translate(0,2px) rotate(-8deg)}48%{opacity:1;transform:translate(-3px,8px) rotate(18deg)}70%{opacity:.9;transform:translate(12px,-2px) rotate(-25deg)}100%{opacity:0;transform:translate(20px,-18px) rotate(-40deg)}}@keyframes cat-break{0%,35%{transform:scale(1) rotate(0)}48%{transform:scale(1.12) rotate(-5deg)}100%{transform:scale(.2) rotate(18deg);opacity:0}}@keyframes cell-shake{0%,100%{transform:translateX(0)}42%{transform:translateX(-3px) rotate(-2deg)}52%{transform:translateX(3px) rotate(2deg)}62%{transform:translateX(-2px)}}@media (prefers-reduced-motion:reduce){.cell,.cat,.hammer{animation:none!important;transition:none!important}}
-</style>
-<style>.btn[onclick="dig()"]{position:relative;overflow:hidden}.btn[onclick="dig()"].digging{animation:dig-pulse .55s ease-in-out;pointer-events:none}.btn[onclick="dig()"].digging:before{content:'⛏️';display:inline-block;margin-right:8px;animation:pickaxe-swing .55s ease-in-out}@keyframes pickaxe-swing{0%{transform:rotate(-35deg) translateY(-3px)}45%{transform:rotate(28deg) translateY(2px)}100%{transform:rotate(-20deg) translateY(0)}}@keyframes dig-pulse{0%,100%{box-shadow:0 0 0 #268bd200}45%{box-shadow:0 0 22px #45b9efaa;transform:scale(1.02)}}@media (prefers-reduced-motion:reduce){.btn[onclick="dig()"].digging:before{animation:none!important}}</style>
-<style>.super-grid{grid-template-columns:repeat(9,1fr);gap:4px}.super-cell{min-width:0;border-radius:8px;font-size:15px}.super-cell .cat{font-size:21px}.super-cell .cell-label{font-size:0}.super-cell .hammer{font-size:24px}.super-cell.opened .cat{font-size:17px}.super-cell.chest .cat{filter:drop-shadow(1px 2px 1px #07111bcc)}@media(max-width:380px){.super-grid{gap:3px}.super-cell .cat{font-size:18px}}</style>
-<style>.chest-reveal{border-color:#f0b84b;animation:chest-panel .7s ease-out}.chest-icon{display:block;text-align:center;font-size:58px;animation:chest-open .7s ease-out}@keyframes chest-open{0%{transform:scale(.4) rotate(-12deg);opacity:0}55%{transform:scale(1.18) rotate(5deg);opacity:1}100%{transform:scale(1) rotate(0)}}@keyframes chest-panel{0%{transform:scale(.96);box-shadow:0 0 0 #f0b84b00}55%{transform:scale(1.02);box-shadow:0 0 28px #f0b84b99}100%{transform:scale(1);box-shadow:none}}</style>
-<style>.shop-screen{min-height:calc(100vh - 32px);padding:16px;border-radius:18px;background-color:#241a12;background-image:url('/miniapp/shop-bg.png');background-size:cover;background-position:center top;position:relative;overflow:hidden}.shop-screen:before{content:'';position:absolute;inset:0;background:#120d09aa;pointer-events:none}.shop-content{position:relative;z-index:1}.shop-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.shop-head h2{margin:0;font-size:25px}.shop-coins{background:#172434dd;border:1px solid #d99d4d88;border-radius:12px;padding:8px 10px;font-weight:700;white-space:nowrap}.shop-tabs{display:grid;grid-template-columns:repeat(2,1fr);gap:7px;margin:14px 0}.shop-tab{border:1px solid #d99d4d88;border-radius:10px;background:#241b15dd;color:#fff;padding:10px 7px;font-weight:700}.shop-tab.active{background:#b97732;color:#fff}.shop-item{background:#172434e8;border:1px solid #d99d4d66;border-radius:13px;padding:12px;margin-top:9px}.shop-item-head{display:flex;justify-content:space-between;align-items:start;gap:8px}.shop-item-name{font-weight:800;font-size:16px}.shop-price{color:#ffd27a;font-weight:800;white-space:nowrap}.shop-desc{color:#cbd4df;font-size:13px;line-height:1.35;margin-top:6px}.shop-owned{color:#8fdb9d;font-size:13px;margin-top:7px}.shop-buy{margin-top:9px}.shop-back{background:#26394d;margin-top:14px}</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-store">
+  <title>Шахта</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1420;
+      --panel: #17283a;
+      --panel-2: #20364b;
+      --line: #2b455e;
+      --text: #f5f7fa;
+      --muted: #aeb9c6;
+      --accent: #2794d2;
+      --accent-2: #e5a64a;
+      --ok: #5ecb83;
+      --danger: #d95c62;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+    }
+    button { font: inherit; }
+    main { width: min(100%, 560px); margin: 0 auto; }
+    .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    h1, h2, p { margin-top: 0; }
+    h1 { margin-bottom: 2px; font-size: 34px; letter-spacing: 0; }
+    h2 { margin-bottom: 10px; font-size: 23px; letter-spacing: 0; }
+    .muted { color: var(--muted); }
+    .panel {
+      margin-top: 14px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
+    .stat {
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .stat b { display: block; margin-top: 4px; font-size: 20px; overflow-wrap: anywhere; }
+    .btn {
+      width: 100%;
+      min-height: 50px;
+      margin-top: 12px;
+      padding: 12px 14px;
+      border: 0;
+      border-radius: 8px;
+      background: var(--accent);
+      color: white;
+      font-weight: 750;
+      cursor: pointer;
+    }
+    .btn.secondary { background: var(--panel-2); }
+    .btn:disabled { opacity: .45; cursor: default; }
+    .depth { padding: 18px 0; text-align: center; font-size: 48px; font-weight: 850; }
+    .meter { height: 12px; overflow: hidden; border-radius: 7px; background: #09111c; }
+    .fill { height: 100%; background: var(--accent); transition: width .25s ease; }
+    .notice { white-space: pre-line; border-color: #4b6f91; }
+    .section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .counter { white-space: nowrap; font-weight: 800; }
+    .ticket-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin-top: 12px; }
+    .ticket-cell, .super-cell {
+      position: relative;
+      display: grid;
+      place-items: center;
+      aspect-ratio: 1;
+      min-width: 0;
+      border: 1px solid #50708d;
+      border-radius: 8px;
+      background: #21384d;
+      color: white;
+      cursor: pointer;
+    }
+    .ticket-cell .cat { font-size: 42px; filter: drop-shadow(0 5px 3px #0007); }
+    .ticket-cell .hammer, .super-cell .hammer {
+      position: absolute;
+      z-index: 2;
+      opacity: 0;
+      font-size: 34px;
+      transform: translate(30%, -45%) rotate(-35deg);
+    }
+    .breaking .hammer { animation: hammer .55s ease-in-out; }
+    .breaking .cat { animation: crack .55s ease-in-out; }
+    .opened { background: #101c28; color: var(--ok); cursor: default; }
+    @keyframes hammer {
+      0% { opacity: 0; transform: translate(45%, -65%) rotate(-45deg); }
+      35% { opacity: 1; }
+      75% { opacity: 1; transform: translate(0, 0) rotate(18deg); }
+      100% { opacity: 0; }
+    }
+    @keyframes crack {
+      0%, 60% { transform: scale(1); }
+      80% { transform: scale(.82) rotate(-5deg); }
+      100% { transform: scale(1); }
+    }
+    .super-grid { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 4px; margin-top: 12px; }
+    .super-cell { border-radius: 5px; font-size: 17px; }
+    .super-cell .cat { font-size: clamp(15px, 5vw, 23px); }
+    .super-cell .hammer { font-size: 22px; }
+    .inventory { display: grid; gap: 7px; margin-top: 12px; }
+    .inventory-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .shop-screen {
+      min-height: calc(100vh - 32px);
+      margin-top: 14px;
+      padding: 16px;
+      border-radius: 8px;
+      background: linear-gradient(#120d09b8, #120d09e8), url("/miniapp/shop-bg.png") center top / cover;
+    }
+    .shop-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .shop-coins {
+      padding: 8px 10px;
+      border: 1px solid #d49a50;
+      border-radius: 8px;
+      background: #15100cd9;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .shop-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 14px 0; }
+    .shop-tab {
+      min-height: 43px;
+      padding: 8px;
+      border: 1px solid #c98e49;
+      border-radius: 8px;
+      background: #241a14e8;
+      color: white;
+      font-weight: 700;
+    }
+    .shop-tab.active { background: #a9652d; }
+    .product {
+      margin-top: 9px;
+      padding: 13px;
+      border: 1px solid #b57c42;
+      border-radius: 8px;
+      background: #16283bed;
+    }
+    .product-head { display: flex; justify-content: space-between; gap: 10px; }
+    .product-name { font-weight: 800; }
+    .price { color: #ffd37d; font-weight: 800; white-space: nowrap; }
+    .description { margin-top: 6px; color: #d0d8e1; font-size: 14px; line-height: 1.4; }
+    .owned { margin-top: 7px; color: var(--ok); font-size: 14px; }
+    .error { border-color: var(--danger); color: #ffd8da; }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
 </head>
-<body><main>
-<div class="top"><div><h1>⛏️ Шахта</h1><div class="muted" id="name">Загрузка...</div></div><button class="btn secondary" type="button" onclick="if(window.Telegram&&window.Telegram.WebApp){window.Telegram.WebApp.close()}">Закрыть</button></div>
-<div id="content"></div>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <h1>⛏️ Шахта</h1>
+      <div id="name" class="muted">Загрузка...</div>
+    </div>
+    <button class="btn secondary" style="width:auto;margin:0" type="button" id="close">Закрыть</button>
+  </header>
+  <div id="content"></div>
 </main>
 <script>
-const tg=window.Telegram&&window.Telegram.WebApp;if(tg){tg.ready();tg.expand()}
-const H=()=>({'X-Telegram-Init-Data':tg?tg.initData:''});let s=null,busy=false;
-async function api(path,opts={}){const r=await fetch(path,Object.assign({},opts,{headers:Object.assign({},H(),opts.headers||{}, {'Content-Type':'application/json'})}));const d=await r.json().catch(()=>({detail:'Ошибка сервера'}));if(!r.ok)throw Error(d.detail||'Ошибка запроса');return d}
-function note(text){const n=document.createElement('section');n.className='panel notice';n.textContent=text;content.prepend(n)}
-function ticketHtml(){if(!s.goldenTickets&&!s.ticketGame)return '';let g=s.ticketGame;let html='<section class="panel"><div class="ticket-title">🎟️ Золотой билет</div><div class="muted">Билетов: '+s.goldenTickets+'</div>';if(!g){html+='<div class="notice" style="margin-top:8px">Три попытки. На поле спрятаны призы: 10, 25 и 50 котоинов.</div><button class="btn" onclick="startTicket()">Сыграть билет</button></section>';return html}html+='<div class="notice" style="margin-top:8px">Осталось попыток: '+g.attemptsLeft+'</div><div class="grid">';for(let i=0;i<9;i++){const opened=g.opened.includes(i);html+='<button class="cell '+(opened?'opened':'')+'" '+(opened?'disabled':'')+' onclick="pickTicket('+i+')">'+(opened?'✓':'?')+'</button>'}return html+'</div></section>'}
-function render(){if(!s)return;document.getElementById('name').textContent=s.registered?s.name:'Новая вылазка';if(!s.registered){content.innerHTML='<section class="panel"><div class="depth">⛏️</div><div>Зарегистрируйтесь, чтобы начать общую шахту. Прогресс и котоины сохраняются в боте.</div><button class="btn" onclick="reg()">Начать игру</button></section>';return}const d=s.sessionDepth||0;const disabled=s.cooldownUntil&&new Date(s.cooldownUntil).getTime()>Date.now()&&!s.inSession;content.innerHTML='<div class="stats"><div class="stat">🪙<b>'+s.coins+'</b></div><div class="stat">🍀<b>'+s.luck+'/100</b></div><div class="stat">🏆<b>'+s.record+' м</b></div></div><section class="panel"><div class="muted">Текущая вылазка</div><div class="depth">'+d+'/10 м</div><div class="meter"><div class="fill" style="width:'+(d*10)+'%"></div></div><button class="btn" '+(disabled?'disabled':'')+' onclick="dig()">⛏️ Копать следующий метр</button><div class="muted" style="margin-top:9px">'+(disabled?'Кулдаун: '+new Date(s.cooldownUntil).toLocaleString():'Каждое нажатие проверяет один метр. Шансы те же, что в боте.')+'</div></section>'+ticketHtml()+'<section class="panel">Уровень '+s.level+' · XP '+s.xp+' · серия '+s.streak+'</section>'}
-async function load(){try{s=await api('/miniapp/mine');render()}catch(e){content.innerHTML='<section class="panel">'+e.message+'</section>'}}
-async function reg(){try{s=await api('/miniapp/mine/register',{method:'POST'});render()}catch(e){alert(e.message)}}
-async function dig(){if(busy)return;busy=true;try{const d=await api('/miniapp/mine/dig',{method:'POST'});s=d.state;render();note(d.message)}catch(e){alert(e.message);load()}finally{busy=false}}
-async function startTicket(){if(busy)return;busy=true;try{const d=await api('/miniapp/gold-ticket/start',{method:'POST'});s=d.state;render();note('Золотой билет открыт. У тебя 3 попытки.')}catch(e){alert(e.message);load()}finally{busy=false}}
-async function pickTicket(cell){if(busy)return;busy=true;try{const d=await api('/miniapp/gold-ticket/pick',{method:'POST',body:JSON.stringify({cell:cell})});s=d.state;render();note(d.prize?'Клетка принесла '+d.prize+' котоинов!':'В этой клетке ничего нет.')}catch(e){alert(e.message);load()}finally{busy=false}}
-// The ticket board uses a short client-side reveal animation before the
-// server result is applied. The prize itself is still decided server-side.
-function ticketHtml(){if(!s.goldenTickets&&!s.ticketGame)return '';let g=s.ticketGame;let html='<section class="panel"><div class="ticket-title">&#127922; Золотой билет</div><div class="muted">Билетов: '+s.goldenTickets+'</div>';if(!g){html+='<div class="notice" style="margin-top:8px">Три попытки. Разбей фигурку котика и узнай, что внутри.</div><button class="btn" onclick="startTicket()">Сыграть билет</button></section>';return html}html+='<div class="notice" style="margin-top:8px">Осталось попыток: '+g.attemptsLeft+'</div><div class="grid">';for(let i=0;i<9;i++){const opened=g.opened.includes(i);html+='<button class="cell '+(opened?'opened':'')+'" '+(opened?'disabled':'')+' onclick="pickTicket('+i+')"><span class="hammer">&#128296;</span><span class="cat">&#128049;</span><span class="cell-label">'+(opened?'Открыто':'Разбить')+'</span></button>'}return html+'</div></section>'}
-function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
-async function pickTicket(cell){if(busy)return;busy=true;const target=document.querySelector('.cell[onclick="pickTicket('+cell+')"]');if(target){target.classList.add('breaking');await sleep(620)}try{const d=await api('/miniapp/gold-ticket/pick',{method:'POST',body:JSON.stringify({cell:cell})});s=d.state;render();note(d.prize?'Котик разбит! Внутри '+d.prize+' котоинов.':'Котик разбит, но внутри ничего нет.')}catch(e){alert(e.message);load()}finally{busy=false}}
-async function dig(){if(busy)return;busy=true;const button=document.querySelector('.btn[onclick="dig()"]');if(button)button.classList.add('digging');try{await sleep(450);const d=await api('/miniapp/mine/dig',{method:'POST'});s=d.state;render();note(d.message)}catch(e){alert(e.message);load()}finally{busy=false}}
-function superGameHtml(){if(!s.superGame&&(!s.superPasses&&!s.goldenTickets))return '';let g=s.superGame;let html='<section class="panel"><div class="ticket-title">🏆 Супер-игра 9×9</div><div class="muted">Вход: 3 золотых билета или 10 ⭐</div>';if(!g){const tickets=Math.min(3,s.goldenTickets||0);const ready=tickets>=3||s.superPasses>0;html+='<div class="notice" style="margin-top:8px">Билеты: '+tickets+'/3. Собери три билета, чтобы открыть 10 попыток. На поле спрятаны 10 денежных призов от 50 до 250 котоинов и один сундук с особой наградой.</div><button class="btn" '+(ready?'':'disabled')+' onclick="startSuperGame()">Открыть супер-игру</button></section>';return html}html+='<div class="notice" style="margin-top:8px">Осталось попыток: '+g.attemptsLeft+'</div><div class="grid super-grid">';for(let i=0;i<81;i++){const opened=g.opened.includes(i);html+='<button class="cell super-cell '+(opened?'opened':'')+'" '+(opened?'disabled':'')+' onclick="pickSuper('+i+')"><span class="hammer">🔨</span><span class="cat">🐱</span><span class="cell-label">'+(opened?'Открыто':'Разбить')+'</span></button>'}return html+'</div></section>'}
-function mountSuperGame(){const old=document.getElementById('super-game-panel');if(old)old.remove();const wrapper=document.createElement('div');wrapper.id='super-game-panel';wrapper.innerHTML=superGameHtml();const levelPanel=[...document.querySelectorAll('.panel')].pop();if(levelPanel)levelPanel.after(wrapper);else content.append(wrapper)}
-async function buySuperGame(){if(busy)return;busy=true;try{const d=await api('/miniapp/super-game/invoice',{method:'POST'});if(tg&&tg.openInvoice){tg.openInvoice(d.url,status=>{if(status==='paid')load()})}else{window.location.href=d.url}}catch(e){alert(e.message)}finally{busy=false}}
-const baseSuperGameHtml=superGameHtml;superGameHtml=function(){return baseSuperGameHtml()||'<section class="panel"><div class="ticket-title">🏆 Супер-игра 9×9</div><div class="muted">Вход: 3 золотых билета или 10 ⭐</div><div class="notice" style="margin-top:8px">Собери 3 золотых билета или купи доступ за 10 ⭐. Внутри 10 попыток, денежные призы от 50 до 250 котоинов и один сундук с особой наградой.</div></section>'}
-const baseMountSuperGame=mountSuperGame;mountSuperGame=function(){baseMountSuperGame();const panel=document.getElementById('super-game-panel');if(!panel||s.superGame)return;const button=document.createElement('button');button.className='btn';button.textContent='Купить доступ к супер-игре - 10 ⭐';button.onclick=buySuperGame;panel.firstElementChild.append(button)}
-function htmlEscape(value){return String(value??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]))}
-function mountBagButton(){if(!s||!s.registered||document.getElementById('bag-open'))return;const panel=document.createElement('section');panel.className='panel';panel.id='bag-open';panel.innerHTML='<button class="btn secondary" style="width:100%;margin:0" onclick="showBag()">РЎСѓРјРєР°</button>';content.append(panel)}
-function bagHtml(shop){const entries=Object.entries(s.items||{}).filter(([,quantity])=>quantity>0);const names={};for(const category of shop.categories||[])for(const item of category.items)names[item.key]=item.name;const list=entries.length?entries.map(([key,quantity])=>'<div>'+htmlEscape(names[key]||key)+' × '+quantity+'</div>').join(''):'Нет активных предметов.';return '<section class="panel"><div class="ticket-title">Сумка шахтера</div><div class="muted">Котоины: '+s.coins+' · Удача: '+s.luck+'/100</div><div class="notice" style="margin-top:10px">'+list+'</div><button class="btn" onclick="showShop()">Магазин</button><button class="btn secondary" style="width:100%" onclick="render()">Назад к шахте</button></section>'}
-async function showBag(){if(busy)return;try{const shop=await api('/miniapp/shop');content.innerHTML=bagHtml(shop)}catch(e){alert(e.message)}}
-let shopCategory='';
-function renderShop(data,selected){shopCategory=selected||data.categories[0]?.key||'';const category=data.categories.find(x=>x.key===shopCategory)||data.categories[0];if(!category){content.innerHTML='<section class="panel">Магазин пока пуст.</section>';return}const tabs=data.categories.map(x=>'<button class="shop-tab '+(x.key===category.key?'active':'')+'" onclick="showShop(\''+x.key+'\')">'+htmlEscape(x.title)+'</button>').join('');const products=category.items.map(item=>'<article class="shop-item"><div class="shop-item-head"><div class="shop-item-name">'+htmlEscape(item.name)+'</div><div class="shop-price">'+item.price+' 🪙</div></div><div class="shop-desc">'+htmlEscape(item.description)+'</div>'+(item.owned?'<div class="shop-owned">Уже куплено</div>':item.quantity?'<div class="shop-owned">В сумке: '+item.quantity+'</div>':'')+(item.requirement?'<div class="muted" style="margin-top:5px">Нужно: '+htmlEscape(item.requirement)+'</div>':'')+(item.owned?'':'<button class="btn shop-buy" '+(item.canBuy?'':'disabled')+' onclick="buyShop(\''+item.key+'\')">Купить за '+item.price+' 🪙</button>')+'</article>').join('');content.innerHTML='<section class="shop-screen"><div class="shop-content"><div class="shop-head"><h2>Магазин шахты</h2><div class="shop-coins">🪙 '+data.coins+'</div></div><div class="shop-tabs">'+tabs+'</div>'+products+'<button class="btn shop-back" onclick="showBag()">Назад в сумку</button></div></section>'}
-async function showShop(category){if(busy)return;try{const data=await api('/miniapp/shop');renderShop(data,category)}catch(e){alert(e.message)}}
-async function buyShop(itemKey){if(busy)return;if(!window.confirm('Купить этот предмет за котоины?'))return;busy=true;try{const d=await api('/miniapp/shop/buy',{method:'POST',body:JSON.stringify({item_key:itemKey})});s=d.state;renderShop(d.shop,shopCategory);note('Покупка выполнена. Предмет добавлен в сумку.')}catch(e){alert(e.message)}finally{busy=false}}
-const baseRender=render;render=function(){baseRender();try{mountSuperGame()}catch(e){console.error('super game render failed',e)}try{mountBagButton()}catch(e){console.error('bag render failed',e)}}
-async function startSuperGame(){if(busy)return;busy=true;try{const d=await api('/miniapp/super-game/start',{method:'POST'});s=d.state;render();note(d.source==='tickets'?'Списано 3 золотых билета. Супер-игра открыта!':'Доступ за 10 ⭐ активирован. Супер-игра открыта!')}catch(e){alert(e.message);load()}finally{busy=false}}
-function superRewardNote(text){const n=document.createElement('section');n.className='panel notice chest-reveal';n.innerHTML='<span class="chest-icon">🎁</span><div>'+text+'</div>';content.prepend(n)}
-async function pickSuper(cell){if(busy)return;busy=true;const target=document.querySelector('.super-cell[onclick="pickSuper('+cell+')"]');if(target){target.classList.add('breaking');await sleep(620)}try{const d=await api('/miniapp/super-game/pick',{method:'POST',body:JSON.stringify({cell:cell})});s=d.state;render();const text=d.reward==='mute30'?'Сундук найден! Получено право выдать мут на 30 минут.':d.reward==='tag'?'Сундук найден! Получено право выбрать себе тег в чате.':d.reward==='coins500'?'Сундук найден! Получено 500 котокоинов.':d.coins?'Найдено '+d.coins+' котокоинов.':'Котик разбит, но клетка пустая.';d.reward?superRewardNote(text):note(text)}catch(e){alert(e.message);load()}finally{busy=false}}
-setInterval(()=>{if(s&&s.cooldownUntil&&new Date(s.cooldownUntil).getTime()<=Date.now()){s.cooldownUntil=null;render()}},15000);
-load();
+  const telegram = window.Telegram && window.Telegram.WebApp;
+  const content = document.getElementById("content");
+  const nameNode = document.getElementById("name");
+  let state = null;
+  let busy = false;
+  let shopCategory = "";
+
+  if (telegram) {
+    telegram.ready();
+    telegram.expand();
+  }
+
+  document.getElementById("close").addEventListener("click", () => {
+    if (telegram) telegram.close();
+  });
+
+  const headers = () => ({
+    "Content-Type": "application/json",
+    "X-Telegram-Init-Data": telegram ? telegram.initData : ""
+  });
+
+  async function api(path, options = {}) {
+    const response = await fetch(path, {
+      ...options,
+      headers: { ...headers(), ...(options.headers || {}) }
+    });
+    const data = await response.json().catch(() => ({ detail: "Сервер вернул неверный ответ." }));
+    if (!response.ok) throw new Error(data.detail || "Ошибка запроса.");
+    return data;
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, char => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[char]);
+  }
+
+  function showError(error) {
+    content.innerHTML = `<section class="panel error">${escapeHtml(error.message || error)}</section>`;
+  }
+
+  function showNotice(text, special = false) {
+    const node = document.createElement("section");
+    node.className = `panel notice${special ? " chest" : ""}`;
+    node.textContent = text;
+    content.prepend(node);
+  }
+
+  function isCoolingDown() {
+    return state && state.cooldownUntil &&
+      new Date(state.cooldownUntil).getTime() > Date.now() &&
+      !state.inSession;
+  }
+
+  function mineHtml() {
+    if (!state.registered) {
+      return `<section class="panel">
+        <h2>Новая шахта</h2>
+        <p>Зарегистрируйся, чтобы начать раскопки. Прогресс общий для всех групп и Mini App.</p>
+        <button class="btn" onclick="registerMine()">Начать игру</button>
+      </section>`;
+    }
+    const depth = state.sessionDepth || 0;
+    const disabled = isCoolingDown();
+    const cooldown = disabled
+      ? `Копать снова можно: ${new Date(state.cooldownUntil).toLocaleString()}`
+      : "Одно нажатие проверяет один следующий метр.";
+    return `
+      <div class="stats">
+        <div class="stat">🪙<b>${state.coins}</b></div>
+        <div class="stat">🍀<b>${state.luck}/100</b></div>
+        <div class="stat">🏆<b>${state.record} м</b></div>
+      </div>
+      <section class="panel">
+        <div class="muted">Текущая вылазка</div>
+        <div class="depth">${depth}/10 м</div>
+        <div class="meter"><div class="fill" style="width:${depth * 10}%"></div></div>
+        <button class="btn" ${disabled ? "disabled" : ""} onclick="digOneMeter(this)">⛏️ Копать следующий метр</button>
+        <div class="muted" style="margin-top:10px">${escapeHtml(cooldown)}</div>
+      </section>
+      ${goldTicketHtml()}
+      ${superGameHtml()}
+      <section class="panel">Уровень <b>${state.level}</b> · XP <b>${state.xp}</b> · серия <b>${state.streak}</b></section>
+      <section class="panel">
+        <button class="btn secondary" style="margin:0" onclick="showBag()">Сумка</button>
+      </section>`;
+  }
+
+  function goldTicketHtml() {
+    const game = state.ticketGame;
+    if (!game && !state.goldenTickets) return "";
+    if (!game) {
+      return `<section class="panel">
+        <div class="section-title"><h2>🎟️ Золотой билет</h2><span class="counter">${state.goldenTickets} шт.</span></div>
+        <p class="muted">Три попытки. В трёх из девяти котиков спрятаны 10, 25 и 50 котоинов.</p>
+        <button class="btn" onclick="startGoldTicket()">Играть</button>
+      </section>`;
+    }
+    const cells = Array.from({ length: 9 }, (_, index) => {
+      const opened = game.opened.includes(index);
+      return `<button class="ticket-cell ${opened ? "opened" : ""}" ${opened ? "disabled" : ""}
+        onclick="pickGoldTicket(${index}, this)">
+        <span class="hammer">🔨</span><span class="cat">${opened ? "✓" : "🐱"}</span>
+      </button>`;
+    }).join("");
+    return `<section class="panel">
+      <div class="section-title"><h2>🎟️ Золотой билет</h2><span class="counter">${game.attemptsLeft} попытки</span></div>
+      <div class="ticket-grid">${cells}</div>
+    </section>`;
+  }
+
+  function superGameHtml() {
+    const game = state.superGame;
+    if (!game) {
+      const canStart = (state.goldenTickets || 0) >= 3 || (state.superPasses || 0) > 0;
+      return `<section class="panel">
+        <h2>🏆 Супер-игра 9×9</h2>
+        <p class="muted">10 попыток, денежные призы от 50 до 250 котоинов и один сундук с особой наградой.</p>
+        <div>Билеты: <b>${state.goldenTickets || 0}/3</b></div>
+        <button class="btn" ${canStart ? "" : "disabled"} onclick="startSuperGame()">Играть за 3 билета</button>
+        <button class="btn secondary" onclick="buySuperGame()">Купить вход за 10 ⭐</button>
+      </section>`;
+    }
+    const cells = Array.from({ length: 81 }, (_, index) => {
+      const opened = game.opened.includes(index);
+      return `<button class="super-cell ${opened ? "opened" : ""}" ${opened ? "disabled" : ""}
+        onclick="pickSuper(${index}, this)">
+        <span class="hammer">🔨</span><span class="cat">${opened ? "✓" : "🐱"}</span>
+      </button>`;
+    }).join("");
+    return `<section class="panel">
+      <div class="section-title"><h2>🏆 Супер-игра</h2><span class="counter">${game.attemptsLeft} попыток</span></div>
+      <div class="super-grid">${cells}</div>
+    </section>`;
+  }
+
+  function renderMine() {
+    if (!state) return;
+    nameNode.textContent = state.registered ? state.name : "Новая вылазка";
+    content.innerHTML = mineHtml();
+  }
+
+  async function load() {
+    try {
+      state = await api("/miniapp/mine");
+      const query = new URLSearchParams(location.search);
+      const initialView =
+        (telegram && telegram.initDataUnsafe && telegram.initDataUnsafe.start_param) ||
+        query.get("tgWebAppStartParam") ||
+        query.get("startapp") ||
+        query.get("view");
+      if (initialView === "shop" && state.registered) await showShop();
+      else if (initialView === "bag" && state.registered) await showBag();
+      else renderMine();
+    } catch (error) {
+      nameNode.textContent = "Ошибка загрузки";
+      showError(error);
+    }
+  }
+
+  async function registerMine() {
+    if (busy) return;
+    busy = true;
+    try {
+      state = await api("/miniapp/mine/register", { method: "POST" });
+      renderMine();
+    } catch (error) {
+      showError(error);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function digOneMeter(button) {
+    if (busy) return;
+    busy = true;
+    button.disabled = true;
+    button.textContent = "⛏️ Копаем...";
+    try {
+      const result = await api("/miniapp/mine/dig", { method: "POST" });
+      state = result.state;
+      renderMine();
+      showNotice(result.message);
+    } catch (error) {
+      renderMine();
+      showNotice(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function startGoldTicket() {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/gold-ticket/start", { method: "POST" });
+      state = result.state;
+      renderMine();
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+  async function pickGoldTicket(cell, button) {
+    if (busy) return;
+    busy = true;
+    button.classList.add("breaking");
+    await sleep(560);
+    try {
+      const result = await api("/miniapp/gold-ticket/pick", {
+        method: "POST", body: JSON.stringify({ cell })
+      });
+      state = result.state;
+      renderMine();
+      showNotice(result.prize ? `Найдено ${result.prize} котоинов!` : "Под котиком пусто.");
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function startSuperGame() {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/super-game/start", { method: "POST" });
+      state = result.state;
+      renderMine();
+      showNotice(result.source === "tickets" ? "Списано 3 золотых билета." : "Супер-игра открыта.");
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function buySuperGame() {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/super-game/invoice", { method: "POST" });
+      if (telegram && telegram.openInvoice) {
+        telegram.openInvoice(result.url, status => { if (status === "paid") load(); });
+      } else {
+        location.href = result.url;
+      }
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function pickSuper(cell, button) {
+    if (busy) return;
+    busy = true;
+    button.classList.add("breaking");
+    await sleep(560);
+    try {
+      const result = await api("/miniapp/super-game/pick", {
+        method: "POST", body: JSON.stringify({ cell })
+      });
+      state = result.state;
+      renderMine();
+      const messages = {
+        mute30: "Сундук открыт: право выдать мут на 30 минут.",
+        tag: "Сундук открыт: право выбрать себе тег в чате.",
+        coins500: "Сундук открыт: 500 котоинов."
+      };
+      showNotice(messages[result.reward] || (result.coins ? `Найдено ${result.coins} котоинов.` : "Клетка пустая."), Boolean(result.reward));
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function showBag() {
+    try {
+      const shop = await api("/miniapp/shop");
+      const names = {};
+      shop.categories.forEach(category => category.items.forEach(item => { names[item.key] = item.name; }));
+      const entries = Object.entries(state.items || {}).filter(([, quantity]) => quantity > 0);
+      const inventory = entries.length
+        ? entries.map(([key, quantity]) => `<div class="inventory-row"><span>${escapeHtml(names[key] || key)}</span><b>× ${quantity}</b></div>`).join("")
+        : `<div class="muted">Сумка пока пустая.</div>`;
+      content.innerHTML = `<section class="panel">
+        <div class="section-title"><h2>Сумка шахтёра</h2><span class="counter">🪙 ${state.coins}</span></div>
+        <div class="inventory">${inventory}</div>
+        <button class="btn" onclick="showShop()">Магазин</button>
+        <button class="btn secondary" onclick="renderMine()">Назад к шахте</button>
+      </section>`;
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function showShop(categoryKey = "") {
+    try {
+      const shop = await api("/miniapp/shop");
+      renderShop(shop, categoryKey);
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  function renderShop(shop, categoryKey = "") {
+    shopCategory = categoryKey || shopCategory || (shop.categories[0] && shop.categories[0].key);
+    const category = shop.categories.find(item => item.key === shopCategory) || shop.categories[0];
+    if (!category) {
+      content.innerHTML = `<section class="panel">Магазин пока пуст.</section>`;
+      return;
+    }
+    shopCategory = category.key;
+    const tabs = shop.categories.map(item => `
+      <button class="shop-tab ${item.key === shopCategory ? "active" : ""}" onclick="showShop('${item.key}')">
+        ${escapeHtml(item.title)}
+      </button>`).join("");
+    const products = category.items.map(item => {
+      const status = item.owned
+        ? `<div class="owned">Уже куплено</div>`
+        : item.quantity ? `<div class="owned">В сумке: ${item.quantity}</div>` : "";
+      const requirement = item.requirement
+        ? `<div class="muted" style="margin-top:6px">Нужно: ${escapeHtml(item.requirement)}</div>` : "";
+      const buy = item.owned ? "" : `
+        <button class="btn" ${item.canBuy ? "" : "disabled"} onclick="buyShop('${item.key}')">
+          Купить за ${item.price} 🪙
+        </button>`;
+      return `<article class="product">
+        <div class="product-head">
+          <div class="product-name">${escapeHtml(item.name)}</div>
+          <div class="price">${item.price} 🪙</div>
+        </div>
+        <div class="description">${escapeHtml(item.description)}</div>
+        ${status}${requirement}${buy}
+      </article>`;
+    }).join("");
+    content.innerHTML = `<section class="shop-screen">
+      <div class="shop-head"><h2>Магазин шахты</h2><div class="shop-coins">🪙 ${shop.coins}</div></div>
+      <div class="shop-tabs">${tabs}</div>
+      ${products}
+      <button class="btn secondary" onclick="showBag()">Назад в сумку</button>
+    </section>`;
+  }
+
+  async function buyShop(itemKey) {
+    if (busy || !confirm("Купить этот предмет за котоины?")) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/shop/buy", {
+        method: "POST", body: JSON.stringify({ item_key: itemKey })
+      });
+      state = result.state;
+      renderShop(result.shop, shopCategory);
+      showNotice("Покупка выполнена. Предмет добавлен в сумку.");
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  setInterval(() => {
+    if (state && state.cooldownUntil && new Date(state.cooldownUntil).getTime() <= Date.now()) {
+      state.cooldownUntil = null;
+      renderMine();
+    }
+  }, 15000);
+
+  load();
 </script>
-</body></html>"""
+</body>
+</html>
+"""
