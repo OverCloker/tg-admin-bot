@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import parse_qsl
 from aiogram import Bot
 from aiogram.types import LabeledPrice
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from .config import load_config
@@ -776,7 +776,10 @@ def super_game_pick(
 
 
 @router.post("/miniapp/mine/dig")
-def miniapp_dig_manual(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict[str, Any]:
+def miniapp_dig_manual(
+    response: Response,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
     with DIG_LOCK:
         db = _db()
@@ -794,6 +797,7 @@ def miniapp_dig_manual(x_telegram_init_data: str | None = Header(default=None, a
             effects = json.loads(session["used_effects"] or "[]")
             if data.get("forcedDepth"):
                 message = _finish_manual(db, game, user, session, 10, now)
+                response.headers["X-Miniapp-Dig-Finished"] = "1"
                 return {"ok": True, "finished": True, "meter": 10, "chance": 100, "message": message, "state": _state(db, user["id"])}
 
             items = game.dig_items_map(0, user["id"])
@@ -836,6 +840,7 @@ def miniapp_dig_manual(x_telegram_init_data: str | None = Header(default=None, a
             )
             session = db.get_dig_session(user["id"])
             message = _finish_manual(db, game, user, session, max(0, depth), now)
+            response.headers["X-Miniapp-Dig-Finished"] = "1"
             return {"ok": True, "finished": True, "meter": max(0, depth), "chance": chance, "message": message, "state": _state(db, user["id"])}
         finally:
             db.close()

@@ -7192,7 +7192,6 @@ async def help_ru(message: Message) -> None:
         "/списоктригеров\n"
         "/участники\n"
         "/каналы\n"
-        "ролл орел / ролл решка\n"
         "копай\n"
         "сумка\n"
         "достижения\n"
@@ -7778,60 +7777,6 @@ async def dig_coins_top(message: Message) -> None:
     await send_chat_top(message, "coins", "Топ монет пока пуст. Сначала зарегистрируйтесь и напишите: копай")
 
 
-@router.message(F.text.regexp(re.compile(r"^(ролл|рол|roll)\s+(ор[её]л|решка)$", re.IGNORECASE)))
-async def coin_roll(message: Message) -> None:
-    if message.chat.type not in SUPPORTED_CHAT_TYPES:
-        return
-    if not message.from_user:
-        return
-
-    await remember_sender(message)
-    parts = (message.text or "").strip().split()
-    if len(parts) != 2:
-        return
-
-    guess = parts[1].casefold().replace("ё", "е")
-    coin = secrets.choice(["орел", "решка"])
-    name = f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name
-
-    if guess == coin:
-        await safe_reply(
-            message,
-            f"Монета: <b>{coin}</b>.\n{escape(name)} угадал, красавчик.",
-        )
-        return
-
-    if await is_chat_admin(message.bot, message.chat.id, message.from_user.id):
-        await safe_reply(
-            message,
-            f"Монета: <b>{coin}</b>.\n{escape(name)} не угадал, но админов не мутим.",
-        )
-        return
-
-    until_date = datetime.now(timezone.utc) + timedelta(minutes=30)
-    try:
-        await message.bot.restrict_chat_member(
-            chat_id=message.chat.id,
-            user_id=message.from_user.id,
-            permissions=ChatPermissions(can_send_messages=False),
-            until_date=until_date,
-            use_independent_chat_permissions=True,
-        )
-    except (TelegramBadRequest, TelegramForbiddenError) as exc:
-        await safe_reply(
-            message,
-            f"Монета: <b>{coin}</b>.\n"
-            "Не угадал, но замутить не получилось. Проверь права бота.\n"
-            f"<code>{escape(str(exc))}</code>",
-        )
-        return
-
-    await safe_reply(
-        message,
-        f"Монета: <b>{coin}</b>.\n{escape(name)} не угадал. Мут на <b>30</b> мин.",
-    )
-
-
 @router.message(F.text.regexp(re.compile(r"^roll\s+mute$", re.IGNORECASE)))
 async def roll_mute(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
@@ -7917,7 +7862,7 @@ async def roll_mute(message: Message) -> None:
     if protected:
         await safe_reply(
             message,
-            f"Roll mute выбрал {escape(name)}, но сработала <b>Защита от сглаза</b>. Мут отменен.",
+            f"У пользователя {escape(name)} сработала <b>Защита от сглаза</b>. Roll mute отменен.",
         )
         return
 

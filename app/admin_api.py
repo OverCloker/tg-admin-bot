@@ -18,7 +18,7 @@ from contextvars import ContextVar
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timedelta, timezone
 from html import escape, unescape
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qsl, quote, urlparse
 from typing import Annotated, Any
 
 from aiogram import Bot
@@ -3119,6 +3119,8 @@ def access_session(token: str) -> dict[str, Any] | None:
 
 
 def api_audit_action(method: str, path: str) -> str:
+    if path == "/miniapp/mine/dig":
+        return "Ручная раскопка завершена"
     if "/triggers" in path:
         return "Удалил триггер" if method == "DELETE" else "Добавил или изменил триггер"
     if "/replies" in path:
@@ -3146,6 +3148,22 @@ def api_audit_action(method: str, path: str) -> str:
         if fragment in path:
             return label
     return f"{method} в панели"
+
+
+def miniapp_actor_from_request(request: Request) -> tuple[int | None, str | None] | None:
+    init_data = request.headers.get("x-telegram-init-data", "").strip()
+    if not init_data:
+        return None
+    try:
+        values = dict(parse_qsl(init_data, keep_blank_values=True))
+        tg_user = json.loads(values.get("user", "{}"))
+        user_id = int(tg_user["id"])
+        username = str(tg_user.get("username") or "").strip()
+        if username:
+            return user_id, f"@{username}"
+        return user_id, f"ID {user_id}"
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
 
 
 @app.middleware("http")
@@ -3176,16 +3194,25 @@ async def audit_api_request(request: Request, call_next):
         return response
     authorization = request.headers.get("authorization", "")
     token = authorization.removeprefix("Bearer ").strip() if authorization.startswith("Bearer ") else ""
+    miniapp_actor = miniapp_actor_from_request(request)
     actor_id = None
-    actor_name = "ключ приложения"
-    if token and secrets.compare_digest(token, admin_api_key()):
+    actor_name = "ID неизвестен"
+    audit_details = request.url.path
+    if miniapp_actor:
+        actor_id, actor_name = miniapp_actor
+    elif token and secrets.compare_digest(token, admin_api_key()):
         actor_id = admin_actor_id()
-        actor_name = "владелец"
+        actor_name = f"ID {actor_id}" if actor_id is not None else "ID неизвестен"
     else:
         session = access_session(token)
         if session:
             actor_id = int(session["userId"])
-            actor_name = str(session.get("label", "ключ приложения"))
+            actor_name = f"ID {actor_id}"
+            label = str(session.get("label", "")).strip()
+            if label:
+                audit_details = f"{request.url.path} · ключ: {label}"
+    if request.url.path == "/miniapp/mine/dig" and response.headers.get("X-Miniapp-Dig-Finished") != "1":
+        return response
     action = api_audit_action(request.method, request.url.path)
     chat_title = None
     try:
@@ -3198,13 +3225,13 @@ async def audit_api_request(request: Request, call_next):
                 chat_id=chat_id,
                 actor_id=actor_id,
                 actor_name=actor_name,
-                details=request.url.path,
+                details=audit_details,
             )
     except Exception:
         logging.exception("Could not save API audit action")
     is_chat_send = re.fullmatch(r"/admin/chats/-?\d+/(message|media)", request.url.path) is not None
     if not is_chat_send:
-        await notify_staff_api_audit(actor_name, action, chat_title, request.url.path)
+        await notify_staff_api_audit(actor_name, action, chat_title, audit_details)
     return response
 
 
