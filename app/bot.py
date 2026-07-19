@@ -1164,7 +1164,7 @@ def dig_weekly_rank_top_text() -> str:
     rank_names = {1: "Проходчик", 2: "Бригадир", 3: "Шахтерный барон", 4: "Хозяин глубин"}
     lines = [f"<b>Недельный топ рангов</b>\nНеделя с {dig_week_start()}"]
     for index, row in enumerate(rows, start=1):
-        user = profile_link(int(row["user_id"]), row["username"], row["full_name"])
+        user = escape(dig_player_name(row["username"], row["full_name"]))
         lines.append(f"{index}. {user} — <b>{row['depth']} м</b> · {rank_names[int(row['rank_level'])]}")
     return "\n".join(lines)
 

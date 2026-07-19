@@ -34,6 +34,10 @@ class ShopPurchase(BaseModel):
     item_key: str = Field(min_length=1, max_length=64)
 
 
+class ShiftContractPick(BaseModel):
+    contract_key: str = Field(min_length=1, max_length=64)
+
+
 def _ticket_public(db: Database, user_id: int) -> dict[str, Any] | None:
     game = db.get_gold_ticket_game(user_id)
     if not game:
@@ -65,6 +69,40 @@ def _db() -> Database:
     from . import bot as game
     game.db = db
     return db
+
+
+def _rank_shift_public(user_id: int, game: Any, items: dict[str, int]) -> dict[str, Any]:
+    rank_name = game.dig_rank_name(items)
+    if rank_name == "Новичок":
+        return {
+            "available": False,
+            "reason": "Сменное задание открывается после покупки ранга.",
+            "options": [],
+            "selected": None,
+        }
+    selected = game.dig_rank_shift_contract(user_id)
+    options = [
+        {"key": key, "name": name, "target": target, "reward": reward}
+        for key, (name, _, target, reward) in game.DIG_RANK_SHIFT_CONTRACTS.items()
+    ]
+    selected_public = None
+    if selected:
+        key = selected["contract_key"]
+        name, _, target, reward = game.DIG_RANK_SHIFT_CONTRACTS[key]
+        selected_public = {
+            "key": key,
+            "name": name,
+            "target": int(target),
+            "reward": int(reward),
+            "progress": int(selected["progress"]),
+            "claimed": bool(selected["claimed"]),
+        }
+    return {
+        "available": True,
+        "rank": rank_name,
+        "options": options if not selected_public else [],
+        "selected": selected_public,
+    }
 
 
 def _telegram_user(init_data: str | None) -> dict[str, Any]:
@@ -113,6 +151,7 @@ def _state(db: Database, user_id: int) -> dict[str, Any]:
             "cooldownUntil": cooldown,
             "items": items,
             "rank": {"key": rank_key, "name": game.dig_rank_name(items), "level": rank_level},
+            "rankShift": _rank_shift_public(user_id, game, items),
             "goldenTickets": db.get_dig_item_quantity(0, user_id, "golden_ticket"),
             "ticketGame": _ticket_public(db, user_id),
             "superPasses": db.get_dig_item_quantity(0, user_id, "super_game_pass"),
@@ -630,6 +669,27 @@ def miniapp_shop_use(
                 "state": _state(db, user["id"]),
                 "shop": _shop_catalog(db, user["id"]),
             }
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/mine/shift")
+def miniapp_shift_contract(
+    payload: ShiftContractPick,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    from . import bot as game
+
+    with DIG_LOCK:
+        db = _db()
+        try:
+            if not db.get_dig_player(0, user["id"]):
+                raise HTTPException(400, "Сначала зарегистрируйтесь в шахте.")
+            error = game.select_dig_rank_shift_contract(user["id"], payload.contract_key)
+            if error:
+                raise HTTPException(400, error)
+            return {"ok": True, "state": _state(db, user["id"])}
         finally:
             db.close()
 

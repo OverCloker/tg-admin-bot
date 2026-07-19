@@ -51,14 +51,22 @@ MINI_APP_HTML = r"""<!doctype html>
       background: var(--panel);
     }
     .stat b { display: block; margin-top: 4px; font-size: 20px; overflow-wrap: anywhere; }
-    .rank-card { border-width: 2px; }
+    .rank-card {
+      border-width: 2px;
+      background:
+        linear-gradient(135deg, color-mix(in srgb, var(--rank-color, #678fb2) 22%, transparent), transparent 58%),
+        var(--panel);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--rank-color, #678fb2) 45%, transparent) inset;
+    }
     .rank-card .rank-line { display:flex; align-items:center; gap:10px; font-weight:800; }
-    .rank-card .rank-emblem { font-size:30px; }
-    .rank-card.rank-1 { border-color:#678fb2; }
-    .rank-card.rank-2 { border-color:#62a879; }
-    .rank-card.rank-3 { border-color:#ce9b49; }
-    .rank-card.rank-4 { border-color:#bc6f88; }
-    .rank-badge { display:inline-flex; align-items:center; gap:7px; margin-top:10px; padding:6px 9px; border:1px solid var(--line); border-radius:8px; font-size:13px; font-weight:800; }
+    .rank-card .rank-emblem { display:grid; place-items:center; width:42px; height:42px; border-radius:8px; background: color-mix(in srgb, var(--rank-color, #678fb2) 28%, #07111c); font-size:26px; }
+    .rank-card.rank-1, .rank-badge.rank-1 { --rank-color:#678fb2; border-color:#678fb2; }
+    .rank-card.rank-2, .rank-badge.rank-2 { --rank-color:#62a879; border-color:#62a879; }
+    .rank-card.rank-3, .rank-badge.rank-3 { --rank-color:#ce9b49; border-color:#ce9b49; }
+    .rank-card.rank-4, .rank-badge.rank-4 { --rank-color:#bc6f88; border-color:#bc6f88; }
+    .rank-badge { display:inline-flex; align-items:center; gap:7px; margin-top:10px; padding:7px 10px; border:1px solid var(--line); border-radius:8px; background: color-mix(in srgb, var(--rank-color, #678fb2) 18%, var(--panel)); font-size:13px; font-weight:800; }
+    .shift-card .shift-options { display:grid; gap:8px; margin-top:10px; }
+    .shift-card .shift-options .btn { margin-top:0; min-height:44px; }
     .btn {
       width: 100%;
       min-height: 50px;
@@ -746,6 +754,52 @@ MINI_APP_HTML = r"""<!doctype html>
       !state.inSession;
   }
 
+  function rankEmblem(level) {
+    return ["", "⛏️", "🛠️", "👑", "🏔️"][Number(level) || 0] || "⛏️";
+  }
+
+  function rankCosmeticHtml(compact = false) {
+    const rank = state && state.rank ? state.rank : {};
+    if (!rank.level) return "";
+    const discount = rank.level * 5;
+    const text = compact
+      ? `Рамка, эмблема и значок сумки активны. Скидка ${discount}%.`
+      : `Косметика активна: эмблема ранга, цветная рамка карточки и уникальный значок в сумке. Скидка ${discount}% на припасы и особое снаряжение.`;
+    return `<section class="panel rank-card rank-${rank.level}">
+      <div class="rank-line"><span class="rank-emblem">${rankEmblem(rank.level)}</span><span>${escapeHtml(rank.name)}</span></div>
+      <div class="muted" style="margin-top:7px">${escapeHtml(text)}</div>
+    </section>`;
+  }
+
+  function shiftContractHtml() {
+    const shift = state && state.rankShift ? state.rankShift : null;
+    if (!shift) return "";
+    if (!shift.available) {
+      return `<section class="panel shift-card">
+        <h2>Сменное задание</h2>
+        <p class="muted">${escapeHtml(shift.reason || "Открывается после покупки ранга.")}</p>
+      </section>`;
+    }
+    if (shift.selected) {
+      const selected = shift.selected;
+      const status = selected.claimed ? "выполнено" : `${selected.progress}/${selected.target}`;
+      return `<section class="panel shift-card">
+        <div class="section-title"><h2>Сменное задание</h2><span class="counter">${escapeHtml(shift.rank || "")}</span></div>
+        <p><b>${escapeHtml(selected.name)}</b></p>
+        <p class="muted">Прогресс: <b>${escapeHtml(status)}</b> · награда: <b>${selected.reward}</b> котоинов.</p>
+      </section>`;
+    }
+    const options = (shift.options || []).map(item => `
+      <button class="btn secondary" onclick="selectShiftContract('${item.key}')">
+        ${escapeHtml(item.name)} · +${item.reward} 🪙
+      </button>`).join("");
+    return `<section class="panel shift-card">
+      <div class="section-title"><h2>Сменное задание</h2><span class="counter">${escapeHtml(shift.rank || "")}</span></div>
+      <p class="muted">Выбери одну цель на сегодня.</p>
+      <div class="shift-options">${options}</div>
+    </section>`;
+  }
+
   function mineHtml() {
     if (!state.registered) {
       return `<section class="panel">
@@ -759,16 +813,14 @@ MINI_APP_HTML = r"""<!doctype html>
     const cooldown = disabled
       ? `Копать снова можно: ${new Date(state.cooldownUntil).toLocaleString()}`
       : "Одно нажатие проверяет один следующий метр.";
-    const rank = state.rank || {};
-    const emblems = ["", "⛏️", "🛠️", "👑", "🏔️"];
-    const rankCard = rank.level ? `<section class="panel rank-card rank-${rank.level}"><div class="rank-line"><span class="rank-emblem">${emblems[rank.level]}</span><span>${escapeHtml(rank.name)}</span></div><div class="muted" style="margin-top:7px">Ранг даёт скидку ${rank.level * 5}% на припасы и особое снаряжение.</div></section>` : "";
     return `
       <div class="stats">
         <div class="stat">🪙<b id="mineCoins">${state.coins}</b></div>
         <div class="stat">🍀<b>${state.luck}/100</b></div>
         <div class="stat">🏆<b>${state.record} м</b></div>
       </div>
-      ${rankCard}
+      ${rankCosmeticHtml(false)}
+      ${shiftContractHtml()}
       <section class="panel">
         <div class="muted">Текущая вылазка</div>
         <div class="depth">${depth}/10 м</div>
@@ -869,6 +921,23 @@ MINI_APP_HTML = r"""<!doctype html>
       renderMine();
     } catch (error) {
       showError(error);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function selectShiftContract(contractKey) {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/mine/shift", {
+        method: "POST", body: JSON.stringify({ contract_key: contractKey })
+      });
+      state = result.state;
+      renderMine();
+      showNotice("Сменное задание выбрано.");
+    } catch (error) {
+      alert(error.message);
     } finally {
       busy = false;
     }
@@ -1051,7 +1120,8 @@ MINI_APP_HTML = r"""<!doctype html>
           <h2>Снаряжение</h2>
           <div class="bag-balance">🪙 ${state.coins}</div>
         </div>
-        ${state.rank && state.rank.level ? `<div class="rank-badge">${["", "⛏️", "🛠️", "👑", "🏔️"][state.rank.level]} ${escapeHtml(state.rank.name)} · скидка ${state.rank.level * 5}%</div>` : ""}
+        ${state.rank && state.rank.level ? `<div class="rank-badge rank-${state.rank.level}">${rankEmblem(state.rank.level)} Значок сумки: ${escapeHtml(state.rank.name)} · скидка ${state.rank.level * 5}%</div>` : ""}
+        ${rankCosmeticHtml(true)}
         <div class="bag-actions">
           <button class="btn" onclick="showShop()">Открыть магазин</button>
           <button class="btn secondary" onclick="renderMine()">Вернуться в шахту</button>
