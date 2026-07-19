@@ -90,6 +90,16 @@ def _rank_name(items: dict[str, int]) -> str:
     return "Новичок"
 
 
+def _rank_luck_regen_bonus(items: dict[str, int]) -> int:
+    if items.get("rank_4", 0) > 0:
+        return 3
+    if items.get("rank_3", 0) > 0:
+        return 2
+    if items.get("rank_2", 0) > 0:
+        return 1
+    return 0
+
+
 def _format_dt(value: str | None) -> str | None:
     if not value:
         return None
@@ -129,7 +139,8 @@ def build_user_profile(
         luck = int(player.luck)
         try:
             hours = max(0.0, (now - datetime.fromisoformat(player.last_luck_at)).total_seconds() / 3600)
-            luck = min(100, luck + int(hours * 7))
+            regen_multiplier = float(premium.get_mine_bonuses(user_id)["luck_regen_multiplier"])
+            luck = min(100, luck + int(hours * (7 + _rank_luck_regen_bonus(items)) * regen_multiplier))
         except ValueError:
             pass
 

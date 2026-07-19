@@ -194,6 +194,7 @@ def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) 
     backpack_bonus = game.dig_backpack_bonus(items)
     helmet_reduction = game.dig_helmet_reduction(items)
     artifact_equipment_bonus = game.dig_flashlight_artifact_bonus(items)
+    rank_bonuses = game.dig_rank_bonuses(items)
     collection_bonus = items.get("artifact_set_reward", 0) > 0
     effective_luck = 100 if forced_luck else min(100, luck + (5 if helmet else 0))
 
@@ -227,6 +228,8 @@ def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) 
         effects.append(f"Каска: риск обвала -{helmet_reduction}%")
     if artifact_equipment_bonus:
         effects.append(f"Фонарь: +{artifact_equipment_bonus}% к артефактам")
+    if rank_bonuses["chance"]:
+        effects.append(f"Ранг: +{rank_bonuses['chance']}% к шансам метров")
 
     data = {
         "routeName": route_name,
@@ -252,6 +255,8 @@ def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) 
         "helmetReduction": helmet_reduction,
         "artifactBonus": artifact_equipment_bonus,
         "collectionBonus": collection_bonus,
+        "rankCoins": rank_bonuses["coins"],
+        "rankChance": rank_bonuses["chance"],
     }
     text = now.isoformat(timespec="seconds")
     db.set_dig_luck(0, uid, data["luckAfter"], text)
@@ -362,6 +367,10 @@ def _finish_manual(db: Database, game: Any, user: dict[str, Any], session: dict[
         else:
             db.add_dig_item(0, uid, "dynamite", 1)
             effects.append("Таинственный сундук: найден динамит")
+
+    if data.get("rankCoins"):
+        coins = (coins * (100 + int(data["rankCoins"])) + 99) // 100
+        effects.append(f"Ранг: +{int(data['rankCoins'])}% котоинов")
 
     if data.get("repair"):
         restored = (
@@ -698,12 +707,13 @@ def super_game_start(x_telegram_init_data: str | None = Header(default=None, ali
                 raise HTTPException(400, "Нужно 3 золотых билета или доступ к супер-игре за 10 ⭐.")
 
             cells: list[int | str] = [0] * 81
-            positions = secrets.SystemRandom().sample(range(81), 16)
+            positions = secrets.SystemRandom().sample(range(81), 18)
             for cell, prize in zip(positions[:10], (50, 75, 100, 125, 150, 175, 200, 225, 250, 250)):
                 cells[cell] = prize
             for cell in positions[10:15]:
                 cells[cell] = 5
-            cells[positions[15]] = secrets.choice(("super:mute30", "super:tag", "super:coins500"))
+            for cell, reward in zip(positions[15:18], ("super:mute30", "super:tag", "super:coins500")):
+                cells[cell] = reward
             now = datetime.now(timezone.utc).isoformat(timespec="seconds")
             db.save_super_ticket_game(user["id"], json.dumps(cells), "[]", 10, now)
             return {"ok": True, "source": source, "game": _super_ticket_public(db, user["id"]), "state": _state(db, user["id"])}
@@ -718,7 +728,7 @@ async def super_game_invoice(x_telegram_init_data: str | None = Header(default=N
     try:
         link = await bot.create_invoice_link(
             title="Супер-игра 9×9",
-            description="10 попыток, 10 денежных призов и один сундук с особой наградой.",
+            description="10 попыток, 10 денежных призов, 5 призов по 5 котоинов и три сундука с особыми наградами.",
             payload=f"dig_star:super_game:{user['id']}:0:{secrets.token_hex(12)}",
             currency="XTR",
             prices=[LabeledPrice(label="Супер-игра 9×9", amount=10)],
@@ -806,7 +816,8 @@ def miniapp_dig_manual(
                 float(game.DIG_SUCCESS_CHANCES[meter - 1])
                 + float(data["routeChance"])
                 + (10 if data.get("flashlight") else 0)
-                + int(data.get("shovelBonus", 0)),
+                + int(data.get("shovelBonus", 0))
+                + int(data.get("rankChance", 0)),
             )
             success = secrets.randbelow(10000) < int(chance * 100)
             if not success and items.get("drill", 0) > 0 and db.consume_dig_item(0, user["id"], "drill"):

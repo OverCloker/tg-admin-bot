@@ -142,7 +142,7 @@ DEFAULT_AVAILABLE_REACTIONS = [
     for emoji in ["рџ‘Ќ", "рџ‘Ћ", "вќ¤", "рџ”Ґ", "рџҐ°", "рџ‘Џ", "рџЃ", "рџ¤”", "рџ¤Ї", "рџ±", "рџ¤¬", "рџў", "рџЋ‰", "рџ¤©", "рџ¤®", "рџ’©"]
 ]
 DIG_COOLDOWN = timedelta(hours=3)
-DIG_LUCK_COST = 33
+DIG_LUCK_COST = 35
 DIG_LUCK_REGEN_PER_HOUR = 7
 DIG_STAR_LUCK_PRICE = 3
 DIG_STAR_COOLDOWN_PRICE = 1
@@ -155,7 +155,7 @@ DIG_STAR_ACTIONS = {
     "lucky_digs5": ("Копать 5 раз со 100 удачей", "Пять дополнительных раскопок без ожидания. В каждой действует 100 удачи.", 15, "star_lucky_dig", 5),
     "depth10": ("Прокопать 10 м", "Следующая раскопка гарантированно пройдет все 10 метров без ожидания.", 50, "star_depth_10", 1),
     "golden_ticket": ("Золотой билет", "Одна игра 3×3 с тремя призами: 10, 25 и 50 котоинов.", 2, "golden_ticket", 1),
-    "super_game": ("Супер-игра 9×9", "Одна супер-игра: 10 попыток, 10 денежных призов и один сундук с особой наградой.", 10, "super_game_pass", 1),
+    "super_game": ("Супер-игра 9×9", "Одна супер-игра: 10 попыток, 10 денежных призов, 5 призов по 5 котоинов и три сундука с особыми наградами.", 10, "super_game_pass", 1),
 }
 DIG_SUCCESS_CHANCES = [90.0, 88.89, 87.5, 85.71, 83.33, 82.0, 75.61, 67.74, 52.38, 9.09]
 DIG_REWARDS = {
@@ -187,7 +187,7 @@ DIG_CONTRACT_REWARD_COINS = 60
 DIG_CONTRACT_REWARD_XP = 40
 DIG_EXPEDITION_TARGET = 50
 DIG_EXPEDITION_REWARD = 75
-DIG_GOLDEN_TICKET_MAX_CHANCE = 6
+DIG_GOLDEN_TICKET_MAX_CHANCE = 50
 DIG_SHOP_ITEMS = {
     "helmet": ("Каска шахтера", 40, "Старый расходник: +5 удачи на следующую раскопку."),
     "shovel": ("Крепкая лопата", 70, "Старый расходник: снижает шанс обвала на 50% в следующей раскопке."),
@@ -223,10 +223,10 @@ DIG_SHOP_ITEMS = {
     "cursed_pick": ("Защита от сглаза", 60, "Одноразово защищает от roll mute."),
     "tea": ("Чай перед сменой", 40, "Кладется в сумку и вручную восстанавливает +35 удачи."),
     "safe": ("Сейф", 100, "Один раз защищает от потери глубины при обвале."),
-    "rank_1": ("Ранг: Проходчик", 500, "Постоянный ранг, отображается в сумке и топах."),
-    "rank_2": ("Ранг: Бригадир", 1200, "Следующий постоянный ранг. Требуется Проходчик."),
-    "rank_3": ("Ранг: Шахтерный барон", 2500, "Высокий постоянный ранг. Требуется Бригадир."),
-    "rank_4": ("Ранг: Хозяин глубин", 5000, "Высший постоянный ранг. Требуется Шахтерный барон."),
+    "rank_1": ("Ранг: Проходчик", 500, "Постоянно: +5% котоинов за раскопку."),
+    "rank_2": ("Ранг: Бригадир", 1200, "Постоянно: +10% котоинов и +1 удача/ч. Требуется Проходчик."),
+    "rank_3": ("Ранг: Шахтерный барон", 2500, "Постоянно: +15% котоинов, +1% к шансу метров и +2 удачи/ч. Требуется Бригадир."),
+    "rank_4": ("Ранг: Хозяин глубин", 5000, "Постоянно: +20% котоинов, +2% к шансу метров и +3 удачи/ч. Требуется Шахтерный барон."),
     "star_dig": ("Дополнительная раскопка", 0, "Позволяет копать без ожидания между попытками."),
     "star_lucky_dig": ("Раскопка со 100 удачей", 0, "Позволяет копать без ожидания и защищает от обвала за счет 100 удачи."),
     "star_depth_10": ("Гарантированная раскопка 10 м", 0, "Следующая раскопка гарантированно пройдет 10 метров без ожидания."),
@@ -320,6 +320,12 @@ DIG_RANKS = [
     ("rank_2", "Бригадир"),
     ("rank_1", "Проходчик"),
 ]
+DIG_RANK_BONUSES = {
+    "rank_1": {"coins": 5, "chance": 0, "luck_regen": 0},
+    "rank_2": {"coins": 10, "chance": 0, "luck_regen": 1},
+    "rank_3": {"coins": 15, "chance": 1, "luck_regen": 2},
+    "rank_4": {"coins": 20, "chance": 2, "luck_regen": 3},
+}
 ADMIN_FEATURES = [
     ("addReply", "Добавить @ответ"),
     ("deleteReply", "Удалить @ответ"),
@@ -957,8 +963,10 @@ def refreshed_dig_luck(user_id: int, luck: int, last_luck_at: str, now: datetime
     except ValueError:
         return max(0, min(100, luck))
     elapsed = max(0, (now - last).total_seconds())
+    items = dig_items_map(0, user_id)
     multiplier = float(get_premium_service().get_mine_bonuses(user_id)["luck_regen_multiplier"])
-    restored = int((elapsed / 3600) * DIG_LUCK_REGEN_PER_HOUR * multiplier)
+    hourly_regen = DIG_LUCK_REGEN_PER_HOUR + dig_rank_bonuses(items)["luck_regen"]
+    restored = int((elapsed / 3600) * hourly_regen * multiplier)
     return max(0, min(100, luck + restored))
 
 
@@ -995,7 +1003,7 @@ def dig_random_event(depth: int, coins: int) -> tuple[int, str | None]:
 def find_golden_ticket(depth: int) -> bool:
     """The deeper the completed run, the better the chance to find one ticket."""
     depth = max(0, min(10, int(depth)))
-    chance = min(DIG_GOLDEN_TICKET_MAX_CHANCE, 1 + depth // 2)
+    chance = min(DIG_GOLDEN_TICKET_MAX_CHANCE, depth * 5)
     return depth > 0 and secrets.randbelow(100) < chance
 
 
@@ -1082,6 +1090,22 @@ def dig_rank_name(items: dict[str, int]) -> str:
         if items.get(key, 0) > 0:
             return name
     return "Новичок"
+
+
+def dig_rank_bonuses(items: dict[str, int]) -> dict[str, int]:
+    """Returns only the highest owned rank's bonuses; ranks never stack."""
+    for key, _ in DIG_RANKS:
+        if items.get(key, 0) > 0:
+            return DIG_RANK_BONUSES[key].copy()
+    return {"coins": 0, "chance": 0, "luck_regen": 0}
+
+
+def apply_dig_rank_coin_bonus(items: dict[str, int], coins: int, used_effects: list[str]) -> int:
+    bonus = dig_rank_bonuses(items)["coins"]
+    if not bonus:
+        return coins
+    used_effects.append(f"Ранг: +{bonus}% котоинов")
+    return max(1, (coins * (100 + bonus) + 99) // 100)
 
 
 def dig_permanent_shovel_bonus(items: dict[str, int]) -> int:
@@ -1374,6 +1398,7 @@ def run_private_dig(chat_id: int, user: User) -> str:
     cart_bonus = dig_cart_bonus(items)
     backpack_bonus = dig_backpack_bonus(items)
     helmet_reduction = dig_helmet_reduction(items)
+    rank_bonuses = dig_rank_bonuses(items)
     collection_bonus = items.get("artifact_set_reward", 0) > 0
     effective_luck = 100 if forced_luck else min(100, luck_before + (5 if helmet_used else 0))
     if helmet_used:
@@ -1390,6 +1415,8 @@ def run_private_dig(chat_id: int, user: User) -> str:
         used_effects.append(f"Вагонетка: +{cart_bonus}% котоинов")
     if backpack_bonus:
         used_effects.append(f"Рюкзак: +{backpack_bonus}% котоинов")
+    if rank_bonuses["chance"]:
+        used_effects.append(f"Ранг: +{rank_bonuses['chance']}% к шансам метров")
     if compass_used:
         route_chance = round(route_chance * 1.25)
         route_coins *= 1.15
@@ -1401,7 +1428,7 @@ def run_private_dig(chat_id: int, user: User) -> str:
     stopped_by_stone = False
     if not forced_depth:
         for meter, chance in enumerate(DIG_SUCCESS_CHANCES, start=1):
-            actual_chance = min(95.0, chance + route_chance + (10 if flashlight_used else 0) + shovel_bonus)
+            actual_chance = min(95.0, chance + route_chance + (10 if flashlight_used else 0) + shovel_bonus + rank_bonuses["chance"])
             if secrets.randbelow(10000) < int(actual_chance * 100):
                 dug = meter
                 continue
@@ -1470,6 +1497,7 @@ def run_private_dig(chat_id: int, user: User) -> str:
         else:
             db.add_dig_item(chat_id, user.id, "insurance", 1)
             used_effects.append("Таинственный сундук: найдена страховка")
+    coins = apply_dig_rank_coin_bonus(items, coins, used_effects)
     if repair_used:
         restored = "bucket" if bucket_used else "flashlight" if flashlight_used else "helmet" if helmet_used else "shovel" if shovel_used else None
         if restored:
@@ -7444,6 +7472,7 @@ async def dig_command(message: Message) -> None:
     helmet_reduction = dig_helmet_reduction(items)
     artifact_equipment_bonus = dig_flashlight_artifact_bonus(items)
     collection_bonus = items.get("artifact_set_reward", 0) > 0
+    rank_bonuses = dig_rank_bonuses(items)
     effective_luck = 100 if forced_luck else min(100, luck_before + (5 if helmet_used else 0))
     if helmet_used:
         used_effects.append("Каска шахтера: +5 удачи")
@@ -7459,6 +7488,8 @@ async def dig_command(message: Message) -> None:
         used_effects.append(f"Вагонетка: +{cart_bonus}% котоинов")
     if backpack_bonus:
         used_effects.append(f"Рюкзак: +{backpack_bonus}% котоинов")
+    if rank_bonuses["chance"]:
+        used_effects.append(f"Ранг: +{rank_bonuses['chance']}% к шансам метров")
     if helmet_reduction:
         used_effects.append(f"Каска: риск обвала -{helmet_reduction}%")
     if compass_used:
@@ -7476,7 +7507,7 @@ async def dig_command(message: Message) -> None:
     stopped_by_stone = False
     if not forced_depth:
         for meter, chance in enumerate(DIG_SUCCESS_CHANCES, start=1):
-            actual_chance = min(95.0, chance + route_chance + (10 if flashlight_used else 0) + shovel_bonus)
+            actual_chance = min(95.0, chance + route_chance + (10 if flashlight_used else 0) + shovel_bonus + rank_bonuses["chance"])
             if secrets.randbelow(10000) < int(actual_chance * 100):
                 dug = meter
                 continue
@@ -7548,6 +7579,7 @@ async def dig_command(message: Message) -> None:
         else:
             db.add_dig_item(message.chat.id, message.from_user.id, "dynamite", 1)
             used_effects.append("Таинственный сундук: найден динамит")
+    coins = apply_dig_rank_coin_bonus(items, coins, used_effects)
     if repair_used:
         restored = "bucket" if bucket_used else "flashlight" if flashlight_used else "helmet" if helmet_used else "shovel" if shovel_used else None
         if restored:

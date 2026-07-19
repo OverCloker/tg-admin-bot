@@ -802,7 +802,7 @@ MINI_APP_HTML = r"""<!doctype html>
       const canStart = (state.goldenTickets || 0) >= 3 || (state.superPasses || 0) > 0;
       return `<section class="panel">
         <h2>🏆 Супер-игра 9×9</h2>
-        <p class="muted">10 попыток, денежные призы от 50 до 250 котоинов и один сундук с особой наградой.</p>
+        <p class="muted">10 попыток: денежные призы от 50 до 250, пять призов по 5 котоинов и три сундука с особыми наградами.</p>
         <div>Билеты: <b>${state.goldenTickets || 0}/3</b></div>
         <button class="btn" ${canStart ? "" : "disabled"} onclick="startSuperGame()">Играть за 3 билета</button>
         <button class="btn secondary" onclick="buySuperGame()">Купить вход за 10 ⭐</button>
