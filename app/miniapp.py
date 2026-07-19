@@ -147,6 +147,117 @@ def _begin(db: Database, game: Any, user: dict[str, Any], now: datetime) -> None
     db.save_dig_session(uid, 0, luck, route_key, json.dumps(data), json.dumps([]), text)
 
 
+def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) -> None:
+    uid = user["id"]
+    player = db.get_dig_player(0, uid)
+    if not player:
+        raise HTTPException(400, "Сначала зарегистрируйтесь в игре.")
+
+    items = game.dig_items_map(0, uid)
+    star_dig_used, forced_luck, forced_depth = game.consume_star_dig(0, uid, items)
+    camp_used = False
+    if player.last_dig_at and not star_dig_used:
+        last_dig = datetime.fromisoformat(player.last_dig_at)
+        cooldown = game.user_dig_cooldown(uid)
+        next_dig = last_dig + cooldown
+        if now < next_dig and items.get("camp", 0) > 0 and now >= last_dig + cooldown / 2:
+            camp_used = db.consume_dig_item(0, uid, "camp")
+            if camp_used:
+                next_dig = now
+        if now < next_dig:
+            left = max(1, int((next_dig - now).total_seconds()))
+            raise HTTPException(429, f"Лопата отдыхает еще {left // 3600} ч {(left % 3600) // 60} мин.")
+
+    route_key, route = game.dig_route(uid)
+    route_name, route_chance, route_coins, route_artifacts, route_collapse, _ = route
+    luck = game.refreshed_dig_luck(uid, player.luck, player.last_luck_at, now)
+    if luck < game.DIG_LUCK_COST and not forced_luck:
+        raise HTTPException(400, f"Недостаточно удачи: нужно {game.DIG_LUCK_COST}, сейчас {luck}.")
+
+    helmet = not forced_luck and items.get("helmet", 0) > 0 and db.consume_dig_item(0, uid, "helmet")
+    shovel = not forced_luck and items.get("shovel", 0) > 0 and db.consume_dig_item(0, uid, "shovel")
+    flashlight = not forced_depth and items.get("flashlight", 0) > 0 and db.consume_dig_item(0, uid, "flashlight")
+    bucket = items.get("bucket", 0) > 0 and db.consume_dig_item(0, uid, "bucket")
+    compass = items.get("compass", 0) > 0 and db.consume_dig_item(0, uid, "compass")
+    scanner = items.get("scanner", 0) > 0 and db.consume_dig_item(0, uid, "scanner")
+    map_used = items.get("map", 0) > 0 and db.consume_dig_item(0, uid, "map")
+    talisman = items.get("talisman", 0) > 0 and db.consume_dig_item(0, uid, "talisman")
+    repair = items.get("repair_kit", 0) > 0 and db.consume_dig_item(0, uid, "repair_kit")
+    chest = items.get("mystery_chest", 0) > 0 and db.consume_dig_item(0, uid, "mystery_chest")
+
+    if compass:
+        route_chance = round(route_chance * 1.25)
+        route_coins *= 1.15
+
+    shovel_bonus = game.dig_permanent_shovel_bonus(items)
+    cart_bonus = game.dig_cart_bonus(items)
+    backpack_bonus = game.dig_backpack_bonus(items)
+    helmet_reduction = game.dig_helmet_reduction(items)
+    artifact_equipment_bonus = game.dig_flashlight_artifact_bonus(items)
+    collection_bonus = items.get("artifact_set_reward", 0) > 0
+    effective_luck = 100 if forced_luck else min(100, luck + (5 if helmet else 0))
+
+    effects: list[str] = [f"Маршрут: {route_name}"]
+    for used, text in (
+        (camp_used, "Переносной лагерь: ожидание сокращено"),
+        (star_dig_used, "Оплаченная раскопка: ожидание пропущено"),
+        (forced_luck, "Оплаченная раскопка: действует 100 удачи"),
+        (forced_depth, "Оплаченная раскопка: гарантированные 10 м"),
+        (helmet, "Каска шахтера: +5 удачи"),
+        (shovel, "Крепкая лопата: риск обвала снижен"),
+        (flashlight, "Фонарик: +10% к шансу метра"),
+        (bucket, "Премиум ведро: +25% котоинов"),
+        (compass, "Компас: маршрут усилен"),
+        (scanner, "Сканер породы: риск обвала -30%"),
+        (map_used, "Карта тоннелей: +15% к артефактам"),
+        (talisman, "Талисман: котоины будут удвоены"),
+        (repair, "Ремонтный набор активирован"),
+        (chest, "Таинственный сундук активирован"),
+        (collection_bonus, "Коллекция артефактов: +5% котоинов"),
+    ):
+        if used:
+            effects.append(text)
+    if shovel_bonus:
+        effects.append(f"Постоянная лопата: +{shovel_bonus}% к шансам")
+    if cart_bonus:
+        effects.append(f"Вагонетка: +{cart_bonus}% котоинов")
+    if backpack_bonus:
+        effects.append(f"Рюкзак: +{backpack_bonus}% котоинов")
+    if helmet_reduction:
+        effects.append(f"Каска: риск обвала -{helmet_reduction}%")
+    if artifact_equipment_bonus:
+        effects.append(f"Фонарь: +{artifact_equipment_bonus}% к артефактам")
+
+    data = {
+        "routeName": route_name,
+        "routeChance": route_chance,
+        "routeCoins": route_coins,
+        "routeArtifacts": route_artifacts,
+        "routeCollapse": route_collapse,
+        "luckForChance": effective_luck,
+        "luckAfter": luck if forced_luck else luck - game.DIG_LUCK_COST,
+        "helmet": helmet,
+        "shovel": shovel,
+        "flashlight": flashlight,
+        "bucket": bucket,
+        "scanner": scanner,
+        "map": map_used,
+        "talisman": talisman,
+        "repair": repair,
+        "chest": chest,
+        "forcedDepth": forced_depth,
+        "shovelBonus": shovel_bonus,
+        "cartBonus": cart_bonus,
+        "backpackBonus": backpack_bonus,
+        "helmetReduction": helmet_reduction,
+        "artifactBonus": artifact_equipment_bonus,
+        "collectionBonus": collection_bonus,
+    }
+    text = now.isoformat(timespec="seconds")
+    db.set_dig_luck(0, uid, data["luckAfter"], text)
+    db.save_dig_session(uid, 0, luck, route_key, json.dumps(data), json.dumps(effects), text)
+
+
 def _finish(db: Database, game: Any, user: dict[str, Any], session: dict[str, Any], depth: int, now: datetime) -> str:
     uid = user["id"]
     data = json.loads(session["route_data"])
@@ -185,6 +296,116 @@ def _finish(db: Database, game: Any, user: dict[str, Any], session: dict[str, An
         lines.append(artifact)
     if ticket_found:
         lines.append("Золотой билет найден! Откройте его в игре Mini App.")
+    return "\n".join(lines)
+
+
+def _finish_manual(db: Database, game: Any, user: dict[str, Any], session: dict[str, Any], depth: int, now: datetime) -> str:
+    uid = user["id"]
+    data = json.loads(session["route_data"])
+    effects = json.loads(session["used_effects"] or "[]")
+    items = game.dig_items_map(0, uid)
+
+    collapse = max(0, int(max(0, 100 - data["luckForChance"]) * data["routeCollapse"]))
+    collapse = max(0, collapse - int(data.get("helmetReduction", 0)))
+    if data.get("scanner"):
+        collapse = collapse * 70 // 100
+    if data.get("shovel"):
+        collapse //= 2
+
+    lost = 0
+    if depth and collapse and secrets.randbelow(100) < collapse:
+        if db.consume_dig_item(0, uid, "safe"):
+            effects.append("Сейф: обвал остановлен")
+        else:
+            lost = 1 + secrets.randbelow(depth)
+            depth = max(0, depth - lost)
+
+    coins = max(1, int(game.dig_coin_reward(depth) * data["routeCoins"] + 0.9999))
+    if data.get("bucket"):
+        coins = (coins * 125 + 99) // 100
+    if data.get("cartBonus"):
+        coins = (coins * (100 + int(data["cartBonus"])) + 99) // 100
+    if data.get("backpackBonus"):
+        coins = (coins * (100 + int(data["backpackBonus"])) + 99) // 100
+    if data.get("collectionBonus"):
+        coins = (coins * 105 + 99) // 100
+
+    coins_before_event = coins
+    coins, event = game.dig_random_event(depth, coins)
+    if coins < coins_before_event and items.get("medkit", 0) > 0 and db.consume_dig_item(0, uid, "medkit"):
+        coins = coins_before_event
+        effects.append("Аптечка: потеря котоинов отменена")
+
+    artifact_chance_bonus = (
+        max(0, int((data["routeArtifacts"] - 1) * 10))
+        + int(data.get("artifactBonus", 0))
+        + (15 if data.get("map") else 0)
+    )
+    artifact_coins, artifact = game.find_dig_artifact(0, uid, depth, items, artifact_chance_bonus)
+    coins += artifact_coins
+
+    if data.get("talisman"):
+        coins *= 2
+        effects.append("Талисман: котоины удвоены")
+
+    if data.get("chest"):
+        chest_roll = secrets.randbelow(4)
+        if chest_roll == 0:
+            effects.append("Таинственный сундук оказался пуст")
+        elif chest_roll == 1:
+            bonus = 25 + secrets.randbelow(51)
+            coins += bonus
+            effects.append(f"Таинственный сундук: +{bonus} котоинов")
+        elif chest_roll == 2:
+            db.add_dig_item(0, uid, "insurance", 1)
+            effects.append("Таинственный сундук: найдена страховка")
+        else:
+            db.add_dig_item(0, uid, "dynamite", 1)
+            effects.append("Таинственный сундук: найден динамит")
+
+    if data.get("repair"):
+        restored = (
+            "bucket" if data.get("bucket") else
+            "flashlight" if data.get("flashlight") else
+            "helmet" if data.get("helmet") else
+            "shovel" if data.get("shovel") else
+            None
+        )
+        if restored:
+            db.add_dig_item(0, uid, restored, 1)
+            effects.append(f"Ремонтный набор восстановил: {game.DIG_SHOP_ITEMS[restored][0]}")
+        else:
+            db.add_dig_item(0, uid, "repair_kit", 1)
+
+    coins = game.apply_premium_coin_bonus(uid, coins, effects)
+    text = now.isoformat(timespec="seconds")
+    db.update_dig_player_after_dig(0, uid, user.get("username"), user["full_name"], coins, depth, depth, data["luckAfter"], text, text)
+    progress = db.update_dig_progress(uid, 5 + depth * 10, depth > 0, session["route_key"])
+    contract_updates = game.update_dig_contracts(uid, depth, coins, artifact is not None)
+
+    expedition = db.add_dig_expedition_progress(0, uid, now.date().isoformat(), depth, game.DIG_EXPEDITION_TARGET)
+    if expedition["completed"]:
+        db.reward_dig_expedition(0, now.date().isoformat(), game.DIG_EXPEDITION_REWARD)
+        effects.append(f"Экспедиция завершена: +{game.DIG_EXPEDITION_REWARD} котоинов")
+
+    ticket_found = game.find_golden_ticket(depth)
+    if ticket_found:
+        db.add_dig_item(0, uid, "golden_ticket", 1)
+        effects.append("Золотой билет найден")
+
+    db.clear_dig_session(uid)
+    lines = [f"Вылазка завершена: {depth} м", f"+{coins} котоинов", f"Уровень {progress['level']}, XP {progress['xp']}"]
+    if lost:
+        lines.append(f"Обвал забрал {lost} м")
+    if event:
+        lines.append(event)
+    if artifact:
+        lines.append(artifact)
+    lines.extend(contract_updates)
+    if effects:
+        lines.append("")
+        lines.append("Сработало:")
+        lines.extend(f"• {item}" for item in effects)
     return "\n".join(lines)
 
 
@@ -331,6 +552,13 @@ def miniapp_shop_buy(
             purchase_error = game.dig_purchase_error(items, payload.item_key)
             if purchase_error:
                 raise HTTPException(400, purchase_error)
+            if payload.item_key == "tea":
+                if not db.spend_dig_coins(0, user["id"], int(item[1])):
+                    raise HTTPException(400, "РќРµ С…РІР°С‚Р°РµС‚ РєРѕС‚РѕРёРЅРѕРІ.")
+                now = datetime.now(timezone.utc)
+                luck = game.refreshed_dig_luck(user["id"], player.luck, player.last_luck_at, now)
+                db.set_dig_luck(0, user["id"], min(100, luck + 35), now.isoformat(timespec="seconds"))
+                return {"ok": True, "item": payload.item_key, "state": _state(db, user["id"]), "shop": _shop_catalog(db, user["id"])}
             status = db.purchase_dig_item(
                 0,
                 user["id"],
@@ -442,10 +670,12 @@ def super_game_start(x_telegram_init_data: str | None = Header(default=None, ali
                 raise HTTPException(400, "Нужно 3 золотых билета или доступ к супер-игре за 10 ⭐.")
 
             cells: list[int | str] = [0] * 81
-            positions = secrets.SystemRandom().sample(range(81), 11)
+            positions = secrets.SystemRandom().sample(range(81), 16)
             for cell, prize in zip(positions[:10], (50, 75, 100, 125, 150, 175, 200, 225, 250, 250)):
                 cells[cell] = prize
-            cells[positions[10]] = secrets.choice(("super:mute30", "super:tag", "super:coins500"))
+            for cell in positions[10:15]:
+                cells[cell] = 5
+            cells[positions[15]] = secrets.choice(("super:mute30", "super:tag", "super:coins500"))
             now = datetime.now(timezone.utc).isoformat(timespec="seconds")
             db.save_super_ticket_game(user["id"], json.dumps(cells), "[]", 10, now)
             return {"ok": True, "source": source, "game": _super_ticket_public(db, user["id"]), "state": _state(db, user["id"])}
@@ -513,6 +743,72 @@ def super_game_pick(
             return {"ok": True, "cell": payload.cell, "coins": reward if isinstance(reward, int) else 0,
                     "reward": reward_key, "attemptsLeft": attempts_left, "game": next_game,
                     "state": _state(db, user["id"])}
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/mine/dig")
+def miniapp_dig_manual(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    with DIG_LOCK:
+        db = _db()
+        try:
+            from . import bot as game
+
+            now = datetime.now(timezone.utc)
+            session = db.get_dig_session(user["id"])
+            if not session:
+                _begin_manual(db, game, user, now)
+                session = db.get_dig_session(user["id"])
+
+            meter = int(session["depth"]) + 1
+            data = json.loads(session["route_data"])
+            effects = json.loads(session["used_effects"] or "[]")
+            if data.get("forcedDepth"):
+                message = _finish_manual(db, game, user, session, 10, now)
+                return {"ok": True, "finished": True, "meter": 10, "chance": 100, "message": message, "state": _state(db, user["id"])}
+
+            items = game.dig_items_map(0, user["id"])
+            chance = min(
+                95.0,
+                float(game.DIG_SUCCESS_CHANCES[meter - 1])
+                + float(data["routeChance"])
+                + (10 if data.get("flashlight") else 0)
+                + int(data.get("shovelBonus", 0)),
+            )
+            success = secrets.randbelow(10000) < int(chance * 100)
+            if not success and items.get("drill", 0) > 0 and db.consume_dig_item(0, user["id"], "drill"):
+                success = True
+                effects.append(f"Бур: пробит {meter}-й метр")
+            if not success and items.get("dynamite", 0) > 0 and db.consume_dig_item(0, user["id"], "dynamite"):
+                success = True
+                effects.append(f"Динамит: пробит {meter}-й метр")
+
+            if success and meter < 10:
+                db.save_dig_session(
+                    user["id"], meter, int(session["luck_before"]), session["route_key"],
+                    session["route_data"], json.dumps(effects), session["started_at"],
+                )
+                return {
+                    "ok": True,
+                    "finished": False,
+                    "meter": meter,
+                    "chance": chance,
+                    "message": f"Метр {meter} пройден. Копайте дальше.",
+                    "state": _state(db, user["id"]),
+                }
+
+            depth = meter if success else meter - 1
+            if not success and depth == 0 and items.get("insurance", 0) > 0 and db.consume_dig_item(0, user["id"], "insurance"):
+                depth = 1
+                effects.append("Страховка: первый метр засчитан")
+            db.save_dig_session(
+                user["id"], int(session["depth"]), int(session["luck_before"]), session["route_key"],
+                session["route_data"], json.dumps(effects), session["started_at"],
+            )
+            session = db.get_dig_session(user["id"])
+            message = _finish_manual(db, game, user, session, max(0, depth), now)
+            return {"ok": True, "finished": True, "meter": max(0, depth), "chance": chance, "message": message, "state": _state(db, user["id"])}
         finally:
             db.close()
 
