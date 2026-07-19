@@ -1,0 +1,75 @@
+from app.db import Database
+from app.premium import PremiumService
+from app.user_profile import build_user_profile, profile_chat_text
+
+
+def make_social_db(tmp_path):
+    db_path = tmp_path / "social.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-1001, "Тестовая группа", "supergroup", None)
+    db.upsert_seen_user(-1001, 1, "first", "Первый", False)
+    db.upsert_seen_user(-1001, 2, None, "Второй без username", False)
+    db.upsert_seen_user(-1001, 3, "third", "Третий", False)
+    return db, db_path
+
+
+def test_friend_request_requires_acceptance_and_does_not_duplicate(tmp_path):
+    db, _ = make_social_db(tmp_path)
+    try:
+        assert db.friendship_state(-1001, 1, 2) == "none"
+        assert db.create_friend_request(-1001, 1, 2) == "created"
+        assert db.create_friend_request(-1001, 1, 2) == "outgoing"
+        assert db.friendship_state(-1001, 2, 1) == "incoming"
+        assert db.accept_friend_request(-1001, 1, 2)
+        assert db.friendship_state(-1001, 1, 2) == "friends"
+        assert db.count_chat_friends(-1001, 1) == 1
+        assert db.list_chat_friends(-1001, 1)[0].full_name == "Второй без username"
+        assert not db.accept_friend_request(-1001, 1, 2)
+    finally:
+        db.close()
+
+
+def test_couple_is_unique_per_chat_and_also_creates_friendship(tmp_path):
+    db, _ = make_social_db(tmp_path)
+    try:
+        assert db.create_couple_request(-1001, 1, 2) == "created"
+        assert db.accept_couple_request(-1001, 1, 2) == "accepted"
+        assert db.couple_state(-1001, 1, 2) == "couple"
+        assert db.friendship_state(-1001, 1, 2) == "friends"
+        assert db.create_couple_request(-1001, 1, 3) == "user_busy"
+        assert db.create_couple_request(-1001, 3, 2) == "target_busy"
+        assert db.get_chat_partner(-1001, 1).user_id == 2
+        assert db.end_chat_couple(-1001, 1, 2)
+        assert db.get_chat_partner(-1001, 1) is None
+        assert db.friendship_state(-1001, 1, 2) == "friends"
+    finally:
+        db.close()
+
+
+def test_chat_profile_contains_social_summary(tmp_path):
+    db, db_path = make_social_db(tmp_path)
+    premium = PremiumService(str(db_path))
+    try:
+        assert db.create_friend_request(-1001, 1, 2) == "created"
+        assert db.accept_friend_request(-1001, 1, 2)
+        assert db.create_couple_request(-1001, 1, 2) == "created"
+        assert db.accept_couple_request(-1001, 1, 2) == "accepted"
+
+        profile = build_user_profile(
+            db,
+            premium,
+            1,
+            "first",
+            "Первый",
+            chat_id=-1001,
+        )
+        text = profile_chat_text(profile, short=False)
+        assert profile["social"]["friendsCount"] == 1
+        assert profile["social"]["partner"]["fullName"] == "Второй без username"
+        assert "Отношения в этом чате" in text
+        assert "Второй без username" in text
+        assert "Друзей: <b>1</b>" in text
+    finally:
+        premium.close()
+        db.close()

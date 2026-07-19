@@ -86,6 +86,9 @@ from .keyboards import (
     quotes_menu,
     quiet_menu,
     restart_confirm_menu,
+    social_couple_end_menu,
+    social_profile_menu,
+    social_request_menu,
     stars_menu,
     topic_select_menu,
     trigger_list_menu,
@@ -3337,6 +3340,40 @@ def telegram_user_profile_text(
     return profile_chat_text(profile, short=short)
 
 
+def social_profile_markup(chat_id: int, viewer_id: int, target_id: int) -> InlineKeyboardMarkup:
+    return social_profile_menu(
+        chat_id,
+        viewer_id,
+        target_id,
+        db.friendship_state(chat_id, viewer_id, target_id),
+        db.couple_state(chat_id, viewer_id, target_id),
+    )
+
+
+async def active_social_user(bot: Bot, chat_id: int, user_id: int) -> User | None:
+    member = await get_active_chat_member(bot, chat_id, user_id)
+    if member is None or is_deleted_or_empty_user(member.user):
+        return None
+    db.upsert_seen_user(
+        chat_id,
+        member.user.id,
+        member.user.username,
+        member.user.full_name,
+        member.user.is_bot,
+    )
+    return member.user
+
+
+def social_callback_ids(callback: CallbackQuery) -> tuple[str, int, int, int] | None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 5 or parts[0] != "soc":
+        return None
+    try:
+        return parts[1], int(parts[2]), int(parts[3]), int(parts[4])
+    except ValueError:
+        return None
+
+
 @router.callback_query(F.data.startswith("app_login:"))
 async def confirm_app_login(callback: CallbackQuery) -> None:
     if not callback.from_user or not callback.data:
@@ -3473,6 +3510,211 @@ async def cb_profile_chat(callback: CallbackQuery) -> None:
     )
     await safe_edit(callback, text, reply_markup=user_menu(chat_id))
     await callback.answer()
+
+
+@router.callback_query(F.data == "soc:noop")
+async def cb_social_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("soc:fl:"))
+async def cb_social_friend_list(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела.", show_alert=True)
+        return
+    try:
+        chat_id, owner_id = int(parts[2]), int(parts[3])
+    except ValueError:
+        await callback.answer("Кнопка устарела.", show_alert=True)
+        return
+    if callback.from_user.id != owner_id:
+        await callback.answer("Это список другого пользователя.", show_alert=True)
+        return
+    if not callback.message or callback.message.chat.id != chat_id:
+        await callback.answer("Открой профиль заново в нужной группе.", show_alert=True)
+        return
+
+    active_friends: list[User] = []
+    for friend in db.list_chat_friends(chat_id, owner_id, limit=50):
+        user = await active_social_user(callback.bot, chat_id, friend.user_id)
+        if user:
+            active_friends.append(user)
+    if not active_friends:
+        text = "В этой группе список друзей пока пуст."
+    else:
+        lines = ["<b>Друзья в этой группе</b>"]
+        lines.extend(f"{index}. {escape(user.full_name)}" for index, user in enumerate(active_friends, start=1))
+        text = "\n".join(lines)
+    await temporary_reply(callback.message, text, disable_web_page_preview=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(re.compile(r"^soc:(?:fq|fr|fa|fd|pq|pa|pd|pe|px):")))
+async def cb_social_action(callback: CallbackQuery) -> None:
+    parsed = social_callback_ids(callback)
+    if not parsed or not callback.message:
+        await callback.answer("Кнопка устарела.", show_alert=True)
+        return
+    action, chat_id, requester_id, target_id = parsed
+    if callback.message.chat.id != chat_id:
+        await callback.answer("Эта кнопка относится к другой группе.", show_alert=True)
+        return
+
+    recipient_actions = {"fa", "fd", "pa", "pd"}
+    expected_user_id = target_id if action in recipient_actions else requester_id
+    if callback.from_user.id != expected_user_id:
+        await callback.answer(
+            "Подтвердить эту заявку может только её получатель."
+            if action in recipient_actions
+            else "Эта кнопка принадлежит другому пользователю.",
+            show_alert=True,
+        )
+        return
+
+    requester = await active_social_user(callback.bot, chat_id, requester_id)
+    target = await active_social_user(callback.bot, chat_id, target_id)
+    if requester is None or target is None:
+        await callback.answer("Один из участников больше не состоит в этой группе.", show_alert=True)
+        return
+    requester_link = profile_link(requester.id, requester.username, requester.full_name)
+    target_link = profile_link(target.id, target.username, target.full_name)
+
+    if action == "fq":
+        state = db.create_friend_request(chat_id, requester_id, target_id)
+        if state != "created":
+            messages = {
+                "friends": "Вы уже друзья.",
+                "outgoing": "Заявка уже отправлена.",
+                "incoming": "У тебя уже есть входящая заявка от этого пользователя.",
+                "self": "Нельзя добавить себя в друзья.",
+            }
+            await callback.answer(messages.get(state, "Не получилось создать заявку."), show_alert=True)
+            return
+        await callback.message.answer(
+            f"{target_link}, {requester_link} предлагает дружить.",
+            reply_markup=social_request_menu("friend", chat_id, requester_id, target_id),
+            disable_web_page_preview=True,
+        )
+        await callback.answer("Заявка отправлена.")
+        return
+
+    if action == "fa":
+        accepted = db.accept_friend_request(chat_id, requester_id, target_id)
+        if not accepted:
+            await callback.answer("Заявка уже обработана или устарела.", show_alert=True)
+            return
+        await safe_edit(
+            callback,
+            f"{requester_link} и {target_link} теперь друзья.",
+            reply_markup=None,
+            disable_web_page_preview=True,
+        )
+        await callback.answer("Дружба подтверждена.")
+        return
+
+    if action == "fd":
+        declined = db.decline_friend_request(chat_id, requester_id, target_id)
+        await safe_edit(
+            callback,
+            "Заявка в друзья отклонена." if declined else "Эта заявка уже не действует.",
+            reply_markup=None,
+        )
+        await callback.answer()
+        return
+
+    if action == "fr":
+        if db.couple_state(chat_id, requester_id, target_id) == "couple":
+            await callback.answer("Сначала нужно расстаться, затем можно удалить дружбу.", show_alert=True)
+            return
+        removed = db.remove_friendship(chat_id, requester_id, target_id)
+        text = telegram_user_profile_text(
+            target.id,
+            target.username,
+            target.full_name,
+            chat_id=chat_id,
+            short=True,
+        )
+        await safe_edit(
+            callback,
+            text,
+            reply_markup=social_profile_markup(chat_id, requester_id, target_id),
+            disable_web_page_preview=True,
+        )
+        await callback.answer("Удалено из друзей." if removed else "Вы уже не друзья.", show_alert=not removed)
+        return
+
+    if action == "pq":
+        state = db.create_couple_request(chat_id, requester_id, target_id)
+        if state != "created":
+            messages = {
+                "couple": "Вы уже пара.",
+                "user_busy": "У тебя уже есть пара в этой группе.",
+                "target_busy": "У этого пользователя уже есть пара в этой группе.",
+                "outgoing": "Предложение уже отправлено.",
+                "incoming": "У тебя уже есть входящее предложение от этого пользователя.",
+                "self": "Нельзя предложить отношения самому себе.",
+            }
+            await callback.answer(messages.get(state, "Не получилось отправить предложение."), show_alert=True)
+            return
+        await callback.message.answer(
+            f"{target_link}, {requester_link} предлагает стать парой.",
+            reply_markup=social_request_menu("couple", chat_id, requester_id, target_id),
+            disable_web_page_preview=True,
+        )
+        await callback.answer("Предложение отправлено.")
+        return
+
+    if action == "pa":
+        result = db.accept_couple_request(chat_id, requester_id, target_id)
+        if result != "accepted":
+            await callback.answer(
+                "Предложение устарело." if result == "missing" else "У одного из участников уже есть пара.",
+                show_alert=True,
+            )
+            return
+        await safe_edit(
+            callback,
+            f"{requester_link} и {target_link} теперь пара.",
+            reply_markup=None,
+            disable_web_page_preview=True,
+        )
+        await callback.answer("Предложение принято.")
+        return
+
+    if action == "pd":
+        declined = db.decline_couple_request(chat_id, requester_id, target_id)
+        await safe_edit(
+            callback,
+            "Предложение отклонено." if declined else "Это предложение уже не действует.",
+            reply_markup=None,
+        )
+        await callback.answer()
+        return
+
+    if action == "pe":
+        if db.couple_state(chat_id, requester_id, target_id) != "couple":
+            await callback.answer("Вы уже не пара.", show_alert=True)
+            return
+        await callback.message.answer(
+            f"{requester_link}, подтвердить расставание с {target_link}?",
+            reply_markup=social_couple_end_menu(chat_id, requester_id, target_id),
+            disable_web_page_preview=True,
+        )
+        await callback.answer()
+        return
+
+    if action == "px":
+        ended = db.end_chat_couple(chat_id, requester_id, target_id)
+        await safe_edit(
+            callback,
+            f"{requester_link} и {target_link} больше не пара."
+            if ended
+            else "Эта связь уже завершена.",
+            reply_markup=None,
+            disable_web_page_preview=True,
+        )
+        await callback.answer()
 
 
 @router.callback_query(F.data.startswith("user:bag:"))
@@ -6052,9 +6294,22 @@ async def premium_command(message: Message) -> None:
 @router.message(Command("profile"))
 async def profile_command(message: Message) -> None:
     if message.from_user:
+        chat_id = message.chat.id if message.chat.type in SUPPORTED_CHAT_TYPES else None
+        if chat_id is not None:
+            await remember_sender(message)
         await message.answer(
-            telegram_user_profile_text(message.from_user.id, message.from_user.username, message.from_user.full_name, short=False),
-            reply_markup=main_menu() if message.chat.type == "private" else None,
+            telegram_user_profile_text(
+                message.from_user.id,
+                message.from_user.username,
+                message.from_user.full_name,
+                chat_id=chat_id,
+                short=False,
+            ),
+            reply_markup=(
+                main_menu()
+                if message.chat.type == "private"
+                else social_profile_markup(chat_id, message.from_user.id, message.from_user.id)
+            ),
             disable_web_page_preview=True,
         )
 
@@ -7584,9 +7839,24 @@ async def chat_profile(message: Message) -> None:
         target_name = user.full_name
         db.upsert_seen_user(message.chat.id, user.id, user.username, user.full_name, user.is_bot)
 
+    member = await get_active_chat_member(message.bot, message.chat.id, target_id)
+    if member is None or is_deleted_or_empty_user(member.user):
+        await temporary_reply(message, "Этот пользователь больше не состоит в группе или его аккаунт удалён.")
+        return
+    target_username = member.user.username
+    target_name = member.user.full_name
+    db.upsert_seen_user(
+        message.chat.id,
+        member.user.id,
+        member.user.username,
+        member.user.full_name,
+        member.user.is_bot,
+    )
+
     await temporary_reply(
         message,
         telegram_user_profile_text(target_id, target_username, target_name, chat_id=message.chat.id, short=True),
+        reply_markup=social_profile_markup(message.chat.id, message.from_user.id, target_id),
         disable_web_page_preview=True,
     )
 

@@ -145,11 +145,36 @@ def build_user_profile(
             pass
 
     chat_stats = None
+    social = None
     if chat_id is not None:
         chat_stats = {
             "messages": db.message_count_for_user(chat_id, user_id),
             "giveawayWins": db.giveaway_wins_for_user(chat_id, user_id),
             "rollMuteCount": db.roll_mute_count_for_user(chat_id, user_id),
+        }
+        friends = db.list_chat_friends(chat_id, user_id, limit=5)
+        partner = db.get_chat_partner(chat_id, user_id)
+        couple = db.get_chat_couple(chat_id, user_id)
+        social = {
+            "friendsCount": db.count_chat_friends(chat_id, user_id),
+            "friends": [
+                {
+                    "id": friend.user_id,
+                    "username": friend.username or "",
+                    "fullName": friend.full_name,
+                }
+                for friend in friends
+            ],
+            "partner": (
+                {
+                    "id": partner.user_id,
+                    "username": partner.username or "",
+                    "fullName": partner.full_name,
+                    "since": _format_dt(couple.created_at if couple else None),
+                }
+                if partner
+                else None
+            ),
         }
 
     active_items = [
@@ -198,6 +223,7 @@ def build_user_profile(
             "achievementsKnown": len(ACHIEVEMENT_NAMES),
         },
         "chatStats": chat_stats,
+        "social": social,
     }
 
 
@@ -206,6 +232,7 @@ def profile_chat_text(profile: dict[str, Any], short: bool = True) -> str:
     premium = profile["premium"]
     mine = profile["mine"]
     chat_stats = profile.get("chatStats")
+    social = profile.get("social")
     name = escape(user["fullName"])
     username = f"@{escape(user['username'])}" if user.get("username") else "username не указан"
     premium_text = "активен"
@@ -262,4 +289,16 @@ def profile_chat_text(profile: dict[str, Any], short: bool = True) -> str:
                 f"Roll mute: <b>{chat_stats['rollMuteCount']}</b>",
             ]
         )
+    if social:
+        lines.extend(["", "<b>Отношения в этом чате</b>"])
+        partner = social.get("partner")
+        if partner:
+            since = f" · с {escape(partner['since'])}" if partner.get("since") else ""
+            lines.append(f"Пара: <b>{escape(partner['fullName'])}</b>{since}")
+        else:
+            lines.append("Пара: <b>нет</b>")
+        lines.append(f"Друзей: <b>{social['friendsCount']}</b>")
+        if not short and social.get("friends"):
+            names = ", ".join(escape(friend["fullName"]) for friend in social["friends"])
+            lines.append(f"Близкие: {names}")
     return "\n".join(lines)

@@ -56,6 +56,14 @@ class SeenUser:
 
 
 @dataclass(frozen=True)
+class ChatCouple:
+    chat_id: int
+    user1_id: int
+    user2_id: int
+    created_at: str
+
+
+@dataclass(frozen=True)
 class ParticipantActivity:
     chat_id: int
     user_id: int
@@ -385,6 +393,56 @@ class Database:
                 primary key (chat_id, user_id),
                 foreign key (chat_id) references chats(chat_id) on delete cascade
             );
+
+            create table if not exists chat_friend_requests (
+                chat_id integer not null,
+                requester_id integer not null,
+                target_id integer not null,
+                created_at text not null,
+                primary key (chat_id, requester_id, target_id),
+                check (requester_id <> target_id),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists chat_friendships (
+                chat_id integer not null,
+                user1_id integer not null,
+                user2_id integer not null,
+                created_at text not null,
+                primary key (chat_id, user1_id, user2_id),
+                check (user1_id < user2_id),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create index if not exists idx_chat_friendships_user1
+                on chat_friendships(chat_id, user1_id);
+            create index if not exists idx_chat_friendships_user2
+                on chat_friendships(chat_id, user2_id);
+
+            create table if not exists chat_couple_requests (
+                chat_id integer not null,
+                requester_id integer not null,
+                target_id integer not null,
+                created_at text not null,
+                primary key (chat_id, requester_id, target_id),
+                check (requester_id <> target_id),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists chat_couples (
+                chat_id integer not null,
+                user1_id integer not null,
+                user2_id integer not null,
+                created_at text not null,
+                primary key (chat_id, user1_id, user2_id),
+                check (user1_id < user2_id),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create index if not exists idx_chat_couples_user1
+                on chat_couples(chat_id, user1_id);
+            create index if not exists idx_chat_couples_user2
+                on chat_couples(chat_id, user2_id);
 
             create table if not exists participant_activity_daily (
                 chat_id integer not null,
@@ -1460,6 +1518,259 @@ class Database:
             (chat_id, normalize_username(username)),
         ).fetchone()
         return SeenUser(**dict(row)) if row else None
+
+    @staticmethod
+    def _social_pair(user1_id: int, user2_id: int) -> tuple[int, int]:
+        return (user1_id, user2_id) if user1_id < user2_id else (user2_id, user1_id)
+
+    def friendship_state(self, chat_id: int, user_id: int, other_id: int) -> str:
+        if user_id == other_id:
+            return "self"
+        user1_id, user2_id = self._social_pair(user_id, other_id)
+        row = self._conn.execute(
+            """
+            select 1 from chat_friendships
+            where chat_id = ? and user1_id = ? and user2_id = ?
+            """,
+            (chat_id, user1_id, user2_id),
+        ).fetchone()
+        if row:
+            return "friends"
+        row = self._conn.execute(
+            """
+            select requester_id, target_id from chat_friend_requests
+            where chat_id = ? and (
+                (requester_id = ? and target_id = ?)
+                or (requester_id = ? and target_id = ?)
+            )
+            limit 1
+            """,
+            (chat_id, user_id, other_id, other_id, user_id),
+        ).fetchone()
+        if not row:
+            return "none"
+        return "outgoing" if int(row["requester_id"]) == user_id else "incoming"
+
+    def create_friend_request(self, chat_id: int, requester_id: int, target_id: int) -> str:
+        state = self.friendship_state(chat_id, requester_id, target_id)
+        if state != "none":
+            return state
+        self._conn.execute(
+            """
+            insert into chat_friend_requests (chat_id, requester_id, target_id, created_at)
+            values (?, ?, ?, ?)
+            """,
+            (chat_id, requester_id, target_id, utc_now()),
+        )
+        self._conn.commit()
+        return "created"
+
+    def accept_friend_request(self, chat_id: int, requester_id: int, target_id: int) -> bool:
+        row = self._conn.execute(
+            """
+            select 1 from chat_friend_requests
+            where chat_id = ? and requester_id = ? and target_id = ?
+            """,
+            (chat_id, requester_id, target_id),
+        ).fetchone()
+        if not row:
+            return False
+        user1_id, user2_id = self._social_pair(requester_id, target_id)
+        self._conn.execute(
+            """
+            insert or ignore into chat_friendships (chat_id, user1_id, user2_id, created_at)
+            values (?, ?, ?, ?)
+            """,
+            (chat_id, user1_id, user2_id, utc_now()),
+        )
+        self._conn.execute(
+            """
+            delete from chat_friend_requests
+            where chat_id = ? and (
+                (requester_id = ? and target_id = ?)
+                or (requester_id = ? and target_id = ?)
+            )
+            """,
+            (chat_id, requester_id, target_id, target_id, requester_id),
+        )
+        self._conn.commit()
+        return True
+
+    def decline_friend_request(self, chat_id: int, requester_id: int, target_id: int) -> bool:
+        cur = self._conn.execute(
+            """
+            delete from chat_friend_requests
+            where chat_id = ? and requester_id = ? and target_id = ?
+            """,
+            (chat_id, requester_id, target_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def remove_friendship(self, chat_id: int, user_id: int, other_id: int) -> bool:
+        user1_id, user2_id = self._social_pair(user_id, other_id)
+        cur = self._conn.execute(
+            """
+            delete from chat_friendships
+            where chat_id = ? and user1_id = ? and user2_id = ?
+            """,
+            (chat_id, user1_id, user2_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def list_chat_friends(self, chat_id: int, user_id: int, limit: int = 20) -> list[SeenUser]:
+        rows = self._conn.execute(
+            """
+            select u.chat_id, u.user_id, u.username, u.full_name, u.is_bot, u.updated_at
+            from chat_friendships f
+            join seen_users u
+              on u.chat_id = f.chat_id
+             and u.user_id = case when f.user1_id = ? then f.user2_id else f.user1_id end
+            where f.chat_id = ? and (f.user1_id = ? or f.user2_id = ?)
+            order by u.full_name collate nocase
+            limit ?
+            """,
+            (user_id, chat_id, user_id, user_id, max(1, limit)),
+        ).fetchall()
+        return [SeenUser(**dict(row)) for row in rows]
+
+    def count_chat_friends(self, chat_id: int, user_id: int) -> int:
+        row = self._conn.execute(
+            """
+            select count(*) as total from chat_friendships
+            where chat_id = ? and (user1_id = ? or user2_id = ?)
+            """,
+            (chat_id, user_id, user_id),
+        ).fetchone()
+        return int(row["total"]) if row else 0
+
+    def get_chat_couple(self, chat_id: int, user_id: int) -> ChatCouple | None:
+        row = self._conn.execute(
+            """
+            select chat_id, user1_id, user2_id, created_at
+            from chat_couples
+            where chat_id = ? and (user1_id = ? or user2_id = ?)
+            limit 1
+            """,
+            (chat_id, user_id, user_id),
+        ).fetchone()
+        return ChatCouple(**dict(row)) if row else None
+
+    def get_chat_partner(self, chat_id: int, user_id: int) -> SeenUser | None:
+        row = self._conn.execute(
+            """
+            select u.chat_id, u.user_id, u.username, u.full_name, u.is_bot, u.updated_at
+            from chat_couples c
+            join seen_users u
+              on u.chat_id = c.chat_id
+             and u.user_id = case when c.user1_id = ? then c.user2_id else c.user1_id end
+            where c.chat_id = ? and (c.user1_id = ? or c.user2_id = ?)
+            limit 1
+            """,
+            (user_id, chat_id, user_id, user_id),
+        ).fetchone()
+        return SeenUser(**dict(row)) if row else None
+
+    def couple_state(self, chat_id: int, user_id: int, other_id: int) -> str:
+        if user_id == other_id:
+            return "self"
+        couple = self.get_chat_couple(chat_id, user_id)
+        if couple:
+            partner_id = couple.user2_id if couple.user1_id == user_id else couple.user1_id
+            return "couple" if partner_id == other_id else "user_busy"
+        if self.get_chat_couple(chat_id, other_id):
+            return "target_busy"
+        row = self._conn.execute(
+            """
+            select requester_id, target_id from chat_couple_requests
+            where chat_id = ? and (
+                (requester_id = ? and target_id = ?)
+                or (requester_id = ? and target_id = ?)
+            )
+            limit 1
+            """,
+            (chat_id, user_id, other_id, other_id, user_id),
+        ).fetchone()
+        if not row:
+            return "none"
+        return "outgoing" if int(row["requester_id"]) == user_id else "incoming"
+
+    def create_couple_request(self, chat_id: int, requester_id: int, target_id: int) -> str:
+        state = self.couple_state(chat_id, requester_id, target_id)
+        if state != "none":
+            return state
+        self._conn.execute(
+            """
+            insert into chat_couple_requests (chat_id, requester_id, target_id, created_at)
+            values (?, ?, ?, ?)
+            """,
+            (chat_id, requester_id, target_id, utc_now()),
+        )
+        self._conn.commit()
+        return "created"
+
+    def accept_couple_request(self, chat_id: int, requester_id: int, target_id: int) -> str:
+        row = self._conn.execute(
+            """
+            select 1 from chat_couple_requests
+            where chat_id = ? and requester_id = ? and target_id = ?
+            """,
+            (chat_id, requester_id, target_id),
+        ).fetchone()
+        if not row:
+            return "missing"
+        if self.get_chat_couple(chat_id, requester_id) or self.get_chat_couple(chat_id, target_id):
+            return "busy"
+        user1_id, user2_id = self._social_pair(requester_id, target_id)
+        self._conn.execute(
+            """
+            insert into chat_couples (chat_id, user1_id, user2_id, created_at)
+            values (?, ?, ?, ?)
+            """,
+            (chat_id, user1_id, user2_id, utc_now()),
+        )
+        self._conn.execute(
+            """
+            insert or ignore into chat_friendships (chat_id, user1_id, user2_id, created_at)
+            values (?, ?, ?, ?)
+            """,
+            (chat_id, user1_id, user2_id, utc_now()),
+        )
+        self._conn.execute(
+            """
+            delete from chat_couple_requests
+            where chat_id = ? and (
+                requester_id in (?, ?) or target_id in (?, ?)
+            )
+            """,
+            (chat_id, requester_id, target_id, requester_id, target_id),
+        )
+        self._conn.commit()
+        return "accepted"
+
+    def decline_couple_request(self, chat_id: int, requester_id: int, target_id: int) -> bool:
+        cur = self._conn.execute(
+            """
+            delete from chat_couple_requests
+            where chat_id = ? and requester_id = ? and target_id = ?
+            """,
+            (chat_id, requester_id, target_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def end_chat_couple(self, chat_id: int, user_id: int, partner_id: int) -> bool:
+        user1_id, user2_id = self._social_pair(user_id, partner_id)
+        cur = self._conn.execute(
+            """
+            delete from chat_couples
+            where chat_id = ? and user1_id = ? and user2_id = ?
+            """,
+            (chat_id, user1_id, user2_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
 
     def get_daily_pick(self, chat_id: int, pick_key: str, pick_date: str) -> SeenUser | None:
         row = self._conn.execute(

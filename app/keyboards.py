@@ -141,6 +141,100 @@ def user_menu(chat_id: int) -> InlineKeyboardMarkup:
     return markup
 
 
+def social_profile_menu(
+    chat_id: int,
+    viewer_id: int,
+    target_id: int,
+    friendship: str,
+    couple: str,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if viewer_id == target_id:
+        rows.append(
+            [InlineKeyboardButton(text="Мои друзья", callback_data=f"soc:fl:{chat_id}:{viewer_id}")]
+        )
+    else:
+        if friendship == "friends":
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="Удалить из друзей",
+                        callback_data=f"soc:fr:{chat_id}:{viewer_id}:{target_id}",
+                    )
+                ]
+            )
+        elif friendship == "none":
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="Добавить в друзья",
+                        callback_data=f"soc:fq:{chat_id}:{viewer_id}:{target_id}",
+                    )
+                ]
+            )
+        elif friendship == "outgoing":
+            rows.append([InlineKeyboardButton(text="Заявка в друзья отправлена", callback_data="soc:noop")])
+        elif friendship == "incoming":
+            rows.append([InlineKeyboardButton(text="У тебя есть входящая заявка", callback_data="soc:noop")])
+
+        if couple == "couple":
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="Расстаться",
+                        callback_data=f"soc:pe:{chat_id}:{viewer_id}:{target_id}",
+                    )
+                ]
+            )
+        elif couple == "none":
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="Предложить стать парой",
+                        callback_data=f"soc:pq:{chat_id}:{viewer_id}:{target_id}",
+                    )
+                ]
+            )
+        elif couple == "outgoing":
+            rows.append([InlineKeyboardButton(text="Предложение уже отправлено", callback_data="soc:noop")])
+        elif couple == "incoming":
+            rows.append([InlineKeyboardButton(text="У тебя есть входящее предложение", callback_data="soc:noop")])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def social_request_menu(kind: str, chat_id: int, requester_id: int, target_id: int) -> InlineKeyboardMarkup:
+    prefix = "f" if kind == "friend" else "p"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Принять",
+                    callback_data=f"soc:{prefix}a:{chat_id}:{requester_id}:{target_id}",
+                ),
+                InlineKeyboardButton(
+                    text="Отклонить",
+                    callback_data=f"soc:{prefix}d:{chat_id}:{requester_id}:{target_id}",
+                ),
+            ]
+        ]
+    )
+
+
+def social_couple_end_menu(chat_id: int, user_id: int, partner_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, расстаться",
+                    callback_data=f"soc:px:{chat_id}:{user_id}:{partner_id}",
+                ),
+                InlineKeyboardButton(text="Отмена", callback_data="soc:noop"),
+            ]
+        ]
+    )
+
+
 def premium_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
