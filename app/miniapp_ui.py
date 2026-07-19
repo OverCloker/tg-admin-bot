@@ -210,7 +210,24 @@ MINI_APP_HTML = r"""<!doctype html>
       font-size: 14px;
     }
     .inventory-row:last-child { border-bottom: 0; }
+    .inventory-row-main {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .inventory-row-main span {
+      overflow-wrap: anywhere;
+    }
     .inventory-row b { flex: 0 0 auto; color: #dbe7f2; }
+    .inventory-use {
+      min-height: 30px;
+      width: fit-content;
+      margin: 0;
+      padding: 6px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+    }
     .shop-screen {
       min-height: calc(100vh - 112px);
       margin-top: 14px;
@@ -1002,7 +1019,10 @@ MINI_APP_HTML = r"""<!doctype html>
         ? shop.inventory.map((group, index) => {
           const rows = group.items.map(item => `
             <div class="inventory-row">
-              <span>${escapeHtml(item.name)}</span>
+              <div class="inventory-row-main">
+                <span>${escapeHtml(item.name)}</span>
+                ${item.key === "tea" ? `<button class="btn inventory-use" onclick="useShopItem('tea')">Использовать</button>` : ""}
+              </div>
               <b>× ${item.quantity}</b>
             </div>`).join("");
           return `<details class="inventory-group" ${index === 0 ? "open" : ""}>
@@ -1099,6 +1119,23 @@ MINI_APP_HTML = r"""<!doctype html>
       state = result.state;
       renderShop(result.shop, shopCategory);
       showNotice("Покупка выполнена. Предмет добавлен в сумку.");
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function useShopItem(itemKey) {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/shop/use", {
+        method: "POST", body: JSON.stringify({ item_key: itemKey })
+      });
+      state = result.state;
+      await showBag();
+      showNotice(result.message || "Предмет использован.");
     } catch (error) {
       alert(error.message);
     } finally {

@@ -489,6 +489,8 @@ def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
     for key, quantity in items.items():
         if quantity <= 0 or key not in names:
             continue
+        if key == "title_badge":
+            continue
         if key in chain_keys and key not in best_chain_keys:
             continue
         entry = {"key": key, "name": names[key], "quantity": quantity}
@@ -552,13 +554,6 @@ def miniapp_shop_buy(
             purchase_error = game.dig_purchase_error(items, payload.item_key)
             if purchase_error:
                 raise HTTPException(400, purchase_error)
-            if payload.item_key == "tea":
-                if not db.spend_dig_coins(0, user["id"], int(item[1])):
-                    raise HTTPException(400, "РќРµ С…РІР°С‚Р°РµС‚ РєРѕС‚РѕРёРЅРѕРІ.")
-                now = datetime.now(timezone.utc)
-                luck = game.refreshed_dig_luck(user["id"], player.luck, player.last_luck_at, now)
-                db.set_dig_luck(0, user["id"], min(100, luck + 35), now.isoformat(timespec="seconds"))
-                return {"ok": True, "item": payload.item_key, "state": _state(db, user["id"]), "shop": _shop_catalog(db, user["id"])}
             status = db.purchase_dig_item(
                 0,
                 user["id"],
@@ -572,6 +567,39 @@ def miniapp_shop_buy(
             if status == "no_coins":
                 raise HTTPException(400, "Не хватает котоинов.")
             return {"ok": True, "item": payload.item_key, "state": _state(db, user["id"]), "shop": _shop_catalog(db, user["id"])}
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/shop/use")
+def miniapp_shop_use(
+    payload: ShopPurchase,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    from . import bot as game
+
+    with DIG_LOCK:
+        db = _db()
+        try:
+            player = db.get_dig_player(0, user["id"])
+            if not player:
+                raise HTTPException(400, "Сначала зарегистрируйтесь в шахте.")
+            if payload.item_key != "tea":
+                raise HTTPException(400, "Этот предмет нельзя использовать вручную.")
+            if not db.consume_dig_item(0, user["id"], "tea"):
+                raise HTTPException(400, "В сумке нет чая.")
+            now = datetime.now(timezone.utc)
+            luck = game.refreshed_dig_luck(user["id"], player.luck, player.last_luck_at, now)
+            restored_luck = min(100, luck + 35)
+            db.set_dig_luck(0, user["id"], restored_luck, now.isoformat(timespec="seconds"))
+            return {
+                "ok": True,
+                "item": payload.item_key,
+                "message": f"Чай использован. Удача: {restored_luck}/100.",
+                "state": _state(db, user["id"]),
+                "shop": _shop_catalog(db, user["id"]),
+            }
         finally:
             db.close()
 

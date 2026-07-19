@@ -220,9 +220,8 @@ DIG_SHOP_ITEMS = {
     "mystery_chest": ("Таинственный сундук", 350, "В следующей раскопке даёт случайную награду или пустышку."),
     "dynamite": ("Динамит", 150, "Один раз пробивает метр, на котором раскопка должна была остановиться."),
     "insurance": ("Страховка", 60, "Если раскопка провалилась на первом метре, засчитает 1 метр."),
-    "title_badge": ("Кличка в шахте", 150, "Добавляет титул 'Шахтер' в сумку и топы."),
-    "cursed_pick": ("Проклятая кирка", 60, "Один раз спасает от мута при проигрыше в монетку."),
-    "tea": ("Чай перед сменой", 40, "Сразу восстанавливает +35 удачи."),
+    "cursed_pick": ("Защита от сглаза", 60, "Одноразово защищает от roll mute."),
+    "tea": ("Чай перед сменой", 40, "Кладется в сумку и вручную восстанавливает +35 удачи."),
     "safe": ("Сейф", 100, "Один раз защищает от потери глубины при обвале."),
     "rank_1": ("Ранг: Проходчик", 500, "Постоянный ранг, отображается в сумке и топах."),
     "rank_2": ("Ранг: Бригадир", 1200, "Следующий постоянный ранг. Требуется Проходчик."),
@@ -241,7 +240,7 @@ DIG_ITEM_ORDER = [
     "tea", "insurance", "dynamite", "safe", "compass", "scanner", "drill", "medkit", "map", "talisman", "camp", "repair_kit", "mystery_chest",
     "shovel_1", "shovel_2", "shovel_3", "helmet_1", "helmet_2", "helmet_3",
     "flashlight_1", "flashlight_2", "flashlight_3", "cart", "cart_2", "cart_3", "backpack_1", "backpack_2", "backpack_3",
-    "cursed_pick", "title_badge",
+    "cursed_pick",
     "rank_1", "rank_2", "rank_3", "rank_4",
 ]
 DIG_SHOP_PAGE_SIZE = 6
@@ -252,7 +251,7 @@ DIG_SHOP_CATEGORIES = {
     ),
     "gear": (
         "Снаряжение",
-        ["safe", "compass", "scanner", "drill", "map", "talisman", "camp", "mystery_chest", "prank", "title_badge"],
+        ["safe", "compass", "scanner", "drill", "map", "talisman", "camp", "mystery_chest", "prank"],
     ),
     "upgrades": (
         "Улучшения",
@@ -288,7 +287,7 @@ DIG_SHOP_ITEM_CATEGORY = {
     for item_key in item_keys
 }
 DIG_PERMANENT_ITEMS = {
-    "title_badge", "shovel_1", "shovel_2", "shovel_3", "helmet_1", "helmet_2", "helmet_3",
+    "shovel_1", "shovel_2", "shovel_3", "helmet_1", "helmet_2", "helmet_3",
     "flashlight_1", "flashlight_2", "flashlight_3", "cart", "cart_2", "cart_3",
     "backpack_1", "backpack_2", "backpack_3", "rank_1", "rank_2", "rank_3", "rank_4",
 }
@@ -1217,7 +1216,7 @@ def dig_title_suffix(items: dict[str, int]) -> str:
     rank = dig_rank_name(items)
     if rank != "Новичок":
         return f" [{rank}]"
-    return " [Шахтер]" if items.get("title_badge", 0) > 0 else ""
+    return ""
 
 
 def dig_effects_text(items: dict[str, int]) -> str:
@@ -3507,21 +3506,8 @@ async def cb_user_confirm(callback: CallbackQuery) -> None:
         return
 
     name, price, _ = item
-    now = datetime.now(timezone.utc)
     result = f"Куплено: <b>{escape(name)}</b>."
-    if item_key == "tea":
-        if not db.spend_dig_coins(chat_id, callback.from_user.id, price):
-            await callback.answer("Не хватает котоинов.", show_alert=True)
-            return
-        player = db.get_dig_player(chat_id, callback.from_user.id)
-        if player is None:
-            await callback.answer("Игрок не найден.", show_alert=True)
-            return
-        luck = refreshed_dig_luck(callback.from_user.id, player.luck, player.last_luck_at, now)
-        restored_luck = min(100, luck + 35)
-        db.set_dig_luck(chat_id, callback.from_user.id, restored_luck, now.isoformat(timespec="seconds"))
-        result = f"Чай выпит. Удача восстановлена до <b>{restored_luck}</b>/100."
-    elif item_key == "prank":
+    if item_key == "prank":
         if not db.spend_dig_coins(chat_id, callback.from_user.id, price):
             await callback.answer("Не хватает котоинов.", show_alert=True)
             return
@@ -3549,7 +3535,7 @@ async def cb_user_confirm(callback: CallbackQuery) -> None:
             unique=item_key in DIG_PERMANENT_ITEMS,
         )
         if purchase_status == "owned":
-            await callback.answer("Кличка уже куплена.", show_alert=True)
+            await callback.answer("Это улучшение уже куплено.", show_alert=True)
             return
         if purchase_status == "no_coins":
             await callback.answer("Не хватает котоинов.", show_alert=True)
@@ -4133,20 +4119,8 @@ async def cb_dig_confirm(callback: CallbackQuery) -> None:
         return
 
     name, price, _ = item
-    now = datetime.now(timezone.utc)
     result = f"Куплено: <b>{escape(name)}</b>."
-    if item_key == "tea":
-        if not db.spend_dig_coins(chat_id, callback.from_user.id, price):
-            await callback.answer("Не хватает котоинов.", show_alert=True)
-            return
-        player = db.get_dig_player(chat_id, callback.from_user.id)
-        if player is None:
-            await callback.answer("Игрок не найден.", show_alert=True)
-            return
-        luck = refreshed_dig_luck(callback.from_user.id, player.luck, player.last_luck_at, now)
-        db.set_dig_luck(chat_id, callback.from_user.id, min(100, luck + 35), now.isoformat(timespec="seconds"))
-        result = f"Чай выпит. Удача восстановлена до <b>{min(100, luck + 35)}</b>/100."
-    elif item_key == "prank":
+    if item_key == "prank":
         if not db.spend_dig_coins(chat_id, callback.from_user.id, price):
             await callback.answer("Не хватает котоинов.", show_alert=True)
             return
@@ -4174,7 +4148,7 @@ async def cb_dig_confirm(callback: CallbackQuery) -> None:
             unique=item_key in DIG_PERMANENT_ITEMS,
         )
         if purchase_status == "owned":
-            await callback.answer("Кличка уже куплена.", show_alert=True)
+            await callback.answer("Это улучшение уже куплено.", show_alert=True)
             return
         if purchase_status == "no_coins":
             await callback.answer("Не хватает котоинов.", show_alert=True)
@@ -7834,14 +7808,6 @@ async def coin_roll(message: Message) -> None:
         )
         return
 
-    player = db.get_dig_player(message.chat.id, message.from_user.id)
-    if player and db.consume_dig_item(message.chat.id, message.from_user.id, "cursed_pick"):
-        await safe_reply(
-            message,
-            f"Монета: <b>{coin}</b>.\n{escape(name)} не угадал, но проклятая кирка забрала мут на себя.",
-        )
-        return
-
     until_date = datetime.now(timezone.utc) + timedelta(minutes=30)
     try:
         await message.bot.restrict_chat_member(
@@ -7897,10 +7863,16 @@ async def roll_mute(message: Message) -> None:
         return
     until_date = now + timedelta(minutes=settings.mute_minutes)
     picked = None
+    protected = False
     last_error = None
     for candidate in candidates:
         if not await is_valid_roll_mute_target(message.bot, message.chat.id, candidate.user_id):
             continue
+
+        if db.consume_dig_item(message.chat.id, candidate.user_id, "cursed_pick"):
+            picked = candidate
+            protected = True
+            break
 
         try:
             await message.bot.restrict_chat_member(
@@ -7941,8 +7913,15 @@ async def roll_mute(message: Message) -> None:
         )
         return
 
-    db.increment_roll_mute_stat(message.chat.id, picked.user_id)
     name = f"@{picked.username}" if picked.username else picked.full_name
+    if protected:
+        await safe_reply(
+            message,
+            f"Roll mute выбрал {escape(name)}, но сработала <b>Защита от сглаза</b>. Мут отменен.",
+        )
+        return
+
+    db.increment_roll_mute_stat(message.chat.id, picked.user_id)
     await safe_reply(message, f"Roll mute выбрал {escape(name)}. Мут на <b>{settings.mute_minutes}</b> мин.")
 
 
