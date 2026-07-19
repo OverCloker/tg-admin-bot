@@ -776,6 +776,13 @@ class Database:
                 updated_at text not null
             );
 
+            create table if not exists dig_weekly_depth (
+                week_start text not null,
+                user_id integer not null,
+                depth integer not null default 0,
+                primary key (week_start, user_id)
+            );
+
             create table if not exists gold_ticket_games (
                 user_id integer primary key,
                 cells_json text not null,
@@ -3441,6 +3448,40 @@ class Database:
             )
             self._conn.commit()
         return keys
+
+    def add_dig_weekly_depth(self, user_id: int, week_start: str, depth: int) -> None:
+        if depth <= 0:
+            return
+        self._conn.execute(
+            """
+            insert into dig_weekly_depth(week_start, user_id, depth) values (?, ?, ?)
+            on conflict(week_start, user_id) do update set depth = depth + excluded.depth
+            """,
+            (week_start, int(user_id), int(depth)),
+        )
+        self._conn.commit()
+
+    def list_dig_weekly_rankings(self, week_start: str, limit: int = 100) -> list[dict]:
+        rows = self._conn.execute(
+            """
+            select w.user_id, w.depth, p.username, p.full_name,
+                   max(case when i.item_key = 'rank_4' and i.quantity > 0 then 4
+                            when i.item_key = 'rank_3' and i.quantity > 0 then 3
+                            when i.item_key = 'rank_2' and i.quantity > 0 then 2
+                            when i.item_key = 'rank_1' and i.quantity > 0 then 1
+                            else 0 end) as rank_level
+            from dig_weekly_depth w
+            join dig_players p on p.chat_id = ? and p.user_id = w.user_id
+            join dig_items i on i.chat_id = ? and i.user_id = w.user_id
+            where w.week_start = ?
+            group by w.user_id, w.depth, p.username, p.full_name
+            having rank_level > 0
+            order by w.depth desc, rank_level desc, w.user_id asc
+            limit ?
+            """,
+            (DIG_GLOBAL_CHAT_ID, DIG_GLOBAL_CHAT_ID, week_start, max(1, int(limit))),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def add_dig_expedition_progress(self, chat_id: int, user_id: int, expedition_date: str, depth: int, target: int = 50) -> dict:
         self._conn.execute(

@@ -67,6 +67,7 @@ from .keyboards import (
     dig_register_menu,
     dig_routes_menu,
     dig_section_back_menu,
+    dig_shift_contract_menu,
     dig_shop_categories_menu,
     dig_shop_items_menu,
     dig_shop_menu,
@@ -89,6 +90,7 @@ from .keyboards import (
     topic_select_menu,
     trigger_list_menu,
     user_bag_menu,
+    user_shift_contract_menu,
     user_buy_confirm_menu,
     user_chat_select_menu,
     user_donate_menu,
@@ -177,11 +179,20 @@ DIG_ROUTES = {
     "abandoned_tunnel": ("Заброшенный тоннель", 0, 1.0, 2.0, 1.0, 5),
     "deep_zone": ("Глубинная зона", -8, 2.0, 1.5, 1.5, 10),
 }
-DIG_CONTRACTS = {
+DIG_STANDARD_CONTRACTS = {
     "depth": ("Прокопать 12 метров", 12),
     "coins": ("Заработать 120 котоинов", 120),
     "artifact": ("Найти артефакт", 1),
     "success": ("Три успешные раскопки", 3),
+}
+DIG_RANK_SHIFT_CONTRACTS = {
+    "shift_depth_4": ("Смена: пройти 4 метра", "depth", 4, 80),
+    "shift_coins_60": ("Смена: добыть 60 котоинов", "coins", 60, 100),
+    "shift_artifact": ("Смена: найти артефакт", "artifact", 1, 140),
+}
+DIG_CONTRACTS = {
+    **DIG_STANDARD_CONTRACTS,
+    **{key: (name, target) for key, (name, _, target, _) in DIG_RANK_SHIFT_CONTRACTS.items()},
 }
 DIG_CONTRACT_REWARD_COINS = 60
 DIG_CONTRACT_REWARD_XP = 40
@@ -326,6 +337,12 @@ DIG_RANK_BONUSES = {
     "rank_3": {"coins": 15, "chance": 1, "luck_regen": 2},
     "rank_4": {"coins": 20, "chance": 2, "luck_regen": 3},
 }
+DIG_RANK_DISCOUNTS = {
+    "rank_1": 5,
+    "rank_2": 10,
+    "rank_3": 15,
+    "rank_4": 20,
+}
 ADMIN_FEATURES = [
     ("addReply", "Добавить @ответ"),
     ("deleteReply", "Удалить @ответ"),
@@ -435,6 +452,10 @@ DIG_ACHIEVEMENTS = {
     "route_master": ("Картограф", "Побывать на особом маршруте.", 50, None),
     "expedition": ("Бригада", "Завершить групповую экспедицию.", 100, None),
     "coins_10000": ("Крупный вклад", "Накопить 10000 котоинов.", 500, None),
+    "rank_digger": ("Знак проходчика", "Иметь ранг и прокопать 25 метров всего.", 100, "tea"),
+    "rank_artifacts": ("Коллекция бригадира", "С рангом найти 3 разных артефакта.", 180, "map"),
+    "rank_depth": ("Барон глубин", "С рангом прокопать 150 метров всего.", 300, "mystery_chest"),
+    "rank_master": ("Хозяин коллекции", "Хозяином глубин собрать все артефакты.", 600, "talisman"),
 }
 
 router = Router()
@@ -1100,12 +1121,52 @@ def dig_rank_bonuses(items: dict[str, int]) -> dict[str, int]:
     return {"coins": 0, "chance": 0, "luck_regen": 0}
 
 
+def dig_rank_discount(items: dict[str, int]) -> int:
+    for key, _ in DIG_RANKS:
+        if items.get(key, 0) > 0:
+            return DIG_RANK_DISCOUNTS[key]
+    return 0
+
+
+def dig_discountable_item_keys() -> set[str]:
+    """Ranks discount consumables only, never permanent upgrades or tickets."""
+    return (
+        set(DIG_SHOP_CATEGORIES["consumables"][1])
+        | (set(DIG_SHOP_CATEGORIES["gear"][1]) - {"prank"})
+    )
+
+
+def dig_shop_price(item_key: str, items: dict[str, int]) -> int:
+    base_price = int(DIG_SHOP_ITEMS[item_key][1])
+    if item_key not in dig_discountable_item_keys():
+        return base_price
+    discount = dig_rank_discount(items)
+    return max(1, (base_price * (100 - discount) + 99) // 100)
+
+
 def apply_dig_rank_coin_bonus(items: dict[str, int], coins: int, used_effects: list[str]) -> int:
     bonus = dig_rank_bonuses(items)["coins"]
     if not bonus:
         return coins
     used_effects.append(f"Ранг: +{bonus}% котоинов")
     return max(1, (coins * (100 + bonus) + 99) // 100)
+
+
+def dig_week_start(now: datetime | None = None) -> str:
+    current = now or datetime.now(timezone.utc)
+    return (current.date() - timedelta(days=current.weekday())).isoformat()
+
+
+def dig_weekly_rank_top_text() -> str:
+    rows = db.list_dig_weekly_rankings(dig_week_start(), limit=50)
+    if not rows:
+        return "<b>Недельный топ рангов</b>\n\nПока нет раскопок владельцев рангов на этой неделе."
+    rank_names = {1: "Проходчик", 2: "Бригадир", 3: "Шахтерный барон", 4: "Хозяин глубин"}
+    lines = [f"<b>Недельный топ рангов</b>\nНеделя с {dig_week_start()}"]
+    for index, row in enumerate(rows, start=1):
+        user = profile_link(int(row["user_id"]), row["username"], row["full_name"])
+        lines.append(f"{index}. {user} — <b>{row['depth']} м</b> · {rank_names[int(row['rank_level'])]}")
+    return "\n".join(lines)
 
 
 def dig_permanent_shovel_bonus(items: dict[str, int]) -> int:
@@ -1156,9 +1217,47 @@ def ensure_daily_dig_contracts(user_id: int) -> tuple[str, list[dict]]:
     existing = db.list_dig_contracts(user_id, today)
     if not existing:
         rng = random.Random(f"{today}:{user_id}:contracts")
-        keys = rng.sample(list(DIG_CONTRACTS), 3)
-        db.ensure_dig_contracts(user_id, today, [(key, DIG_CONTRACTS[key][1]) for key in keys])
+        keys = rng.sample(list(DIG_STANDARD_CONTRACTS), 3)
+        db.ensure_dig_contracts(user_id, today, [(key, DIG_STANDARD_CONTRACTS[key][1]) for key in keys])
     return today, db.list_dig_contracts(user_id, today)
+
+
+def dig_rank_shift_contract(user_id: int) -> dict | None:
+    today, contracts = ensure_daily_dig_contracts(user_id)
+    return next((item for item in contracts if item["contract_key"] in DIG_RANK_SHIFT_CONTRACTS), None)
+
+
+def dig_rank_shift_text(user_id: int) -> str:
+    items = dig_items_map(0, user_id)
+    rank = dig_rank_name(items)
+    if rank == "Новичок":
+        return "<b>Сменное задание</b>\n\nОткрывается после покупки ранга в магазине шахты."
+    selected = dig_rank_shift_contract(user_id)
+    if selected:
+        key = selected["contract_key"]
+        name, _, target, reward = DIG_RANK_SHIFT_CONTRACTS[key]
+        state = "выполнено" if selected["claimed"] else f"{selected['progress']}/{target}"
+        return (
+            f"<b>Сменное задание [{escape(rank)}]</b>\n\n"
+            f"{escape(name)}\nПрогресс: <b>{state}</b>\nНаграда: <b>{reward}</b> котоинов."
+        )
+    lines = [f"<b>Сменное задание [{escape(rank)}]</b>", "Выбери одну цель на сегодня:"]
+    for key, (name, _, _, reward) in DIG_RANK_SHIFT_CONTRACTS.items():
+        lines.append(f"• {escape(name)} — <b>+{reward}</b> котоинов")
+    return "\n".join(lines)
+
+
+def select_dig_rank_shift_contract(user_id: int, contract_key: str) -> str | None:
+    if contract_key not in DIG_RANK_SHIFT_CONTRACTS:
+        return "Такого сменного задания нет."
+    if dig_rank_name(dig_items_map(0, user_id)) == "Новичок":
+        return "Сменные задания доступны после покупки ранга."
+    if dig_rank_shift_contract(user_id):
+        return "Сменное задание на сегодня уже выбрано."
+    today = datetime.now(timezone.utc).date().isoformat()
+    _, _, target, _ = DIG_RANK_SHIFT_CONTRACTS[contract_key]
+    db.ensure_dig_contracts(user_id, today, [(contract_key, target)])
+    return None
 
 
 def dig_contracts_text(user_id: int) -> str:
@@ -1166,20 +1265,38 @@ def dig_contracts_text(user_id: int) -> str:
     lines = [f"<b>Контракты на {today}</b>", f"Награда: <b>{DIG_CONTRACT_REWARD_COINS}</b> котоинов и <b>{DIG_CONTRACT_REWARD_XP}</b> XP за каждый.", ""]
     for item in contracts:
         name = DIG_CONTRACTS[item["contract_key"]][0]
-        mark = "✓" if item["claimed"] else "•"
+        mark = "★" if item["contract_key"] in DIG_RANK_SHIFT_CONTRACTS else ("✓" if item["claimed"] else "•")
         lines.append(f"{mark} {escape(name)}: <b>{item['progress']}/{item['target']}</b>")
     return "\n".join(lines)
 
 
 def update_dig_contracts(user_id: int, dug: int, coins: int, artifact_found: bool) -> list[str]:
     today, _ = ensure_daily_dig_contracts(user_id)
-    db.add_dig_contract_progress(user_id, today, {
+    values = {
         "depth": dug, "coins": coins, "artifact": 1 if artifact_found else 0, "success": 1 if dug > 0 else 0,
-    })
+    }
+    for key, (_, progress_key, _, _) in DIG_RANK_SHIFT_CONTRACTS.items():
+        values[key] = values[progress_key]
+    db.add_dig_contract_progress(user_id, today, values)
     claimed = db.claim_ready_dig_contracts(user_id, today)
-    for _ in claimed:
-        db.add_dig_coins(0, user_id, DIG_CONTRACT_REWARD_COINS)
-    return [f"Контракт «{DIG_CONTRACTS[key][0]}» выполнен: +{DIG_CONTRACT_REWARD_COINS} котоинов, +{DIG_CONTRACT_REWARD_XP} XP" for key in claimed]
+    rewards = []
+    for key in claimed:
+        if key in DIG_RANK_SHIFT_CONTRACTS:
+            reward = DIG_RANK_SHIFT_CONTRACTS[key][3]
+            db.add_dig_coins(0, user_id, reward)
+            rewards.append(f"Сменное задание «{DIG_CONTRACTS[key][0]}» выполнено: +{reward} котоинов")
+        else:
+            db.add_dig_coins(0, user_id, DIG_CONTRACT_REWARD_COINS)
+            rewards.append(f"Контракт «{DIG_CONTRACTS[key][0]}» выполнен: +{DIG_CONTRACT_REWARD_COINS} котоинов, +{DIG_CONTRACT_REWARD_XP} XP")
+    return rewards
+
+
+def dig_contract_xp_reward(updates: list[str]) -> int:
+    return sum(
+        DIG_CONTRACT_REWARD_XP
+        for text in updates
+        if not text.startswith("Сменное задание")
+    )
 
 
 def dig_routes_text(user_id: int) -> str:
@@ -1522,11 +1639,12 @@ def run_private_dig(chat_id: int, user: User) -> str:
         last_luck_at=now.isoformat(timespec="seconds"),
         last_dig_at=now.isoformat(timespec="seconds"),
     )
+    db.add_dig_weekly_depth(user.id, dig_week_start(now), dug)
 
     contract_updates = update_dig_contracts(user.id, dug, coins, artifact_text is not None)
     progress = db.update_dig_progress(
         user.id,
-        xp_delta=5 + dug * 10 + len(contract_updates) * DIG_CONTRACT_REWARD_XP,
+        xp_delta=5 + dug * 10 + dig_contract_xp_reward(contract_updates),
         success=dug > 0,
         route=route_key,
     )
@@ -1653,7 +1771,11 @@ def dig_shop_category_items(category: str, items: dict[str, int]) -> list[tuple[
             continue
         visible_keys.append(key)
 
-    return [(key, DIG_SHOP_ITEMS[key][0], DIG_SHOP_ITEMS[key][1]) for key in visible_keys if key in DIG_SHOP_ITEMS]
+    return [
+        (key, DIG_SHOP_ITEMS[key][0], dig_shop_price(key, items))
+        for key in visible_keys
+        if key in DIG_SHOP_ITEMS
+    ]
 
 
 def dig_shop_page_items(category: str, items: dict[str, int], page: int) -> tuple[list[tuple[str, str, int]], int, int]:
@@ -1767,6 +1889,17 @@ def check_dig_achievements(
         checks.append("stone_zero")
     if collapse_depth:
         checks.append("collapse_survive")
+    items = dig_items_map(chat_id, user_id)
+    artifact_count = sum(1 for key in DIG_ARTIFACTS if items.get(key, 0) > 0)
+    rank = dig_rank_name(items)
+    if rank != "Новичок" and total_depth >= 25:
+        checks.append("rank_digger")
+    if rank != "Новичок" and artifact_count >= 3:
+        checks.append("rank_artifacts")
+    if rank != "Новичок" and total_depth >= 150:
+        checks.append("rank_depth")
+    if items.get("rank_4", 0) > 0 and artifact_count == len(DIG_ARTIFACTS):
+        checks.append("rank_master")
 
     awarded = []
     for key in checks:
@@ -3484,11 +3617,15 @@ async def cb_user_buy(callback: CallbackQuery) -> None:
         await callback.answer("Сначала зарегистрируйся в шахте.", show_alert=True)
         return
 
-    name, price, description = item
+    name, _, description = item
+    items = dig_items_map(chat_id, callback.from_user.id)
+    price = dig_shop_price(item_key, items)
+    discount = dig_rank_discount(items) if item_key in dig_discountable_item_keys() else 0
+    discount_text = f"\nСкидка ранга: <b>{discount}%</b>" if discount else ""
     await safe_edit(
         callback,
         f"<b>{escape(name)}</b>\n"
-        f"Цена: <b>{price}</b> котоинов\n"
+        f"Цена: <b>{price}</b> котоинов{discount_text}\n"
         f"У тебя: <b>{player.coins}</b> котоинов\n\n"
         f"{escape(description)}",
         reply_markup=user_buy_confirm_menu(chat_id, callback.from_user.id, item_key),
@@ -3528,12 +3665,14 @@ async def cb_user_confirm(callback: CallbackQuery) -> None:
         await callback.answer("Покупка уже обрабатывается.", show_alert=True)
         return
 
-    purchase_error = dig_purchase_error(dig_items_map(chat_id, callback.from_user.id), item_key)
+    items = dig_items_map(chat_id, callback.from_user.id)
+    purchase_error = dig_purchase_error(items, item_key)
     if purchase_error:
         await callback.answer(purchase_error, show_alert=True)
         return
 
-    name, price, _ = item
+    name, _, _ = item
+    price = dig_shop_price(item_key, items)
     result = f"Куплено: <b>{escape(name)}</b>."
     if item_key == "prank":
         if not db.spend_dig_coins(chat_id, callback.from_user.id, price):
@@ -3792,6 +3931,32 @@ async def cb_user_contracts(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("user:shift:"))
+async def cb_user_rank_shift(callback: CallbackQuery) -> None:
+    _, _, chat_raw, owner_raw = callback.data.split(":", 3)
+    chat_id, owner_id = int(chat_raw), int(owner_raw)
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    selected = dig_rank_shift_contract(owner_id)
+    keys = [] if selected or dig_rank_name(dig_items_map(0, owner_id)) == "Новичок" else list(DIG_RANK_SHIFT_CONTRACTS)
+    await safe_edit(callback, dig_rank_shift_text(owner_id), reply_markup=user_shift_contract_menu(chat_id, owner_id, keys) if keys else user_bag_menu(chat_id, owner_id))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("user:shiftpick:"))
+async def cb_user_rank_shift_pick(callback: CallbackQuery) -> None:
+    _, _, chat_raw, owner_raw, contract_key = callback.data.split(":", 4)
+    chat_id, owner_id = int(chat_raw), int(owner_raw)
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    error = select_dig_rank_shift_contract(owner_id, contract_key)
+    if error:
+        await callback.answer(error, show_alert=True)
+        return
+    await safe_edit(callback, dig_rank_shift_text(owner_id), reply_markup=user_bag_menu(chat_id, owner_id))
+    await callback.answer("Сменное задание выбрано.")
+
+
 @router.callback_query(F.data.startswith("user:expedition:"))
 async def cb_user_expedition(callback: CallbackQuery) -> None:
     _, _, chat_raw, owner_raw = callback.data.split(":", 3)
@@ -3839,6 +4004,31 @@ async def cb_dig_contracts(callback: CallbackQuery) -> None:
     if not await require_dig_button_owner(callback, owner_id):
         return
     await safe_edit(callback, dig_contracts_text(owner_id), reply_markup=dig_section_back_menu(owner_id))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dig:shiftpick:"))
+async def cb_dig_rank_shift_pick(callback: CallbackQuery) -> None:
+    _, _, _, owner_raw, contract_key = callback.data.split(":", 4)
+    owner_id = int(owner_raw)
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    error = select_dig_rank_shift_contract(owner_id, contract_key)
+    if error:
+        await callback.answer(error, show_alert=True)
+        return
+    await safe_edit(callback, dig_rank_shift_text(owner_id), reply_markup=dig_section_back_menu(owner_id))
+    await callback.answer("Сменное задание выбрано.")
+
+
+@router.callback_query(F.data.startswith("dig:shift:"))
+async def cb_dig_rank_shift(callback: CallbackQuery) -> None:
+    owner_id = int(callback.data.split(":", 2)[2])
+    if not await require_dig_button_owner(callback, owner_id):
+        return
+    selected = dig_rank_shift_contract(owner_id)
+    keys = [] if selected or dig_rank_name(dig_items_map(0, owner_id)) == "Новичок" else list(DIG_RANK_SHIFT_CONTRACTS)
+    await safe_edit(callback, dig_rank_shift_text(owner_id), reply_markup=dig_shift_contract_menu(owner_id, keys) if keys else dig_section_back_menu(owner_id))
     await callback.answer()
 
 
@@ -4097,11 +4287,15 @@ async def cb_dig_buy(callback: CallbackQuery) -> None:
         await callback.answer("Сначала зарегистрируйся.", show_alert=True)
         return
 
-    name, price, description = item
+    name, _, description = item
+    items = dig_items_map(callback.message.chat.id, callback.from_user.id)
+    price = dig_shop_price(item_key, items)
+    discount = dig_rank_discount(items) if item_key in dig_discountable_item_keys() else 0
+    discount_text = f"\nСкидка ранга: <b>{discount}%</b>" if discount else ""
     await safe_edit(
         callback,
         f"<b>{escape(name)}</b>\n"
-        f"Цена: <b>{price}</b> котоинов\n"
+        f"Цена: <b>{price}</b> котоинов{discount_text}\n"
         f"У тебя: <b>{player.coins}</b> котоинов\n\n"
         f"{escape(description)}",
         reply_markup=dig_buy_confirm_menu(callback.from_user.id, item_key),
@@ -4141,12 +4335,14 @@ async def cb_dig_confirm(callback: CallbackQuery) -> None:
         await callback.answer("Покупка уже обрабатывается.", show_alert=True)
         return
 
-    purchase_error = dig_purchase_error(dig_items_map(chat_id, callback.from_user.id), item_key)
+    items = dig_items_map(chat_id, callback.from_user.id)
+    purchase_error = dig_purchase_error(items, item_key)
     if purchase_error:
         await callback.answer(purchase_error, show_alert=True)
         return
 
-    name, price, _ = item
+    name, _, _ = item
+    price = dig_shop_price(item_key, items)
     result = f"Куплено: <b>{escape(name)}</b>."
     if item_key == "prank":
         if not db.spend_dig_coins(chat_id, callback.from_user.id, price):
@@ -7600,11 +7796,12 @@ async def dig_command(message: Message) -> None:
         last_luck_at=now.isoformat(timespec="seconds"),
         last_dig_at=now.isoformat(timespec="seconds"),
     )
+    db.add_dig_weekly_depth(message.from_user.id, dig_week_start(now), dug)
 
     contract_updates = update_dig_contracts(message.from_user.id, dug, coins, artifact_text is not None)
     progress = db.update_dig_progress(
         message.from_user.id,
-        xp_delta=5 + dug * 10 + len(contract_updates) * DIG_CONTRACT_REWARD_XP,
+        xp_delta=5 + dug * 10 + dig_contract_xp_reward(contract_updates),
         success=dug > 0,
         route=route_key,
     )
@@ -7807,6 +8004,15 @@ async def dig_coins_top(message: Message) -> None:
 
     await remember_sender(message)
     await send_chat_top(message, "coins", "Топ монет пока пуст. Сначала зарегистрируйтесь и напишите: копай")
+
+
+@router.message(F.text.regexp(re.compile(r"^топ\s+рангов?$", re.IGNORECASE)))
+async def dig_weekly_rank_top(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+
+    await remember_sender(message)
+    await temporary_reply(message, dig_weekly_rank_top_text())
 
 
 @router.message(F.text.regexp(re.compile(r"^roll\s+mute$", re.IGNORECASE)))

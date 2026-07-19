@@ -238,11 +238,27 @@ def user_bag_menu(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
             [miniapp_deep_link_button("Магазин", f"{MINI_APP_SHOP_START_PARAM}_{user_id}")],
             [InlineKeyboardButton(text="Маршруты", callback_data=f"user:routes:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Контракты", callback_data=f"user:contracts:{chat_id}:{user_id}")],
+            [InlineKeyboardButton(text="Сменное задание", callback_data=f"user:shift:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Экспедиция", callback_data=f"user:expedition:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Донат", callback_data=f"user:donate:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Назад", callback_data=f"user:mine:{chat_id}:{user_id}")],
         ]
     )
+
+
+def user_shift_contract_menu(chat_id: int, user_id: int, contract_keys: list[str] | None = None) -> InlineKeyboardMarkup:
+    labels = {
+        "shift_depth_4": "Пройти 4 м",
+        "shift_coins_60": "Добыть 60 котоинов",
+        "shift_artifact": "Найти артефакт",
+    }
+    rows = [
+        [InlineKeyboardButton(text=labels[key], callback_data=f"user:shiftpick:{chat_id}:{user_id}:{key}")]
+        for key in (contract_keys or [])
+        if key in labels
+    ]
+    rows.append([InlineKeyboardButton(text="Назад к сумке", callback_data=f"user:bag:{chat_id}:{user_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def user_shop_menu(chat_id: int, user_id: int, items: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:
@@ -544,6 +560,7 @@ def dig_bag_menu(user_id: int) -> InlineKeyboardMarkup:
             [miniapp_deep_link_button("Магазин", f"{MINI_APP_SHOP_START_PARAM}_{user_id}")],
             [InlineKeyboardButton(text="Маршруты", callback_data=f"dig:routes:{user_id}")],
             [InlineKeyboardButton(text="Контракты", callback_data=f"dig:contracts:{user_id}")],
+            [InlineKeyboardButton(text="Сменное задание", callback_data=f"dig:shift:{user_id}")],
             [InlineKeyboardButton(text="Экспедиция", callback_data=f"dig:expedition:{user_id}")],
             [InlineKeyboardButton(text="Достижения", callback_data=f"dig:achievements:{user_id}")],
             [InlineKeyboardButton(text="Донат", callback_data=f"dig:donate:{user_id}")],
@@ -564,6 +581,21 @@ def dig_section_back_menu(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="Назад к сумке", callback_data=f"dig:bag:{user_id}")]]
     )
+
+
+def dig_shift_contract_menu(user_id: int, contract_keys: list[str] | None = None) -> InlineKeyboardMarkup:
+    labels = {
+        "shift_depth_4": "Пройти 4 м",
+        "shift_coins_60": "Добыть 60 котоинов",
+        "shift_artifact": "Найти артефакт",
+    }
+    rows = [
+        [InlineKeyboardButton(text=labels[key], callback_data=f"dig:shiftpick:{user_id}:{key}")]
+        for key in (contract_keys or [])
+        if key in labels
+    ]
+    rows.append([InlineKeyboardButton(text="Назад к сумке", callback_data=f"dig:bag:{user_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def user_routes_menu(chat_id: int, user_id: int, routes: list[tuple[str, str, bool]]) -> InlineKeyboardMarkup:

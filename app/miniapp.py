@@ -100,6 +100,9 @@ def _state(db: Database, user_id: int) -> dict[str, Any]:
         if cooldown_at > now:
             cooldown = cooldown_at.isoformat()
     progress = db.get_dig_progress(user_id)
+    items = {x.item_key: x.quantity for x in db.list_dig_items(0, user_id)}
+    rank_key = next((key for key, _ in game.DIG_RANKS if items.get(key, 0) > 0), None)
+    rank_level = {"rank_1": 1, "rank_2": 2, "rank_3": 3, "rank_4": 4}.get(rank_key, 0)
     return {"registered": True, "userId": user_id,
             "name": game.dig_player_name(player.username, player.full_name),
             "coins": player.coins,
@@ -108,7 +111,8 @@ def _state(db: Database, user_id: int) -> dict[str, Any]:
             "level": progress["level"], "xp": progress["xp"], "streak": progress["streak"],
             "sessionDepth": int(session["depth"]) if session else 0, "inSession": bool(session),
             "cooldownUntil": cooldown,
-            "items": {x.item_key: x.quantity for x in db.list_dig_items(0, user_id)},
+            "items": items,
+            "rank": {"key": rank_key, "name": game.dig_rank_name(items), "level": rank_level},
             "goldenTickets": db.get_dig_item_quantity(0, user_id, "golden_ticket"),
             "ticketGame": _ticket_public(db, user_id),
             "superPasses": db.get_dig_item_quantity(0, user_id, "super_game_pass"),
@@ -283,6 +287,7 @@ def _finish(db: Database, game: Any, user: dict[str, Any], session: dict[str, An
     coins = game.apply_premium_coin_bonus(uid, coins + artifact_coins, effects)
     text = now.isoformat(timespec="seconds")
     db.update_dig_player_after_dig(0, uid, user.get("username"), user["full_name"], coins, depth, depth, data["luckAfter"], text, text)
+    db.add_dig_weekly_depth(uid, game.dig_week_start(now), depth)
     progress = db.update_dig_progress(uid, 5 + depth * 10, depth > 0, session["route_key"])
     game.update_dig_contracts(uid, depth, coins, artifact is not None)
     expedition = db.add_dig_expedition_progress(0, uid, now.date().isoformat(), depth, game.DIG_EXPEDITION_TARGET)
@@ -306,6 +311,7 @@ def _finish(db: Database, game: Any, user: dict[str, Any], session: dict[str, An
 
 def _finish_manual(db: Database, game: Any, user: dict[str, Any], session: dict[str, Any], depth: int, now: datetime) -> str:
     uid = user["id"]
+    player_before = db.get_dig_player(0, uid)
     data = json.loads(session["route_data"])
     effects = json.loads(session["used_effects"] or "[]")
     items = game.dig_items_map(0, uid)
@@ -389,8 +395,15 @@ def _finish_manual(db: Database, game: Any, user: dict[str, Any], session: dict[
     coins = game.apply_premium_coin_bonus(uid, coins, effects)
     text = now.isoformat(timespec="seconds")
     db.update_dig_player_after_dig(0, uid, user.get("username"), user["full_name"], coins, depth, depth, data["luckAfter"], text, text)
-    progress = db.update_dig_progress(uid, 5 + depth * 10, depth > 0, session["route_key"])
+    db.add_dig_weekly_depth(uid, game.dig_week_start(now), depth)
     contract_updates = game.update_dig_contracts(uid, depth, coins, artifact is not None)
+    progress = db.update_dig_progress(
+        uid,
+        5 + depth * 10 + game.dig_contract_xp_reward(contract_updates),
+        depth > 0,
+        session["route_key"],
+    )
+    achievement_updates = game.check_dig_achievements(0, uid, player_before, depth, coins, lost, depth == 0)
 
     expedition = db.add_dig_expedition_progress(0, uid, now.date().isoformat(), depth, game.DIG_EXPEDITION_TARGET)
     if expedition["completed"]:
@@ -411,6 +424,10 @@ def _finish_manual(db: Database, game: Any, user: dict[str, Any], session: dict[
     if artifact:
         lines.append(artifact)
     lines.extend(contract_updates)
+    if achievement_updates:
+        lines.append("")
+        lines.append("Достижения:")
+        lines.extend(f"• {item}" for item in achievement_updates)
     if effects:
         lines.append("")
         lines.append("Сработало:")
@@ -446,12 +463,16 @@ def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
             item = game.DIG_SHOP_ITEMS.get(item_key)
             if not item:
                 continue
-            name, price, description = item
+            name, base_price, description = item
+            price = game.dig_shop_price(item_key, items)
+            discount = game.dig_rank_discount(items) if item_key in game.dig_discountable_item_keys() else 0
             products.append(
                 {
                     "key": item_key,
                     "name": name,
                     "price": price,
+                    "basePrice": base_price,
+                    "discount": discount,
                     "description": description,
                     "quantity": items.get(item_key, 0),
                     "owned": item_key in game.DIG_PERMANENT_ITEMS and items.get(item_key, 0) > 0,
@@ -567,7 +588,7 @@ def miniapp_shop_buy(
                 0,
                 user["id"],
                 payload.item_key,
-                int(item[1]),
+                game.dig_shop_price(payload.item_key, items),
                 quantity=1,
                 unique=payload.item_key in game.DIG_PERMANENT_ITEMS,
             )

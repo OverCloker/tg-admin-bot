@@ -51,6 +51,14 @@ MINI_APP_HTML = r"""<!doctype html>
       background: var(--panel);
     }
     .stat b { display: block; margin-top: 4px; font-size: 20px; overflow-wrap: anywhere; }
+    .rank-card { border-width: 2px; }
+    .rank-card .rank-line { display:flex; align-items:center; gap:10px; font-weight:800; }
+    .rank-card .rank-emblem { font-size:30px; }
+    .rank-card.rank-1 { border-color:#678fb2; }
+    .rank-card.rank-2 { border-color:#62a879; }
+    .rank-card.rank-3 { border-color:#ce9b49; }
+    .rank-card.rank-4 { border-color:#bc6f88; }
+    .rank-badge { display:inline-flex; align-items:center; gap:7px; margin-top:10px; padding:6px 9px; border:1px solid var(--line); border-radius:8px; font-size:13px; font-weight:800; }
     .btn {
       width: 100%;
       min-height: 50px;
@@ -751,12 +759,16 @@ MINI_APP_HTML = r"""<!doctype html>
     const cooldown = disabled
       ? `Копать снова можно: ${new Date(state.cooldownUntil).toLocaleString()}`
       : "Одно нажатие проверяет один следующий метр.";
+    const rank = state.rank || {};
+    const emblems = ["", "⛏️", "🛠️", "👑", "🏔️"];
+    const rankCard = rank.level ? `<section class="panel rank-card rank-${rank.level}"><div class="rank-line"><span class="rank-emblem">${emblems[rank.level]}</span><span>${escapeHtml(rank.name)}</span></div><div class="muted" style="margin-top:7px">Ранг даёт скидку ${rank.level * 5}% на припасы и особое снаряжение.</div></section>` : "";
     return `
       <div class="stats">
         <div class="stat">🪙<b id="mineCoins">${state.coins}</b></div>
         <div class="stat">🍀<b>${state.luck}/100</b></div>
         <div class="stat">🏆<b>${state.record} м</b></div>
       </div>
+      ${rankCard}
       <section class="panel">
         <div class="muted">Текущая вылазка</div>
         <div class="depth">${depth}/10 м</div>
@@ -1039,6 +1051,7 @@ MINI_APP_HTML = r"""<!doctype html>
           <h2>Снаряжение</h2>
           <div class="bag-balance">🪙 ${state.coins}</div>
         </div>
+        ${state.rank && state.rank.level ? `<div class="rank-badge">${["", "⛏️", "🛠️", "👑", "🏔️"][state.rank.level]} ${escapeHtml(state.rank.name)} · скидка ${state.rank.level * 5}%</div>` : ""}
         <div class="bag-actions">
           <button class="btn" onclick="showShop()">Открыть магазин</button>
           <button class="btn secondary" onclick="renderMine()">Вернуться в шахту</button>
@@ -1087,9 +1100,9 @@ MINI_APP_HTML = r"""<!doctype html>
         </button>`;
       return `<article class="product">
         <div class="product-name">${escapeHtml(item.name)}</div>
-        <div class="price">${item.price} 🪙</div>
+        <div class="price">${item.price} 🪙${item.discount ? ` <s>${item.basePrice}</s>` : ""}</div>
         <div class="description">${escapeHtml(item.description)}</div>
-        <div class="product-meta">${status}${requirement}</div>
+        <div class="product-meta">${status}${item.discount ? `<div class="owned">Скидка ранга: ${item.discount}%</div>` : ""}${requirement}</div>
         ${buy}
       </article>`;
     }).join("");
