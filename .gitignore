@@ -11,3 +11,4 @@ media_storage/
 bot.db
 admin_access_keys.json
 logs/
+backups/

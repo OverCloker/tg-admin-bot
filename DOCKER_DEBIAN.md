@@ -176,3 +176,137 @@ docker compose down
 docker compose up -d --build
 docker compose logs -f --tail=100
 ```
+
+## Preparing the server for a physical move
+
+The Telegram polling bot itself needs only an outgoing internet connection. It does
+not need a public IP or router port forwarding. The API used by Android apps and
+the Mini App is a separate concern; see the remote access section below.
+
+Install the project systemd unit once:
+
+```bash
+cd ~/tg-admin-bot
+git pull origin main
+sh server-install-autostart.sh
+```
+
+This enables Docker and creates `otveto4ka-compose.service`. On every Debian boot,
+systemd runs `docker compose up -d`, while Docker keeps both containers alive with
+their existing `restart: unless-stopped` policies.
+
+Verify all boot services before the move:
+
+```bash
+sudo systemctl is-enabled docker
+sudo systemctl is-enabled tailscaled
+sudo systemctl is-enabled ssh
+sudo systemctl is-enabled otveto4ka-compose
+docker compose ps
+curl -f http://127.0.0.1:8000/
+```
+
+Create a full backup on another disk or USB drive:
+
+```bash
+cd ~/tg-admin-bot
+sh server-backup.sh /mnt/usb/otveto4ka-backups
+```
+
+The script briefly stops `bot` and `api`, archives all four Docker volumes, copies
+the production `.env`, writes SHA-256 checksums, and starts the services again.
+The resulting directory must be stored securely because it contains bot tokens
+and administrator keys.
+
+Power off cleanly before disconnecting the server:
+
+```bash
+sudo poweroff
+```
+
+After connecting Ethernet and power at the new location, DHCP, Docker, Tailscale,
+SSH, the bot, and the API should start without a graphical login.
+
+## Restoring on a replacement Debian server
+
+Clone the repository and place the backup directory on the new server. Build the
+image once, then restore:
+
+```bash
+git clone https://github.com/OverCloker/tg-admin-bot.git
+cd tg-admin-bot
+cp /path/to/backup/env.production .env
+docker compose build
+sh server-restore.sh /path/to/backup --yes
+sh server-install-autostart.sh
+```
+
+Do not run the old and new bot containers at the same time: Telegram polling
+allows only one active instance for the same bot token.
+
+## Remote management from another city
+
+Tailscale is the preferred administration channel. It works through NAT and a
+changing public IP, and no incoming router ports are required.
+
+On Debian:
+
+```bash
+sudo systemctl enable --now tailscaled
+sudo systemctl enable --now ssh
+sudo tailscale set --ssh=true
+tailscale ip -4
+tailscale status
+```
+
+Install Tailscale on the remote Windows/Android device and sign in to the same
+tailnet. Then connect from Windows Terminal:
+
+```powershell
+ssh abbadon@100.110.102.7
+```
+
+Use the current address printed by `tailscale ip -4` if it differs. Tailscale
+normally preserves this address when the same Debian installation is moved.
+
+Common remote commands:
+
+```bash
+cd ~/tg-admin-bot
+docker compose ps
+docker compose logs --tail=100 bot
+docker compose logs --tail=100 api
+docker compose restart bot
+docker compose restart api
+git pull origin main
+docker compose up -d --build
+```
+
+Portainer is available through Tailscale at:
+
+```text
+https://TAILSCALE_IP:9443
+```
+
+Verify that its container has an automatic restart policy:
+
+```bash
+docker inspect portainer --format '{{.HostConfig.RestartPolicy.Name}}'
+```
+
+If it prints `no`, set the policy once:
+
+```bash
+docker update --restart=always portainer
+```
+
+Do not expose SSH or Portainer directly to the public internet. For the owner's
+Android apps, an address such as `http://TAILSCALE_IP:50000` is safe while the
+phone is connected to Tailscale because traffic is carried inside the encrypted
+Tailscale tunnel.
+
+Other users and Telegram Mini App clients should use a stable public HTTPS domain,
+not a raw public IP. A physical move changes the ISP address and would break
+`http://134.x.x.x:50000`. Use a domain with TLS through a reverse proxy or a
+Cloudflare Tunnel, and set both `ADMIN_PUBLIC_URL` and `MINI_APP_URL` to that
+HTTPS address.
