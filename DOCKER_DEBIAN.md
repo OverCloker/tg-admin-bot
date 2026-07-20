@@ -192,7 +192,8 @@ sh server-install-autostart.sh
 ```
 
 This enables Docker and creates `otveto4ka-compose.service`. On every Debian boot,
-systemd runs `docker compose up -d`, while Docker keeps both containers alive with
+systemd runs `docker compose --profile cloudflare up -d`, so the optional Cloudflare
+Tunnel starts together with the bot and API. Docker keeps all containers alive with
 their existing `restart: unless-stopped` policies.
 
 Verify all boot services before the move:

@@ -16,7 +16,7 @@ if [ ! -f "$PROJECT_DIR/.env" ]; then
 fi
 
 cd "$PROJECT_DIR"
-"$DOCKER_BIN" compose config --quiet
+"$DOCKER_BIN" compose --profile cloudflare config --quiet
 
 UNIT_FILE=$(mktemp)
 trap 'rm -f "$UNIT_FILE"' EXIT
@@ -33,9 +33,9 @@ PartOf=docker.service
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=$PROJECT_DIR
-ExecStart=$DOCKER_BIN compose up -d --remove-orphans
-ExecReload=$DOCKER_BIN compose up -d --remove-orphans
-ExecStop=$DOCKER_BIN compose stop
+ExecStart=$DOCKER_BIN compose --profile cloudflare up -d --remove-orphans
+ExecReload=$DOCKER_BIN compose --profile cloudflare up -d --remove-orphans
+ExecStop=$DOCKER_BIN compose --profile cloudflare stop
 TimeoutStartSec=0
 TimeoutStopSec=180
 
