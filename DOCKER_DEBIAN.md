@@ -305,8 +305,58 @@ Android apps, an address such as `http://TAILSCALE_IP:50000` is safe while the
 phone is connected to Tailscale because traffic is carried inside the encrypted
 Tailscale tunnel.
 
-Other users and Telegram Mini App clients should use a stable public HTTPS domain,
-not a raw public IP. A physical move changes the ISP address and would break
-`http://134.x.x.x:50000`. Use a domain with TLS through a reverse proxy or a
-Cloudflare Tunnel, and set both `ADMIN_PUBLIC_URL` and `MINI_APP_URL` to that
-HTTPS address.
+## Cloudflare Tunnel for the public API
+
+Use Cloudflare Tunnel for the API, admin web panel and Mini App. It creates an
+outbound connection from the home server, so no white IP, port forwarding or
+open `8000`/`50000` port is needed.
+
+Requirements:
+
+- a domain added to the same Cloudflare account;
+- a Cloudflare Zero Trust tunnel token;
+- a public hostname, for example `bot.example.com`.
+
+In Cloudflare Zero Trust create a tunnel, choose the Docker connector, copy its
+token, and add it to the server `.env` without quotes:
+
+```env
+CLOUDFLARE_TUNNEL_TOKEN=the_secret_token_from_cloudflare
+ADMIN_PUBLIC_URL=https://bot.example.com/
+MINI_APP_URL=https://bot.example.com/miniapp
+```
+
+In the tunnel's Public Hostnames section add:
+
+```text
+Hostname: bot.example.com
+Service: http://api:8000
+```
+
+The `api` hostname is the Compose service name and is resolvable by the
+Cloudflare container on the project network. Start the optional tunnel service:
+
+```bash
+cd ~/tg-admin-bot
+docker compose --profile cloudflare up -d
+docker compose ps
+docker compose logs --tail=80 cloudflared
+```
+
+After changing `ADMIN_PUBLIC_URL` or `MINI_APP_URL`, restart both application
+containers so their menu buttons use the new address:
+
+```bash
+docker compose up -d --build bot api
+```
+
+Check from another city or mobile internet:
+
+```text
+https://bot.example.com/
+https://bot.example.com/miniapp
+```
+
+Cloudflare Tunnel is for browser/API traffic. Keep SSH and Portainer behind
+Tailscale. This gives the correct split: Cloudflare for users and Mini App,
+Tailscale for private server administration.
