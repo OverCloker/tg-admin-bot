@@ -161,6 +161,7 @@ DIG_STAR_ACTIONS = {
     "depth10": ("Прокопать 10 м", "Следующая раскопка гарантированно пройдет все 10 метров без ожидания.", 50, "star_depth_10", 1),
     "golden_ticket": ("Золотой билет", "Одна игра 3×3 с тремя призами: 10, 25 и 50 котоинов.", 2, "golden_ticket", 1),
     "super_game": ("Супер-игра 9×9", "Одна супер-игра: 10 попыток, 10 денежных призов, 5 призов по 5 котоинов и три сундука с особыми наградами.", 10, "super_game_pass", 1),
+    "super_mute30": ("Право на мут 30 минут", "Покупка добавит в сумку одно право выдать мут на полчаса в чате. Используется так же, как награда из сундука.", 3, "super_mute30", 1),
 }
 DIG_SUCCESS_CHANCES = [90.0, 88.89, 87.5, 85.71, 83.33, 82.0, 75.61, 67.74, 52.38, 9.09]
 DIG_REWARDS = {
@@ -1406,7 +1407,7 @@ def dig_effects_text(items: dict[str, int]) -> str:
         "Оплаченные": [],
         "Прочее": [],
     }
-    paid_keys = {"star_dig", "star_lucky_dig", "star_depth_10", "super_game_pass"}
+    paid_keys = {"star_dig", "star_lucky_dig", "star_depth_10", "super_game_pass", "super_mute30", "super_tag"}
     special_names = {
         "super_game_pass": "Супер-игра 9×9",
         "super_mute30": "Право на мут 30 минут",
@@ -6958,6 +6959,8 @@ async def handle_dig_star_payment(message: Message, payment: SuccessfulPayment) 
             result = "Оплата прошла. Золотой билет добавлен в шахту Mini App."
         elif item_key == "super_game_pass":
             result = "Оплата прошла. Добавлен доступ к супер-игре 9×9."
+        elif item_key == "super_mute30":
+            result = "Оплата прошла. Право на мут на 30 минут добавлено в сумку Mini App."
         elif item_key == "star_depth_10":
             result = "Оплата прошла. Следующая раскопка гарантированно пройдет <b>10 м</b> без ожидания."
         elif item_key == "star_lucky_dig":

@@ -52,6 +52,23 @@ def test_shop_requirement_is_human_readable(tmp_path) -> None:
     assert products["helmet_2"]["requirementName"] == "Каска I"
 
 
+def test_shop_catalog_has_star_mute_purchase(tmp_path) -> None:
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.register_dig_player(0, 42, "miner", "Шахтёр")
+
+    try:
+        catalog = _shop_catalog(db, 42)
+    finally:
+        db.close()
+
+    star_category = next(category for category in catalog["categories"] if category["key"] == "stars")
+    mute = next(item for item in star_category["items"] if item["key"] == "super_mute30")
+    assert mute["starPrice"] == 3
+    assert mute["quantity"] == 0
+    assert "полчаса" in mute["description"]
+
+
 def test_dig_player_tag_can_be_saved(tmp_path) -> None:
     db = Database(str(tmp_path / "bot.sqlite3"))
     db.init()

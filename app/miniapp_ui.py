@@ -1161,13 +1161,14 @@ MINI_APP_HTML = r"""<!doctype html>
         : item.quantity ? `<div class="owned">В сумке: ${item.quantity}</div>` : `<div class="muted">Доступно к покупке</div>`;
       const requirement = item.requirement
         ? `<div class="muted">Нужно: ${escapeHtml(item.requirementName || item.requirement)}</div>` : "";
+      const isStarItem = Number(item.starPrice || 0) > 0;
       const buy = item.owned ? "" : `
-        <button class="btn shop-buy" ${item.canBuy ? "" : "disabled"} onclick="buyShop('${item.key}')">
+        <button class="btn shop-buy" ${item.canBuy ? "" : "disabled"} onclick="${isStarItem ? `buyStarShop('${item.key}')` : `buyShop('${item.key}')`}">
           Купить
         </button>`;
       return `<article class="product">
         <div class="product-name">${escapeHtml(item.name)}</div>
-        <div class="price">${item.price} 🪙${item.discount ? ` <s>${item.basePrice}</s>` : ""}</div>
+        <div class="price">${isStarItem ? `${item.starPrice} ⭐` : `${item.price} 🪙${item.discount ? ` <s>${item.basePrice}</s>` : ""}`}</div>
         <div class="description">${escapeHtml(item.description)}</div>
         <div class="product-meta">${status}${item.discount ? `<div class="owned">Скидка ранга: ${item.discount}%</div>` : ""}${requirement}</div>
         ${buy}
@@ -1199,6 +1200,30 @@ MINI_APP_HTML = r"""<!doctype html>
       state = result.state;
       renderShop(result.shop, shopCategory);
       showNotice("Покупка выполнена. Предмет добавлен в сумку.");
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function buyStarShop(itemKey) {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/shop/star-invoice", {
+        method: "POST", body: JSON.stringify({ item_key: itemKey })
+      });
+      if (telegram && telegram.openInvoice) {
+        telegram.openInvoice(result.url, status => {
+          if (status === "paid") {
+            showShop(shopCategory);
+            showNotice("Оплата прошла. Предмет добавится в сумку после обработки платежа.");
+          }
+        });
+      } else {
+        location.href = result.url;
+      }
     } catch (error) {
       alert(error.message);
     } finally {

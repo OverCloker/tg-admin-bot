@@ -527,6 +527,30 @@ def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
         if products:
             categories.append({"key": category_key, "title": title, "items": products})
 
+    mute_title, mute_description, mute_price = game.dig_star_invoice("super_mute30")
+    categories.append(
+        {
+            "key": "stars",
+            "title": "Покупки за Stars",
+            "items": [
+                {
+                    "key": "super_mute30",
+                    "name": mute_title,
+                    "price": 0,
+                    "basePrice": 0,
+                    "starPrice": mute_price,
+                    "discount": 0,
+                    "description": mute_description,
+                    "quantity": items.get("super_mute30", 0),
+                    "owned": False,
+                    "requirement": None,
+                    "requirementName": None,
+                    "canBuy": True,
+                }
+            ],
+        }
+    )
+
     names = {key: value[0] for key, value in game.DIG_SHOP_ITEMS.items()}
     names.update(game.DIG_ARTIFACTS)
     names.update(
@@ -638,6 +662,40 @@ def miniapp_shop_buy(
             return {"ok": True, "item": payload.item_key, "state": _state(db, user["id"]), "shop": _shop_catalog(db, user["id"])}
         finally:
             db.close()
+
+
+@router.post("/miniapp/shop/star-invoice")
+async def miniapp_shop_star_invoice(
+    payload: ShopPurchase,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, str]:
+    user = _telegram_user(x_telegram_init_data)
+    if payload.item_key != "super_mute30":
+        raise HTTPException(400, "Этот товар нельзя купить за Stars.")
+
+    from . import bot as game
+
+    db = _db()
+    try:
+        if not db.get_dig_player(0, user["id"]):
+            raise HTTPException(400, "Сначала зарегистрируйтесь в шахте.")
+    finally:
+        db.close()
+
+    title, description, price = game.dig_star_invoice("super_mute30")
+    bot = Bot(token=load_config().bot_token)
+    try:
+        link = await bot.create_invoice_link(
+            title=title,
+            description=description,
+            payload=game.dig_star_payload("super_mute30", user["id"], 0),
+            currency="XTR",
+            prices=[LabeledPrice(label=title, amount=price)],
+            provider_token="",
+        )
+        return {"url": link}
+    finally:
+        await bot.session.close()
 
 
 @router.post("/miniapp/shop/use")
