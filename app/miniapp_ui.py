@@ -570,7 +570,6 @@ MINI_APP_HTML = r"""<!doctype html>
       <h1 id="screen-title">⛏️ Шахта</h1>
       <div id="name" class="muted">Загрузка...</div>
     </div>
-    <button class="btn secondary" style="width:auto;margin:0" type="button" id="close">Закрыть</button>
   </header>
   <div id="content"></div>
 </main>
@@ -605,10 +604,6 @@ MINI_APP_HTML = r"""<!doctype html>
     telegram.ready();
     telegram.expand();
   }
-
-  document.getElementById("close").addEventListener("click", () => {
-    if (telegram) telegram.close();
-  });
 
   const headers = () => ({
     "Content-Type": "application/json",
@@ -886,11 +881,11 @@ MINI_APP_HTML = r"""<!doctype html>
     </section>`;
   }
 
-  function renderMine() {
+  function renderMine(scroll = true) {
     if (!state) return;
     setScreenHeader("mine");
     content.innerHTML = mineHtml();
-    scrollToTop();
+    if (scroll) scrollToTop();
   }
 
   async function load() {
@@ -934,7 +929,7 @@ MINI_APP_HTML = r"""<!doctype html>
         method: "POST", body: JSON.stringify({ contract_key: contractKey })
       });
       state = result.state;
-      renderMine();
+      renderMine(false);
       showNotice("Сменное задание выбрано.");
     } catch (error) {
       alert(error.message);
@@ -955,10 +950,10 @@ MINI_APP_HTML = r"""<!doctype html>
         sleep(1150)
       ]);
       state = result.state;
-      renderMine();
+      renderMine(false);
       showNotice(result.message);
     } catch (error) {
-      renderMine();
+      renderMine(false);
       showNotice(error.message);
     } finally {
       overlay.remove();
@@ -972,7 +967,7 @@ MINI_APP_HTML = r"""<!doctype html>
     try {
       const result = await api("/miniapp/gold-ticket/start", { method: "POST" });
       state = result.state;
-      renderMine();
+      renderMine(false);
     } catch (error) {
       alert(error.message);
     } finally {
@@ -1030,7 +1025,7 @@ MINI_APP_HTML = r"""<!doctype html>
     try {
       const result = await api("/miniapp/super-game/start", { method: "POST" });
       state = result.state;
-      renderMine();
+      renderMine(false);
       showNotice(result.source === "tickets" ? "Списано 3 золотых билета." : "Супер-игра открыта.");
     } catch (error) {
       alert(error.message);

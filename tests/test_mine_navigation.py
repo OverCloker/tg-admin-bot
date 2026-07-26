@@ -100,6 +100,31 @@ def test_ticket_picks_update_in_place_without_scrolling_or_full_render() -> None
     assert "await sleep(700)" not in super_pick
 
 
+def test_miniapp_has_no_close_button() -> None:
+    assert 'id="close"' not in MINI_APP_HTML
+    assert "telegram.close()" not in MINI_APP_HTML
+
+
+def test_mine_actions_refresh_without_scrolling_to_top() -> None:
+    dig_action = MINI_APP_HTML.split("async function digOneMeter", 1)[1].split(
+        "async function startGoldTicket", 1
+    )[0]
+    gold_start = MINI_APP_HTML.split("async function startGoldTicket", 1)[1].split(
+        "const sleep", 1
+    )[0]
+    super_start = MINI_APP_HTML.split("async function startSuperGame", 1)[1].split(
+        "async function buySuperGame", 1
+    )[0]
+
+    assert "function renderMine(scroll = true)" in MINI_APP_HTML
+    assert "renderMine(false)" in dig_action
+    assert "renderMine(false)" in gold_start
+    assert "renderMine(false)" in super_start
+    assert "scrollToTop()" not in dig_action
+    assert "scrollToTop()" not in gold_start
+    assert "scrollToTop()" not in super_start
+
+
 def test_shop_deep_link_opens_a_distinct_compact_screen() -> None:
     assert 'setScreenHeader(initialView === "shop" ? "shop"' in MINI_APP_HTML
     assert 'screenTitle.textContent = "🛒 Магазин"' in MINI_APP_HTML
