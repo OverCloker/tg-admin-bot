@@ -48,17 +48,12 @@ def miniapp_private_menu(label: str = "Шахта Mini App", view: str | None = 
     return InlineKeyboardMarkup(inline_keyboard=[[miniapp_private_button(label, view)]])
 
 
-def main_menu(show_server_address: bool = False) -> InlineKeyboardMarkup:
+def main_menu() -> InlineKeyboardMarkup:
     rows = [
         [miniapp_button()],
-        [InlineKeyboardButton(text="Купить золотой билет - 2 ⭐", callback_data="gold_ticket:buy")],
         [InlineKeyboardButton(text="Панель владельца", callback_data="ui:chats")],
         [InlineKeyboardButton(text="Я пользователь", callback_data="user:chats")],
-        [InlineKeyboardButton(text="\u041f\u0440\u043e\u0444\u0438\u043b\u044c", callback_data="profile:me")],
-        [InlineKeyboardButton(text="Медиа-инструменты", callback_data="media:menu")],
     ]
-    if show_server_address:
-        rows.append([InlineKeyboardButton(text="\u0410\u0434\u0440\u0435\u0441 \u0441\u0435\u0440\u0432\u0435\u0440\u0430", callback_data="server:ip")])
     rows.extend(
         [
             [InlineKeyboardButton(text="Premium", callback_data="premium:menu")],
@@ -88,6 +83,7 @@ def admin_menu() -> InlineKeyboardMarkup:
             ],
             [InlineKeyboardButton(text="Перезагрузка", callback_data="ui:restart")],
             [InlineKeyboardButton(text="Звезды", callback_data="stars:menu")],
+            [InlineKeyboardButton(text="Адрес сервера", callback_data="server:ip")],
             [InlineKeyboardButton(text="Очистить чат", callback_data="ui:clear_chat")],
             [InlineKeyboardButton(text="Помощь", callback_data="ui:help")],
             [InlineKeyboardButton(text="Назад", callback_data="ui:home")],
@@ -125,7 +121,6 @@ def _base_user_menu(chat_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Сообщение за звезды", callback_data=f"paid:chat:{chat_id}")],
             [InlineKeyboardButton(text="Шахта", callback_data=f"user:mine:{chat_id}")],
             [InlineKeyboardButton(text="\u041f\u0440\u043e\u0444\u0438\u043b\u044c", callback_data=f"profile:chat:{chat_id}")],
-            [InlineKeyboardButton(text="Медиа-инструменты", callback_data="media:menu")],
             [InlineKeyboardButton(text="Premium", callback_data="premium:menu")],
             [InlineKeyboardButton(text="Выбрать другую группу", callback_data="user:chats")],
             [InlineKeyboardButton(text="Назад", callback_data="ui:home")],

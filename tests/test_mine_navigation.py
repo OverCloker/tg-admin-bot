@@ -1,10 +1,14 @@
 from app.keyboards import (
+    admin_menu,
     dig_bag_menu,
     dig_register_menu,
+    main_menu,
     miniapp_private_menu,
+    premium_menu,
     user_bag_menu,
     user_dig_mode_menu,
     user_mine_menu,
+    user_menu,
 )
 from app.miniapp_ui import MINI_APP_HTML
 
@@ -53,6 +57,36 @@ def test_private_store_button_opens_shop_view(monkeypatch) -> None:
 
     assert private_button.web_app.url == "https://example.test/miniapp?view=shop"
     assert bag_button.url == "https://t.me/ypominanieBot?startapp=shop_42"
+
+
+def test_home_menu_keeps_tools_in_their_sections() -> None:
+    home_buttons = [button for row in main_menu().inline_keyboard for button in row]
+    home_callbacks = {button.callback_data for button in home_buttons if button.callback_data}
+
+    assert "gold_ticket:buy" not in home_callbacks
+    assert "profile:me" not in home_callbacks
+    assert "media:menu" not in home_callbacks
+    assert "server:ip" not in home_callbacks
+    assert "profile:chat:-1001" in {
+        button.callback_data
+        for row in user_menu(-1001).inline_keyboard
+        for button in row
+        if button.callback_data
+    }
+    assert "media:menu" in {
+        button.callback_data
+        for row in premium_menu().inline_keyboard
+        for button in row
+        if button.callback_data
+    }
+    assert "server:ip" in {
+        button.callback_data
+        for row in admin_menu().inline_keyboard
+        for button in row
+        if button.callback_data
+    }
+
+
 def test_miniapp_handles_deep_links_and_plain_text_results() -> None:
     assert 'telegram.initDataUnsafe.start_param' in MINI_APP_HTML
     assert 'query.get("tgWebAppStartParam")' in MINI_APP_HTML

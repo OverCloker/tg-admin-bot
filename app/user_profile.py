@@ -34,7 +34,7 @@ ACHIEVEMENT_NAMES = {
 
 ITEM_NAMES = {
     "helmet": "Каска",
-    "shovel": "Лопата",
+    "shovel": "Кирка",
     "bucket": "Ведро",
     "insurance": "Страховка",
     "dynamite": "Динамит",
@@ -48,9 +48,9 @@ ITEM_NAMES = {
     "camp": "Переносной лагерь",
     "repair_kit": "Ремонтный набор",
     "mystery_chest": "Таинственный сундук",
-    "shovel_1": "Лопата I",
-    "shovel_2": "Лопата II",
-    "shovel_3": "Лопата III",
+    "shovel_1": "Кирка I",
+    "shovel_2": "Кирка II",
+    "shovel_3": "Кирка III",
     "helmet_1": "Каска I",
     "helmet_2": "Каска II",
     "helmet_3": "Каска III",

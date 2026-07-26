@@ -25,7 +25,7 @@ def test_inventory_uses_display_names_and_only_best_upgrade(tmp_path) -> None:
     assert inventory["Коллекция"]["artifact_badge"]["name"] == "Знак старой бригады"
     assert inventory["Коллекция"]["artifact_set_reward"]["name"] == "Бонус полной коллекции"
     assert "shovel_1" not in inventory["Постоянные улучшения"]
-    assert inventory["Постоянные улучшения"]["shovel_2"]["name"] == "Лопата II"
+    assert inventory["Постоянные улучшения"]["shovel_2"]["name"] == "Кирка II"
     assert inventory["Припасы и билеты"]["golden_ticket"] == {
         "key": "golden_ticket",
         "name": "Золотой билет",

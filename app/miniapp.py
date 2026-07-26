@@ -171,7 +171,7 @@ def _begin(db: Database, game: Any, user: dict[str, Any], now: datetime) -> None
         next_dig = datetime.fromisoformat(player.last_dig_at) + game.user_dig_cooldown(uid)
         if now < next_dig:
             left = max(1, int((next_dig - now).total_seconds()))
-            raise HTTPException(429, f"Лопата отдыхает еще {left // 3600} ч {(left % 3600) // 60} мин.")
+            raise HTTPException(429, f"Кирка отдыхает еще {left // 3600} ч {(left % 3600) // 60} мин.")
     route_key, route = game.dig_route(uid)
     luck = game.refreshed_dig_luck(uid, player.luck, player.last_luck_at, now)
     if luck < game.DIG_LUCK_COST:
@@ -209,7 +209,7 @@ def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) 
                 next_dig = now
         if now < next_dig:
             left = max(1, int((next_dig - now).total_seconds()))
-            raise HTTPException(429, f"Лопата отдыхает еще {left // 3600} ч {(left % 3600) // 60} мин.")
+            raise HTTPException(429, f"Кирка отдыхает еще {left // 3600} ч {(left % 3600) // 60} мин.")
 
     route_key, route = game.dig_route(uid)
     route_name, route_chance, route_coins, route_artifacts, route_collapse, _ = route
@@ -248,7 +248,7 @@ def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) 
         (forced_luck, "Оплаченная раскопка: действует 100 удачи"),
         (forced_depth, "Оплаченная раскопка: гарантированные 10 м"),
         (helmet, "Каска шахтера: +5 удачи"),
-        (shovel, "Крепкая лопата: риск обвала снижен"),
+        (shovel, "Крепкая кирка: риск обвала снижен"),
         (flashlight, "Фонарик: +10% к шансу метра"),
         (bucket, "Премиум ведро: +25% котоинов"),
         (compass, "Компас: маршрут усилен"),
@@ -262,7 +262,7 @@ def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) 
         if used:
             effects.append(text)
     if shovel_bonus:
-        effects.append(f"Постоянная лопата: +{shovel_bonus}% к шансам")
+        effects.append(f"Постоянная кирка: +{shovel_bonus}% к шансам")
     if cart_bonus:
         effects.append(f"Вагонетка: +{cart_bonus}% котоинов")
     if backpack_bonus:

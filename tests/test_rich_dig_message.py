@@ -15,7 +15,7 @@ def test_dig_rich_message_keeps_details_collapsed() -> None:
         streak=21,
         expedition_progress=33,
         expedition_target=50,
-        details=["Сработали эффекты: лопата +6%; вагонетка +35%"],
+        details=["Сработали эффекты: кирка +6%; вагонетка +35%"],
     )
 
     dumped = message.model_dump(mode="json", exclude_none=True)
@@ -32,7 +32,7 @@ def test_dig_rich_message_keeps_details_collapsed() -> None:
         "blocks": [
             {"type": "paragraph", "text": "Маршрут: Глубинная зона. Уровень 50, XP 14580, серия 21."},
             {"type": "paragraph", "text": "Экспедиция группы: 33/50 м."},
-            {"type": "paragraph", "text": "Сработали эффекты: лопата +6%; вагонетка +35%"},
+            {"type": "paragraph", "text": "Сработали эффекты: кирка +6%; вагонетка +35%"},
         ],
         "is_open": False,
     }

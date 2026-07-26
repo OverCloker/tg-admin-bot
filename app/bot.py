@@ -204,13 +204,13 @@ DIG_EXPEDITION_REWARD = 75
 DIG_GOLDEN_TICKET_MAX_CHANCE = 50
 DIG_SHOP_ITEMS = {
     "helmet": ("Каска шахтера", 40, "Старый расходник: +5 удачи на следующую раскопку."),
-    "shovel": ("Крепкая лопата", 70, "Старый расходник: снижает шанс обвала на 50% в следующей раскопке."),
+    "shovel": ("Крепкая кирка", 70, "Старый расходник: снижает шанс обвала на 50% в следующей раскопке."),
     "flashlight": ("Фонарик", 90, "Старый расходник: +10% к шансам следующей раскопки."),
     "bucket": ("Премиум ведро", 100, "Старый расходник: +25% котоинов в следующей раскопке."),
     "prank": ("Подстава", 200, "Старая шуточная шахтерская проверка."),
-    "shovel_1": ("Лопата I", 250, "Постоянно добавляет +2% к шансу пройти каждый метр."),
-    "shovel_2": ("Лопата II", 700, "Улучшает постоянный бонус лопаты до +4%. Требуется Лопата I."),
-    "shovel_3": ("Лопата III", 1500, "Улучшает постоянный бонус лопаты до +6%. Требуется Лопата II."),
+    "shovel_1": ("Кирка I", 250, "Постоянно добавляет +2% к шансу пройти каждый метр."),
+    "shovel_2": ("Кирка II", 700, "Улучшает постоянный бонус кирки до +4%. Требуется Кирка I."),
+    "shovel_3": ("Кирка III", 1500, "Улучшает постоянный бонус кирки до +6%. Требуется Кирка II."),
     "cart": ("Вагонетка", 800, "Постоянно увеличивает награду каждой раскопки на 10%."),
     "helmet_1": ("Каска I", 300, "Постоянно снижает риск обвала на 10%."),
     "helmet_2": ("Каска II", 800, "Снижает риск обвала на 20%. Требуется Каска I."),
@@ -1044,7 +1044,7 @@ def dig_random_event(depth: int, coins: int) -> tuple[int, str | None]:
         return coins - loss, f"Событие: камень упал на ногу. На перевязку ушло <b>{loss}</b> котоинов."
     if event < 78:
         loss = min(coins, 1 + secrets.randbelow(max(1, 2 + depth)))
-        return coins - loss, f"Событие: погнулась ручка лопаты. Мелкий ремонт обошелся в <b>{loss}</b> котоинов."
+        return coins - loss, f"Событие: погнулась ручка кирки. Мелкий ремонт обошелся в <b>{loss}</b> котоинов."
     if event < 90:
         return coins, "Событие: за стеной послышался глухой стук. Ты решил не проверять."
     return coins, "Событие: попалась старая табличка с надписью «Не копать». Разумеется, ты копнул рядом."
@@ -1595,7 +1595,7 @@ def run_private_dig(chat_id: int, user: User) -> DigReply:
                 next_dig = now
         if now < next_dig:
             remaining = int((next_dig - now).total_seconds() // 60) + 1
-            return DigReply(f"Лопата отдыхает. До следующей раскопки: <b>{remaining // 60} ч {remaining % 60} мин</b>.")
+            return DigReply(f"Кирка отдыхает. До следующей раскопки: <b>{remaining // 60} ч {remaining % 60} мин</b>.")
 
     route_key, route_data = dig_route(user.id)
     route_name, route_chance, route_coins, route_artifacts, route_collapse, _ = route_data
@@ -1631,13 +1631,13 @@ def run_private_dig(chat_id: int, user: User) -> DigReply:
     if helmet_used:
         used_effects.append("Каска шахтера: +5 удачи")
     if shovel_used:
-        used_effects.append("Крепкая лопата: риск обвала снижен")
+        used_effects.append("Крепкая кирка: риск обвала снижен")
     if flashlight_used:
         used_effects.append("Фонарик: +10% к шансам раскопки")
     if bucket_used:
         used_effects.append("Премиум ведро: +25% котоинов")
     if shovel_bonus:
-        used_effects.append(f"Постоянная лопата: +{shovel_bonus}% к шансам раскопки")
+        used_effects.append(f"Постоянная кирка: +{shovel_bonus}% к шансам раскопки")
     if cart_bonus:
         used_effects.append(f"Вагонетка: +{cart_bonus}% котоинов")
     if backpack_bonus:
@@ -3119,7 +3119,7 @@ async def can_view_server_address(bot: Bot, user_id: int | None) -> bool:
 
 
 async def main_menu_for_user(bot: Bot, user_id: int | None) -> InlineKeyboardMarkup:
-    return main_menu(show_server_address=await can_view_server_address(bot, user_id))
+    return main_menu()
 
 
 async def chat_is_forum(bot: Bot, chat_id: int) -> bool:
@@ -3631,7 +3631,7 @@ async def cb_server_ip(callback: CallbackQuery) -> None:
 
     await callback.answer("Проверяю адрес...")
     public_ip = await detect_public_ip()
-    await safe_edit(callback, server_address_text(public_ip), reply_markup=await main_menu_for_user(callback.bot, callback.from_user.id))
+    await safe_edit(callback, server_address_text(public_ip), reply_markup=admin_menu())
 
 
 @router.callback_query(F.data.startswith("profile:chat:"))
@@ -8059,7 +8059,7 @@ async def dig_command(message: Message) -> None:
             remaining = int((next_dig - now).total_seconds() // 60) + 1
             hours = remaining // 60
             minutes = remaining % 60
-            await temporary_reply(message, f"Лопата отдыхает. До следующей раскопки: <b>{hours} ч {minutes} мин</b>.")
+            await temporary_reply(message, f"Кирка отдыхает. До следующей раскопки: <b>{hours} ч {minutes} мин</b>.")
             return
 
     luck_before = refreshed_dig_luck(message.from_user.id, player.luck, player.last_luck_at, now)
@@ -8099,13 +8099,13 @@ async def dig_command(message: Message) -> None:
     if helmet_used:
         used_effects.append("Каска шахтера: +5 удачи")
     if shovel_used:
-        used_effects.append("Крепкая лопата: риск обвала снижен")
+        used_effects.append("Крепкая кирка: риск обвала снижен")
     if flashlight_used:
         used_effects.append("Фонарик: +10% к шансам раскопки")
     if bucket_used:
         used_effects.append("Премиум ведро: +25% котоинов")
     if shovel_bonus:
-        used_effects.append(f"Постоянная лопата: +{shovel_bonus}% к шансам раскопки")
+        used_effects.append(f"Постоянная кирка: +{shovel_bonus}% к шансам раскопки")
     if cart_bonus:
         used_effects.append(f"Вагонетка: +{cart_bonus}% котоинов")
     if backpack_bonus:
