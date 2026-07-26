@@ -27,7 +27,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, LabeledPrice, MenuButtonWebApp, Message, MessageReactionUpdated, PreCheckoutQuery, SuccessfulPayment, User, WebAppInfo
+from aiogram.types import CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, InputRichBlockDetails, InputRichBlockParagraph, InputRichBlockTable, InputRichMessage, LabeledPrice, MenuButtonWebApp, Message, MessageReactionUpdated, PreCheckoutQuery, RichBlockTableCell, SuccessfulPayment, User, WebAppInfo
 
 from .config import load_config
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
@@ -1450,6 +1450,85 @@ def apply_premium_coin_bonus(user_id: int, coins: int, used_effects: list[str]) 
     return max(1, int(coins * multiplier + 0.9999))
 
 
+@dataclass
+class DigReply:
+    text: str
+    rich_message: InputRichMessage | None = None
+
+
+def rich_cell(text: str, *, header: bool = False, align: str = "left") -> RichBlockTableCell:
+    return RichBlockTableCell(
+        align=align,
+        valign="middle",
+        text=text,
+        is_header=header,
+    )
+
+
+def paragraph(text: str) -> InputRichBlockParagraph:
+    return InputRichBlockParagraph(text=text)
+
+
+def build_dig_rich_message(
+    *,
+    player_name: str,
+    summary: str,
+    dug: int,
+    coins: int,
+    total_depth: int,
+    luck_text: str,
+    route_name: str,
+    level: int,
+    xp: int,
+    streak: int,
+    expedition_progress: int,
+    expedition_target: int,
+    details: list[str],
+) -> InputRichMessage:
+    detail_blocks = [
+        paragraph(f"Маршрут: {route_name}. Уровень {level}, XP {xp}, серия {streak}."),
+        paragraph(f"Экспедиция группы: {expedition_progress}/{expedition_target} м."),
+    ]
+    detail_blocks.extend(paragraph(item) for item in details if item)
+    return InputRichMessage(
+        blocks=[
+            paragraph(f"⛏ {player_name}"),
+            paragraph(summary),
+            InputRichBlockTable(
+                cells=[
+                    [
+                        rich_cell("Глубина", header=True),
+                        rich_cell("Котоины", header=True),
+                        rich_cell("Удача", header=True),
+                    ],
+                    [
+                        rich_cell(f"+{dug} м", align="center"),
+                        rich_cell(f"+{coins}", align="center"),
+                        rich_cell(luck_text, align="center"),
+                    ],
+                    [
+                        rich_cell("Всего", header=True),
+                        rich_cell("Серия", header=True),
+                        rich_cell("Экспед.", header=True),
+                    ],
+                    [
+                        rich_cell(f"{total_depth} м", align="center"),
+                        rich_cell(str(streak), align="center"),
+                        rich_cell(f"{expedition_progress}/{expedition_target} м", align="center"),
+                    ],
+                ],
+                is_bordered=True,
+                is_striped=False,
+            ),
+            InputRichBlockDetails(
+                summary="Подробнее ниже",
+                blocks=detail_blocks,
+                is_open=False,
+            ),
+        ]
+    )
+
+
 def dig_bag_text(chat_id: int, user_id: int) -> str | None:
     player = db.get_dig_player(chat_id, user_id)
     if player is None:
@@ -1495,12 +1574,12 @@ def consume_star_dig(chat_id: int, user_id: int, items: dict[str, int]) -> tuple
     return False, False, False
 
 
-def run_private_dig(chat_id: int, user: User) -> str:
+def run_private_dig(chat_id: int, user: User) -> DigReply:
     player = db.get_dig_player(chat_id, user.id)
     if player is None:
-        return "Ты еще не зарегистрирован в раскопках. Сначала напиши <code>копай</code> внутри выбранной группы и нажми кнопку регистрации."
+        return DigReply("Ты еще не зарегистрирован в раскопках. Сначала напиши <code>копай</code> внутри выбранной группы и нажми кнопку регистрации.")
     if db.get_dig_session(user.id):
-        return "У тебя уже идет пошаговая вылазка в шахте Mini App. Продолжи ее там или заверши текущую вылазку."
+        return DigReply("У тебя уже идет пошаговая вылазка в шахте Mini App. Продолжи ее там или заверши текущую вылазку.")
 
     now = datetime.now(timezone.utc)
     items = dig_items_map(chat_id, user.id)
@@ -1516,7 +1595,7 @@ def run_private_dig(chat_id: int, user: User) -> str:
                 next_dig = now
         if now < next_dig:
             remaining = int((next_dig - now).total_seconds() // 60) + 1
-            return f"Лопата отдыхает. До следующей раскопки: <b>{remaining // 60} ч {remaining % 60} мин</b>."
+            return DigReply(f"Лопата отдыхает. До следующей раскопки: <b>{remaining // 60} ч {remaining % 60} мин</b>.")
 
     route_key, route_data = dig_route(user.id)
     route_name, route_chance, route_coins, route_artifacts, route_collapse, _ = route_data
@@ -1701,30 +1780,46 @@ def run_private_dig(chat_id: int, user: User) -> str:
     expedition_rewarded = db.reward_dig_expedition(chat_id, today, DIG_EXPEDITION_REWARD) if expedition["completed"] else []
 
     achievements = check_dig_achievements(chat_id, user.id, player, dug, coins, collapse_depth, stopped_by_stone)
-    lines = [f"<b>{escape(dig_display_name(chat_id, user.id, user.username, user.full_name))} копает...</b>"]
+    display_name = dig_display_name(chat_id, user.id, user.username, user.full_name)
+    lines = [f"<b>{escape(display_name)} копает...</b>"]
     if stopped_by_stone and dug == 0 and collapse_depth == 0 and not insurance_used:
+        summary = "Ты наткнулся на большой камень, попробуй в следующий раз."
         lines.append("Ты наткнулся на большой камень, попробуй в следующий раз.")
     elif stopped_by_stone:
+        summary = f"Камень остановил раскопку. Удалось пройти {dug} м."
         lines.append(f"Камень остановил раскопку. Удалось пройти <b>{dug}</b> м.")
     else:
+        summary = f"Редкая удача: пройдено {dug} м за вылазку."
         lines.append(f"Редкая удача: ты прошел все <b>{dug}</b> м за вылазку.")
+    details = []
     if collapse_depth:
+        details.append(f"Обвал срезал {collapse_depth} м прогресса этой раскопки.")
         lines.append(f"Обвал срезал <b>{collapse_depth}</b> м прогресса этой раскопки.")
     if event_text:
+        details.append(event_text)
         lines.append(event_text)
     if artifact_text:
+        details.append(artifact_text)
         lines.append(artifact_text)
     lines.append(f"Маршрут: <b>{escape(route_name)}</b>. Уровень: <b>{progress['level']}</b>, XP: <b>{progress['xp']}</b>, серия: <b>{progress['streak']}</b>.")
     lines.append(f"Экспедиция группы: <b>{expedition['progress']}/{expedition['target']}</b> м.")
     if contract_updates:
         lines.append("\n<b>Контракты:</b>")
         lines.extend(escape(item) for item in contract_updates)
+        details.append("Контракты: " + "; ".join(contract_updates))
     if streak_rewards:
         lines.append("\n<b>Награды серии:</b>")
         lines.extend(escape(item) for item in streak_rewards)
+        details.append("Награды серии: " + "; ".join(streak_rewards))
     if used_effects:
         lines.append("\n<b>Сработали эффекты:</b>")
         lines.extend(escape(effect) for effect in used_effects)
+        details.append("Сработали эффекты: " + "; ".join(used_effects))
+    luck_text = (
+        f"100/100; обычная {luck_before}/100"
+        if forced_luck
+        else f"{luck_before} → {luck_after}"
+    )
     lines.extend(
         [
             f"Получено: <b>{coins}</b> котоинов.",
@@ -1739,7 +1834,23 @@ def run_private_dig(chat_id: int, user: User) -> str:
     if achievements:
         lines.append("\n<b>Новые достижения:</b>")
         lines.extend(escape(item) for item in achievements)
-    return "\n".join(lines)
+        details.append("Новые достижения: " + "; ".join(achievements))
+    rich_message = build_dig_rich_message(
+        player_name=display_name,
+        summary=summary,
+        dug=dug,
+        coins=coins,
+        total_depth=player.total_depth + dug,
+        luck_text=luck_text,
+        route_name=route_name,
+        level=int(progress["level"]),
+        xp=int(progress["xp"]),
+        streak=int(progress["streak"]),
+        expedition_progress=int(expedition["progress"]),
+        expedition_target=int(expedition["target"]),
+        details=details,
+    )
+    return DigReply("\n".join(lines), rich_message)
 
 
 def dig_star_payload(action: str, user_id: int, chat_id: int) -> str:
@@ -4044,11 +4155,28 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
         await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
         return
 
-    await safe_edit(
-        callback,
-        run_private_dig(chat_id, callback.from_user),
-        reply_markup=user_mine_menu(chat_id, owner_id, show_back=False),
-    )
+    result = run_private_dig(chat_id, callback.from_user)
+    reply_markup = user_mine_menu(chat_id, owner_id, show_back=False)
+    if result.rich_message and callback.message:
+        try:
+            await callback.bot.send_rich_message(
+                chat_id=callback.message.chat.id,
+                rich_message=result.rich_message,
+                message_thread_id=getattr(callback.message, "message_thread_id", None),
+                reply_markup=reply_markup,
+            )
+            deleted = False
+            try:
+                await callback.message.delete()
+                deleted = True
+            except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound):
+                deleted = False
+            if not deleted:
+                await safe_edit(callback, "Результат раскопки ниже.", reply_markup=None)
+        except (TelegramBadRequest, TelegramForbiddenError):
+            await safe_edit(callback, result.text, reply_markup=reply_markup)
+    else:
+        await safe_edit(callback, result.text, reply_markup=reply_markup)
     await callback.answer()
 
 
