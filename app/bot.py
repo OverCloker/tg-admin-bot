@@ -916,6 +916,32 @@ def parse_roll_mute_payload(text: str | None) -> tuple[int, int] | None:
     return mute_minutes, cooldown_minutes
 
 
+def parse_super_mute_payload(text: str | None) -> tuple[str | None, str] | None:
+    if not text:
+        return None
+    parts = text.strip().split(maxsplit=2)
+    if not parts:
+        return None
+    command = parts[0].casefold().lstrip("/")
+    if command == "супермут":
+        username = None
+        rest = parts[1] if len(parts) > 1 else ""
+        if rest.startswith("@"):
+            username = normalize_username(rest)
+            rest = parts[2] if len(parts) > 2 else ""
+        return username, rest.strip().lstrip("-").strip()
+    if parts[0].startswith("@") and len(parts) >= 2 and parts[1].casefold().lstrip("/") == "супермут":
+        return normalize_username(parts[0]), (parts[2] if len(parts) > 2 else "").strip().lstrip("-").strip()
+    return None
+
+
+def normalize_dig_tag(text: str | None) -> str:
+    tag = re.sub(r"\s+", " ", (text or "").strip())
+    if len(tag) > 16:
+        tag = tag[:16].rstrip()
+    return tag
+
+
 def parse_quiet_payload(text: str | None) -> tuple[str | None, int | None, str]:
     if not text:
         return None, None, ""
@@ -1353,7 +1379,9 @@ def find_dig_artifact(
 def dig_display_name(chat_id: int, user_id: int, username: str | None, full_name: str) -> str:
     name = dig_player_name(username, full_name)
     items = dig_items_map(chat_id, user_id)
-    return f"{name}{dig_title_suffix(items)}"
+    tag = db.get_dig_player_tag(user_id)
+    tag_suffix = f" «{tag}»" if tag else ""
+    return f"{name}{tag_suffix}{dig_title_suffix(items)}"
 
 
 def dig_title_suffix(items: dict[str, int]) -> str:
@@ -8283,6 +8311,99 @@ async def dig_weekly_rank_top(message: Message) -> None:
 
     await remember_sender(message)
     await temporary_reply(message, dig_weekly_rank_top_text())
+
+
+@router.message(F.text.regexp(re.compile(r"^\+кличка(?:\s+.+)?$", re.IGNORECASE)))
+async def set_super_tag(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+
+    await remember_sender(message)
+    player = db.get_dig_player(0, message.from_user.id)
+    if not player:
+        await safe_reply(message, "Сначала зарегистрируйся в шахте: <code>копай</code>.")
+        return
+
+    raw_tag = re.sub(r"^\+кличка", "", message.text or "", flags=re.IGNORECASE).strip()
+    tag = normalize_dig_tag(raw_tag)
+    if not tag:
+        await safe_reply(message, "Формат: <code>+кличка Твой тег</code>. До 16 символов.")
+        return
+    if db.get_dig_item_quantity(0, message.from_user.id, "super_tag") <= 0:
+        await safe_reply(message, "В сумке нет права выбрать тег. Его можно выбить в сундуке супер-игры 9×9.")
+        return
+    if not db.consume_dig_item(0, message.from_user.id, "super_tag"):
+        await safe_reply(message, "Право на тег уже использовано или закончилось.")
+        return
+
+    db.set_dig_player_tag(message.from_user.id, tag)
+    await safe_reply(message, f"Кличка сохранена: <b>{escape(tag)}</b>. Теперь она видна в имени шахты.")
+
+
+@router.message(F.text.regexp(re.compile(r"^(/?супермут(?:\s+@[A-Za-z0-9_]{5,32})?(?:\s+.*)?|@[A-Za-z0-9_]{5,32}\s+/?супермут(?:\s+.*)?)$", re.IGNORECASE)))
+async def super_mute_user(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+
+    await remember_sender(message)
+    parsed = parse_super_mute_payload(message.text)
+    if not parsed:
+        await safe_reply(message, "Формат: ответом на сообщение <code>супермут причина</code> или <code>супермут @username причина</code>.")
+        return
+    username, reason = parsed
+    if db.get_dig_item_quantity(0, message.from_user.id, "super_mute30") <= 0:
+        await safe_reply(message, "В сумке нет права на супер-мут. Его можно выбить в сундуке супер-игры 9×9.")
+        return
+
+    target_id, target_name, error = await resolve_command_target(message, username)
+    if error:
+        await safe_reply(message, error)
+        return
+    if not target_id or not target_name:
+        return
+    if target_id == message.from_user.id:
+        await safe_reply(message, "Себя супер-мутить нельзя. Даже ради науки.")
+        return
+    if not await is_valid_roll_mute_target(message.bot, message.chat.id, target_id):
+        await safe_reply(message, "Этого пользователя нельзя замутить: он не активен в чате, бот или администратор.")
+        return
+
+    if not db.consume_dig_item(0, message.from_user.id, "super_mute30"):
+        await safe_reply(message, "Право на супер-мут уже использовано или закончилось.")
+        return
+
+    until_date = datetime.now(timezone.utc) + timedelta(minutes=30)
+    try:
+        await message.bot.restrict_chat_member(
+            chat_id=message.chat.id,
+            user_id=target_id,
+            permissions=ChatPermissions(
+                can_send_messages=False,
+                can_send_audios=False,
+                can_send_documents=False,
+                can_send_photos=False,
+                can_send_videos=False,
+                can_send_video_notes=False,
+                can_send_voice_notes=False,
+                can_send_polls=False,
+                can_send_other_messages=False,
+                can_add_web_page_previews=False,
+                can_react_to_messages=False,
+            ),
+            until_date=until_date,
+            use_independent_chat_permissions=True,
+        )
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        db.add_dig_item(0, message.from_user.id, "super_mute30", 1)
+        await safe_reply(
+            message,
+            "Не получилось выдать супер-мут. Право вернулось в сумку.\n"
+            f"<code>{escape(str(exc))}</code>",
+        )
+        return
+
+    reason_line = f"\nПричина: {escape(reason)}" if reason else ""
+    await safe_reply(message, f"{escape(target_name)} получает супер-мут на <b>30</b> мин.{reason_line}")
 
 
 @router.message(F.text.regexp(re.compile(r"^roll\s+mute$", re.IGNORECASE)))

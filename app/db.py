@@ -804,6 +804,12 @@ class Database:
                 foreign key (chat_id, user_id) references dig_players(chat_id, user_id) on delete cascade
             );
 
+            create table if not exists dig_player_tags (
+                user_id integer primary key,
+                tag text not null,
+                updated_at text not null
+            );
+
             create table if not exists dig_achievements (
                 chat_id integer not null,
                 user_id integer not null,
@@ -3465,6 +3471,26 @@ class Database:
             (chat_id, user_id),
         ).fetchall()
         return [DigItem(**dict(row)) for row in rows]
+
+    def get_dig_player_tag(self, user_id: int) -> str | None:
+        row = self._conn.execute(
+            "select tag from dig_player_tags where user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+        return str(row["tag"]) if row else None
+
+    def set_dig_player_tag(self, user_id: int, tag: str) -> None:
+        self._conn.execute(
+            """
+            insert into dig_player_tags (user_id, tag, updated_at)
+            values (?, ?, ?)
+            on conflict(user_id) do update set
+                tag = excluded.tag,
+                updated_at = excluded.updated_at
+            """,
+            (int(user_id), tag, utc_now()),
+        )
+        self._conn.commit()
 
     def get_dig_item_quantity(self, chat_id: int, user_id: int, item_key: str) -> int:
         chat_id = DIG_GLOBAL_CHAT_ID

@@ -50,3 +50,17 @@ def test_shop_requirement_is_human_readable(tmp_path) -> None:
     }
     assert products["helmet_2"]["requirement"] == "helmet_1"
     assert products["helmet_2"]["requirementName"] == "Каска I"
+
+
+def test_dig_player_tag_can_be_saved(tmp_path) -> None:
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+
+    try:
+        assert db.get_dig_player_tag(42) is None
+        db.set_dig_player_tag(42, "Lucky Miner")
+        assert db.get_dig_player_tag(42) == "Lucky Miner"
+        db.set_dig_player_tag(42, "Deep Baron")
+        assert db.get_dig_player_tag(42) == "Deep Baron"
+    finally:
+        db.close()

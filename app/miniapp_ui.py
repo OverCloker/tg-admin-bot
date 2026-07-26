@@ -1103,6 +1103,8 @@ MINI_APP_HTML = r"""<!doctype html>
               <div class="inventory-row-main">
                 <span>${escapeHtml(item.name)}</span>
                 ${item.key === "tea" ? `<button class="btn inventory-use" onclick="useShopItem('tea')">Использовать</button>` : ""}
+                ${item.key === "super_mute30" ? `<button class="btn inventory-use" onclick="alert('В чате ответь на сообщение: супермут причина\\nИли напиши: супермут @username причина')">Как выдать</button>` : ""}
+                ${item.key === "super_tag" ? `<button class="btn inventory-use" onclick="alert('В чате напиши: +кличка Твой тег\\nЛимит: 16 символов')">Как выбрать</button>` : ""}
               </div>
               <b>× ${item.quantity}</b>
             </div>`).join("");

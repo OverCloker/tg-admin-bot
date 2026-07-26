@@ -142,7 +142,7 @@ def _state(db: Database, user_id: int) -> dict[str, Any]:
     rank_key = next((key for key, _ in game.DIG_RANKS if items.get(key, 0) > 0), None)
     rank_level = {"rank_1": 1, "rank_2": 2, "rank_3": 3, "rank_4": 4}.get(rank_key, 0)
     return {"registered": True, "userId": user_id,
-            "name": game.dig_player_name(player.username, player.full_name),
+            "name": game.dig_display_name(0, player.user_id, player.username, player.full_name),
             "coins": player.coins,
             "luck": game.refreshed_dig_luck(user_id, player.luck, player.last_luck_at, now),
             "totalDepth": player.total_depth, "record": player.best_session_depth,
