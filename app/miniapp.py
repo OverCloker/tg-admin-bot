@@ -687,6 +687,7 @@ def miniapp_shop(x_telegram_init_data: str | None = Header(default=None, alias="
 
 @router.post("/miniapp/shop/buy")
 def miniapp_shop_buy(
+    response: Response,
     payload: ShopPurchase,
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
@@ -718,6 +719,10 @@ def miniapp_shop_buy(
                 raise HTTPException(400, "Это постоянное улучшение уже куплено.")
             if status == "no_coins":
                 raise HTTPException(400, "Не хватает котоинов.")
+            response.headers["X-Miniapp-Shop-Item-Key"] = payload.item_key
+            response.headers["X-Miniapp-Shop-Item-Quantity"] = str(
+                db.get_dig_item_quantity(0, user["id"], payload.item_key)
+            )
             return {"ok": True, "item": payload.item_key, "state": _state(db, user["id"]), "shop": _shop_catalog(db, user["id"])}
         finally:
             db.close()
@@ -1063,6 +1068,7 @@ async def super_game_invoice(x_telegram_init_data: str | None = Header(default=N
 
 @router.post("/miniapp/super-game/pick")
 def super_game_pick(
+    response: Response,
     payload: SuperTicketPick,
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
@@ -1097,6 +1103,7 @@ def super_game_pick(
             if attempts_left <= 0:
                 db.clear_super_ticket_game(user["id"])
                 next_game = None
+                response.headers["X-Miniapp-Super-Game-Finished"] = "1"
             else:
                 db.save_super_ticket_game(user["id"], game["cells_json"], json.dumps(opened), attempts_left, game["created_at"])
                 next_game = _super_ticket_public(db, user["id"])

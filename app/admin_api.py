@@ -3121,6 +3121,10 @@ def access_session(token: str) -> dict[str, Any] | None:
 def api_audit_action(method: str, path: str) -> str:
     if path == "/miniapp/mine/dig":
         return "Ручная раскопка завершена"
+    if path == "/miniapp/super-game/pick":
+        return "Супер-игра 9×9 завершена"
+    if path == "/miniapp/shop/buy":
+        return "Покупка в Mini App"
     if "/triggers" in path:
         return "Удалил триггер" if method == "DELETE" else "Добавил или изменил триггер"
     if "/replies" in path:
@@ -3148,6 +3152,26 @@ def api_audit_action(method: str, path: str) -> str:
         if fragment in path:
             return label
     return f"{method} в панели"
+
+
+def miniapp_shop_purchase_details(response) -> str | None:
+    item_key = (response.headers.get("X-Miniapp-Shop-Item-Key") or "").strip()
+    if not item_key:
+        return None
+    try:
+        from . import bot as game
+
+        item = game.DIG_SHOP_ITEMS.get(item_key)
+        item_name = item[0] if item else item_key
+    except Exception:
+        logging.exception("Could not resolve Mini App shop item name for audit")
+        item_name = item_key
+    try:
+        quantity = int(response.headers.get("X-Miniapp-Shop-Item-Quantity") or "1")
+    except ValueError:
+        quantity = 1
+    suffix = f" x{quantity}" if quantity > 1 else ""
+    return f"купил {item_name}{suffix}"
 
 
 def miniapp_actor_from_request(request: Request) -> tuple[int | None, str | None] | None:
@@ -3213,7 +3237,11 @@ async def audit_api_request(request: Request, call_next):
                 audit_details = f"{request.url.path} · ключ: {label}"
     if request.url.path == "/miniapp/mine/dig" and response.headers.get("X-Miniapp-Dig-Finished") != "1":
         return response
+    if request.url.path == "/miniapp/super-game/pick" and response.headers.get("X-Miniapp-Super-Game-Finished") != "1":
+        return response
     action = api_audit_action(request.method, request.url.path)
+    if request.url.path == "/miniapp/shop/buy":
+        audit_details = miniapp_shop_purchase_details(response) or audit_details
     chat_title = None
     try:
         with open_db() as db:
