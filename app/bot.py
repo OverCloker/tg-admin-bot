@@ -128,6 +128,10 @@ ALERTS_LOCATION_UID = "46"
 ALERTS_LOCATION_TITLE = "Криворізький район"
 ALERTS_POLL_INTERVAL_SECONDS = 60
 GIVEAWAY_TOP_RE = re.compile(r"^топ\s+пидоров[?!.]?$", re.IGNORECASE)
+SECRET_MESSAGE_RE = re.compile(
+    r"^\s*(?:лс|личка)(?:\s+(@[A-Za-z0-9_]{5,32}))?(?:\s+(.+))?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
 EMOJI_BASE_RE = (
     r"(?:[\u00a9\u00ae\u203c\u2049\u2122\u2139\u2194-\u21ff\u2300-\u23ff"
     r"\u24c2\u25aa-\u27bf\u2934\u2935\u2b00-\u2bff\u3030\u303d\u3297\u3299]"
@@ -2652,6 +2656,21 @@ async def temporary_reply(message: Message, text: str, delay_seconds: int = 60, 
     asyncio.create_task(delete_message_later(message.bot, sent.chat.id, sent.message_id, delay_seconds))
 
 
+async def temporary_chat_notice(message: Message, text: str, delay_seconds: int = 60, **kwargs) -> None:
+    try:
+        sent = await message.bot.send_message(message.chat.id, text, **kwargs)
+    except TelegramRetryAfter as exc:
+        await asyncio.sleep(int(getattr(exc, "retry_after", 3)) + 1)
+        try:
+            sent = await message.bot.send_message(message.chat.id, text, **kwargs)
+        except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+            return
+    except (TelegramBadRequest, TelegramForbiddenError):
+        return
+
+    asyncio.create_task(delete_message_later(message.bot, sent.chat.id, sent.message_id, delay_seconds))
+
+
 async def safe_reply_chunks(message: Message, lines: list[str], limit: int = 3800, **kwargs) -> None:
     chunk: list[str] = []
     size = 0
@@ -3491,6 +3510,18 @@ def social_profile_markup(chat_id: int, viewer_id: int, target_id: int) -> Inlin
     )
 
 
+def secret_message_markup(message_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Открыть личное сообщение", callback_data=f"sec:open:{message_id}")]
+        ]
+    )
+
+
+def has_secret_message_compose(message: Message) -> bool:
+    return bool(message.from_user and db.get_secret_message_compose_for_sender(message.from_user.id))
+
+
 async def active_social_user(bot: Bot, chat_id: int, user_id: int) -> User | None:
     member = await get_active_chat_member(bot, chat_id, user_id)
     if member is None or is_deleted_or_empty_user(member.user):
@@ -3689,6 +3720,46 @@ async def cb_social_friend_list(callback: CallbackQuery) -> None:
         text = "\n".join(lines)
     await temporary_reply(callback.message, text, disable_web_page_preview=True)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("sec:open:"))
+async def cb_secret_message_open(callback: CallbackQuery) -> None:
+    message_id = (callback.data or "").rsplit(":", 1)[-1]
+    secret_message = db.get_secret_message(message_id)
+    if secret_message is None:
+        await callback.answer("Сообщение устарело или удалено.", show_alert=True)
+        return
+    if callback.from_user.id != secret_message.target_id:
+        await callback.answer("Это личное сообщение адресовано не тебе.", show_alert=True)
+        return
+
+    sender = f"@{secret_message.sender_username}" if secret_message.sender_username else secret_message.sender_name
+    chat_title = callback.message.chat.title if callback.message and callback.message.chat else "чате"
+    try:
+        await callback.bot.send_message(
+            callback.from_user.id,
+            (
+                f"<b>Скрытое сообщение</b>\n"
+                f"От: <b>{escape(sender)}</b>\n"
+                f"Чат: <b>{escape(chat_title or 'чат')}</b>\n\n"
+                f"{escape(secret_message.text)}"
+            ),
+            disable_web_page_preview=True,
+        )
+    except (TelegramBadRequest, TelegramForbiddenError):
+        await callback.answer("Открой личный чат с ботом и нажми /start, потом нажми кнопку снова.", show_alert=True)
+        return
+
+    db.mark_secret_message_delivered(message_id)
+    if callback.message:
+        try:
+            await callback.message.edit_text(
+                f"{escape(secret_message.target_name)}, скрытое сообщение доставлено в личку.",
+                reply_markup=None,
+            )
+        except (TelegramBadRequest, TelegramForbiddenError):
+            pass
+    await callback.answer("Отправил в личку.")
 
 
 @router.callback_query(F.data.regexp(re.compile(r"^soc:(?:fq|fr|fa|fd|pq|pa|pd|pe|px):")))
@@ -6475,6 +6546,108 @@ async def profile_command(message: Message) -> None:
 @router.message(F.chat.type == "private", F.text.casefold() == "профиль")
 async def profile_private_ru(message: Message) -> None:
     await profile_command(message)
+
+
+@router.message(F.chat.type.in_(SUPPORTED_CHAT_TYPES), F.text.regexp(SECRET_MESSAGE_RE))
+async def secret_message_group_command(message: Message) -> None:
+    if not message.from_user or not message.text:
+        return
+
+    match = SECRET_MESSAGE_RE.match(message.text)
+    if not match:
+        return
+    username = normalize_username(match.group(1)) if match.group(1) else None
+    leaked_text = (match.group(2) or "").strip()
+
+    try:
+        await message.delete()
+    except (TelegramBadRequest, TelegramForbiddenError):
+        pass
+
+    if leaked_text:
+        await temporary_chat_notice(
+            message,
+            "Чтобы скрытый текст не попал в логи группы, пиши только <code>лс @ник</code> или ответом <code>лс</code>. Сам текст бот попросит в личке.",
+            delay_seconds=20,
+        )
+        return
+
+    if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.is_bot:
+        await temporary_chat_notice(message, "Ботам скрытые сообщения не отправляем.", delay_seconds=20)
+        return
+
+    target_id, target_name, error = await resolve_command_target(message, username)
+    if error or target_id is None or target_name is None:
+        await temporary_chat_notice(message, error or "Не удалось определить адресата.", delay_seconds=20)
+        return
+    if target_id == message.from_user.id:
+        await temporary_chat_notice(message, "Себе можно написать и без посредников, но ход красивый.", delay_seconds=20)
+        return
+
+    compose_id = secrets.token_hex(8)
+    try:
+        await message.bot.send_message(
+            message.from_user.id,
+            (
+                f"Напиши скрытое сообщение для <b>{escape(target_name)}</b>.\n"
+                "Я не буду публиковать текст в группе — там появится только кнопка для адресата.\n\n"
+                "Чтобы отменить, напиши <code>отмена</code>."
+            ),
+            disable_web_page_preview=True,
+        )
+    except (TelegramBadRequest, TelegramForbiddenError):
+        await temporary_chat_notice(
+            message,
+            "Открой личный чат с ботом и нажми /start, потом повтори <code>лс</code> в группе.",
+            delay_seconds=25,
+        )
+        return
+
+    db.save_secret_message_compose(compose_id, message.from_user.id, message.chat.id, target_id, target_name)
+    await temporary_chat_notice(message, "Ок, текст жду в личке. В группе его не будет.", delay_seconds=15)
+
+
+@router.message(F.chat.type == "private", F.text, has_secret_message_compose)
+async def secret_message_private_compose(message: Message) -> None:
+    if not message.from_user or not message.text:
+        return
+    compose = db.get_secret_message_compose_for_sender(message.from_user.id)
+    if compose is None:
+        return
+    text = message.text.strip()
+    if text.casefold() in {"отмена", "cancel", "/cancel"}:
+        db.delete_secret_message_compose(compose.compose_id)
+        await message.answer("Скрытое сообщение отменено.")
+        return
+    if len(text) > 2000:
+        await message.answer("Слишком длинно. Скрытое сообщение — до 2000 символов.")
+        return
+
+    message_id = secrets.token_hex(8)
+    db.save_secret_message(
+        message_id=message_id,
+        chat_id=compose.chat_id,
+        sender_id=message.from_user.id,
+        sender_username=message.from_user.username,
+        sender_name=message.from_user.full_name,
+        target_id=compose.target_id,
+        target_name=compose.target_name,
+        text=text,
+    )
+    db.delete_secret_message_compose(compose.compose_id)
+    sender_name = f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name
+    try:
+        await message.bot.send_message(
+            compose.chat_id,
+            f"{escape(compose.target_name)}, тебе скрытое сообщение от <b>{escape(sender_name)}</b>.",
+            reply_markup=secret_message_markup(message_id),
+            disable_web_page_preview=True,
+        )
+    except (TelegramBadRequest, TelegramForbiddenError):
+        db.delete_secret_message(message_id)
+        await message.answer("Не получилось отправить кнопку в группу. Сообщение отменено.")
+        return
+    await message.answer("Готово. В группе появилась кнопка для адресата, текст там не опубликован.")
 
 
 @router.message(Command("media"))

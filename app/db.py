@@ -148,6 +148,30 @@ class PendingStarMessage:
 
 
 @dataclass(frozen=True)
+class SecretMessageCompose:
+    compose_id: str
+    sender_id: int
+    chat_id: int
+    target_id: int
+    target_name: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class SecretMessage:
+    message_id: str
+    chat_id: int
+    sender_id: int
+    sender_username: str | None
+    sender_name: str
+    target_id: int
+    target_name: str
+    text: str
+    created_at: str
+    delivered_at: str | None
+
+
+@dataclass(frozen=True)
 class UserLoginRequest:
     login_id: str
     secret_hash: str
@@ -603,6 +627,28 @@ class Database:
                 text text not null,
                 created_at text not null,
                 foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists secret_message_composes (
+                compose_id text primary key,
+                sender_id integer not null,
+                chat_id integer not null,
+                target_id integer not null,
+                target_name text not null,
+                created_at text not null
+            );
+
+            create table if not exists secret_messages (
+                message_id text primary key,
+                chat_id integer not null,
+                sender_id integer not null,
+                sender_username text,
+                sender_name text not null,
+                target_id integer not null,
+                target_name text not null,
+                text text not null,
+                created_at text not null,
+                delivered_at text
             );
 
             create table if not exists user_login_requests (
@@ -2540,6 +2586,84 @@ class Database:
 
     def delete_pending_star_message(self, payload: str) -> None:
         self._conn.execute("delete from pending_star_messages where payload = ?", (payload,))
+        self._conn.commit()
+
+    def save_secret_message_compose(
+        self,
+        compose_id: str,
+        sender_id: int,
+        chat_id: int,
+        target_id: int,
+        target_name: str,
+    ) -> None:
+        self._conn.execute(
+            """
+            insert or replace into secret_message_composes
+                (compose_id, sender_id, chat_id, target_id, target_name, created_at)
+            values (?, ?, ?, ?, ?, ?)
+            """,
+            (compose_id, sender_id, chat_id, target_id, target_name, utc_now()),
+        )
+        self._conn.commit()
+
+    def get_secret_message_compose_for_sender(self, sender_id: int) -> SecretMessageCompose | None:
+        row = self._conn.execute(
+            """
+            select compose_id, sender_id, chat_id, target_id, target_name, created_at
+            from secret_message_composes
+            where sender_id = ?
+            order by created_at desc
+            limit 1
+            """,
+            (sender_id,),
+        ).fetchone()
+        return SecretMessageCompose(**dict(row)) if row else None
+
+    def delete_secret_message_compose(self, compose_id: str) -> None:
+        self._conn.execute("delete from secret_message_composes where compose_id = ?", (compose_id,))
+        self._conn.commit()
+
+    def save_secret_message(
+        self,
+        message_id: str,
+        chat_id: int,
+        sender_id: int,
+        sender_username: str | None,
+        sender_name: str,
+        target_id: int,
+        target_name: str,
+        text: str,
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into secret_messages
+                (message_id, chat_id, sender_id, sender_username, sender_name, target_id, target_name, text, created_at, delivered_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, null)
+            """,
+            (message_id, chat_id, sender_id, sender_username, sender_name, target_id, target_name, text, utc_now()),
+        )
+        self._conn.commit()
+
+    def get_secret_message(self, message_id: str) -> SecretMessage | None:
+        row = self._conn.execute(
+            """
+            select message_id, chat_id, sender_id, sender_username, sender_name, target_id, target_name, text, created_at, delivered_at
+            from secret_messages
+            where message_id = ?
+            """,
+            (message_id,),
+        ).fetchone()
+        return SecretMessage(**dict(row)) if row else None
+
+    def delete_secret_message(self, message_id: str) -> None:
+        self._conn.execute("delete from secret_messages where message_id = ?", (message_id,))
+        self._conn.commit()
+
+    def mark_secret_message_delivered(self, message_id: str) -> None:
+        self._conn.execute(
+            "update secret_messages set delivered_at = coalesce(delivered_at, ?) where message_id = ?",
+            (utc_now(), message_id),
+        )
         self._conn.commit()
 
     def create_user_login_request(self, login_id: str, secret_hash: str, expires_at: str) -> None:

@@ -11,6 +11,7 @@ from app.keyboards import (
     user_menu,
 )
 from app.miniapp_ui import MINI_APP_HTML
+from app import bot
 
 
 def test_group_dig_mode_uses_callback_and_main_miniapp_link(monkeypatch) -> None:
@@ -197,3 +198,15 @@ def test_miniapp_replaces_rank_card_with_two_utility_buttons_on_mine() -> None:
     assert "${rankCosmeticHtml(false)}" not in mine_html
     assert '<button class="btn secondary" onclick="showWeather()">Погода</button>' in MINI_APP_HTML
     assert '<button class="btn secondary" onclick="showRadio()">Радио</button>' in MINI_APP_HTML
+
+
+def test_secret_message_command_detects_hidden_text_separately() -> None:
+    safe = bot.SECRET_MESSAGE_RE.match("лс @target_user")
+    unsafe = bot.SECRET_MESSAGE_RE.match("лс @target_user этот текст нельзя в группу")
+
+    assert safe
+    assert safe.group(1) == "@target_user"
+    assert safe.group(2) is None
+    assert unsafe
+    assert unsafe.group(1) == "@target_user"
+    assert unsafe.group(2) == "этот текст нельзя в группу"

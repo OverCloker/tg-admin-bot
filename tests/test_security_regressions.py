@@ -126,6 +126,33 @@ class SecurityRegressionTests(unittest.TestCase):
         self.assertIsNotNone(db.claim_pending_star_message("payload"))
         self.assertIsNone(db.claim_pending_star_message("payload"))
 
+    def test_secret_message_flow_keeps_text_out_of_group_payload(self):
+        db = self.make_db()
+        db.save_secret_message_compose("compose-1", 10, -100, 20, "@target")
+        compose = db.get_secret_message_compose_for_sender(10)
+        self.assertIsNotNone(compose)
+        self.assertEqual(compose.target_id, 20)
+
+        db.save_secret_message(
+            message_id="secret-1",
+            chat_id=compose.chat_id,
+            sender_id=10,
+            sender_username="sender",
+            sender_name="Sender",
+            target_id=compose.target_id,
+            target_name=compose.target_name,
+            text="hidden text",
+        )
+        db.delete_secret_message_compose(compose.compose_id)
+        self.assertIsNone(db.get_secret_message_compose_for_sender(10))
+
+        secret = db.get_secret_message("secret-1")
+        self.assertEqual(secret.text, "hidden text")
+        self.assertEqual(secret.target_id, 20)
+        self.assertIsNone(secret.delivered_at)
+        db.mark_secret_message_delivered("secret-1")
+        self.assertIsNotNone(db.get_secret_message("secret-1").delivered_at)
+
     def test_media_cleanup_never_deletes_outside_storage_roots(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
