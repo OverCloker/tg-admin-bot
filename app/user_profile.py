@@ -36,6 +36,42 @@ ACHIEVEMENT_NAMES = {
     "rank_master": "Хозяин коллекции",
 }
 
+ACHIEVEMENT_RARITY = {
+    "common": {"title": "Обычное", "score": 1},
+    "rare": {"title": "Редкое", "score": 2},
+    "epic": {"title": "Эпическое", "score": 3},
+    "legendary": {"title": "Легендарное", "score": 4},
+    "mythic": {"title": "Мифическое", "score": 5},
+}
+
+ACHIEVEMENT_RARITY_BY_KEY = {
+    "first_dig": "common",
+    "first_meter": "common",
+    "stone_zero": "common",
+    "streak_3": "common",
+    "collapse_survive": "rare",
+    "five_meter_run": "rare",
+    "route_master": "rare",
+    "total_25": "rare",
+    "first_purchase": "rare",
+    "expedition": "rare",
+    "level_5": "epic",
+    "streak_5": "epic",
+    "coins_500": "epic",
+    "rank_digger": "epic",
+    "collector_3": "epic",
+    "ten_meter_run": "legendary",
+    "total_100": "legendary",
+    "level_10": "legendary",
+    "streak_10": "legendary",
+    "rank_artifacts": "legendary",
+    "low_luck": "legendary",
+    "collector_all": "mythic",
+    "coins_10000": "mythic",
+    "rank_depth": "mythic",
+    "rank_master": "mythic",
+}
+
 ITEM_NAMES = {
     "helmet": "Каска",
     "shovel": "Кирка",
@@ -81,6 +117,46 @@ ITEM_NAMES = {
     "artifact_gem": "Необработанный самоцвет",
     "artifact_badge": "Знак старой бригады",
     "artifact_set_reward": "Бонус полной коллекции",
+}
+
+ITEM_GROUPS = {
+    "artifact_coin": "collection",
+    "artifact_fossil": "collection",
+    "artifact_crystal": "collection",
+    "artifact_tool": "collection",
+    "artifact_gem": "collection",
+    "artifact_badge": "collection",
+    "artifact_set_reward": "collection",
+    "shovel_1": "permanent",
+    "shovel_2": "permanent",
+    "shovel_3": "permanent",
+    "helmet_1": "permanent",
+    "helmet_2": "permanent",
+    "helmet_3": "permanent",
+    "flashlight_1": "permanent",
+    "flashlight_2": "permanent",
+    "flashlight_3": "permanent",
+    "cart_1": "permanent",
+    "cart_2": "permanent",
+    "cart_3": "permanent",
+    "backpack_1": "permanent",
+    "backpack_2": "permanent",
+    "backpack_3": "permanent",
+    "golden_ticket": "tickets",
+    "super_game_pass": "paid",
+    "super_mute30": "paid",
+    "super_tag": "paid",
+    "star_dig": "paid",
+    "star_lucky_dig": "paid",
+    "star_depth_10": "paid",
+}
+
+ITEM_GROUP_TITLES = {
+    "collection": "Коллекция",
+    "permanent": "Улучшения",
+    "paid": "Оплаченные",
+    "tickets": "Билеты",
+    "consumable": "Припасы",
 }
 
 RANKS = [
@@ -197,6 +273,8 @@ def build_user_profile(
             "key": key,
             "name": ITEM_NAMES.get(key, key),
             "quantity": quantity,
+            "group": ITEM_GROUPS.get(key, "consumable"),
+            "groupTitle": ITEM_GROUP_TITLES.get(ITEM_GROUPS.get(key, "consumable"), "Припасы"),
         }
         for key, quantity in sorted(items.items())
         if quantity > 0 and not key.startswith("rank_")
@@ -205,10 +283,18 @@ def build_user_profile(
         {
             "key": item.achievement_key,
             "name": ACHIEVEMENT_NAMES.get(item.achievement_key, item.achievement_key),
+            "rarity": ACHIEVEMENT_RARITY_BY_KEY.get(item.achievement_key, "common"),
+            "rarityTitle": ACHIEVEMENT_RARITY[ACHIEVEMENT_RARITY_BY_KEY.get(item.achievement_key, "common")]["title"],
+            "rarityScore": ACHIEVEMENT_RARITY[ACHIEVEMENT_RARITY_BY_KEY.get(item.achievement_key, "common")]["score"],
             "createdAt": item.created_at,
         }
         for item in achievements
     ]
+    rare_achievements = sorted(
+        owned_achievements,
+        key=lambda item: (int(item["rarityScore"]), str(item["createdAt"])),
+        reverse=True,
+    )
 
     return {
         "user": {
@@ -234,6 +320,7 @@ def build_user_profile(
             "activeItems": active_items[:24],
             "activeItemsTotal": len(active_items),
             "achievements": owned_achievements[-8:],
+            "rareAchievements": rare_achievements[:6],
             "achievementsTotal": len(owned_achievements),
             "achievementsKnown": len(ACHIEVEMENT_NAMES),
         },

@@ -102,3 +102,33 @@ def test_user_profile_translates_artifacts_and_rank_achievements(tmp_path):
     assert "Барон глубин" in achievement_names
     assert "Знак проходчика" in achievement_names
     assert "rank_depth" not in achievement_names
+
+
+def test_user_profile_exposes_item_groups_and_rarest_achievements(tmp_path):
+    db_path = tmp_path / "profile_rarity.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    premium = PremiumService(str(db_path))
+    try:
+        db.register_dig_player(0, 42, "miner", "Шахтёр")
+        db.add_dig_item(0, 42, "artifact_badge", 1)
+        db.add_dig_item(0, 42, "super_mute30", 1)
+        db.add_dig_item(0, 42, "tea", 2)
+        db.add_dig_achievement(0, 42, "first_dig")
+        db.add_dig_achievement(0, 42, "rank_depth")
+        db.add_dig_achievement(0, 42, "collector_all")
+
+        profile = build_user_profile(db, premium, 42, "miner", "Шахтёр")
+    finally:
+        premium.close()
+        db.close()
+
+    items = {item["key"]: item for item in profile["mine"]["activeItems"]}
+    assert items["artifact_badge"]["group"] == "collection"
+    assert items["super_mute30"]["group"] == "paid"
+    assert items["tea"]["group"] == "consumable"
+
+    rare = profile["mine"]["rareAchievements"]
+    assert rare[0]["key"] in {"collector_all", "rank_depth"}
+    assert rare[0]["rarity"] == "mythic"
+    assert all("rarityTitle" in item and "rarityScore" in item for item in rare)

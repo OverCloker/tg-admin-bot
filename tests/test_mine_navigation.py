@@ -178,11 +178,16 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'api(`/miniapp/weather?q=${encodeURIComponent(city)}`)' in MINI_APP_HTML
     assert 'function showWeather()' in MINI_APP_HTML
     assert 'function showRadio()' in MINI_APP_HTML
+    assert 'function showFriendsInfo()' in MINI_APP_HTML
+    assert 'onclick="showFriendsInfo()">Друзья</button>' in MINI_APP_HTML
     assert 'function searchRadioStations()' in MINI_APP_HTML
     assert 'miniAppFavoriteRadioStations' in MINI_APP_HTML
     assert 'api(`/miniapp/radio/search?q=${encodeURIComponent(query)}`)' in MINI_APP_HTML
     assert 'station.streamUrl || station.url_resolved || station.url' in MINI_APP_HTML
     assert 'class="persistent-radio"' in MINI_APP_HTML
+    assert 'class="inventory-chip ${escapeHtml(item.group || "consumable")}"' in MINI_APP_HTML
+    assert "Редчайшие достижения" in MINI_APP_HTML
+    assert "mine.rareAchievements" in MINI_APP_HTML
 
 
 def test_miniapp_replaces_rank_card_with_two_utility_buttons_on_mine() -> None:

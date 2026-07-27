@@ -96,6 +96,43 @@ MINI_APP_HTML = r"""<!doctype html>
     .profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
     .profile-card { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
     .profile-card b { display: block; margin-top: 4px; font-size: 18px; overflow-wrap: anywhere; }
+    .profile-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+    .profile-actions .btn { margin: 0; min-height: 44px; }
+    .inventory-groups { display: grid; gap: 10px; margin-top: 10px; }
+    .inventory-chip-group { display: grid; gap: 7px; }
+    .inventory-chip-title { color: var(--muted); font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+    .inventory-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+    .inventory-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 100%;
+      padding: 7px 9px;
+      border: 1px solid #345470;
+      border-radius: 999px;
+      background: #102033;
+      color: #eaf3fb;
+      font-size: 13px;
+      font-weight: 750;
+    }
+    .inventory-chip.collection { border-color:#8bb8ff; background:#122747; color:#d9e8ff; }
+    .inventory-chip.permanent { border-color:#69c18a; background:#112b24; color:#d8ffe6; }
+    .inventory-chip.paid { border-color:#f0c66d; background:#302312; color:#ffe7aa; }
+    .inventory-chip.tickets { border-color:#d99cff; background:#28173b; color:#f4dcff; }
+    .achievement-showcase { display: grid; gap: 8px; margin-top: 10px; }
+    .achievement-card {
+      padding: 10px 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .achievement-card b { display:block; }
+    .achievement-rarity { margin-top: 4px; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; }
+    .achievement-card.common { border-color:#6f8798; background:#152537; }
+    .achievement-card.rare { border-color:#56b37a; background:#102c24; color:#eaffef; }
+    .achievement-card.epic { border-color:#9a75ff; background:#241840; color:#f0e9ff; }
+    .achievement-card.legendary { border-color:#e2ad42; background:#31230d; color:#fff0c4; }
+    .achievement-card.mythic { border-color:#ff6e9d; background:linear-gradient(135deg,#3c1225,#23143d); color:#ffe4ef; box-shadow:0 0 18px #ff6e9d22; }
     .radio-player { width: 100%; margin-top: 10px; }
     .persistent-radio {
       position: fixed;
@@ -1062,11 +1099,27 @@ MINI_APP_HTML = r"""<!doctype html>
     const plan = premium.plan || {};
     const mine = profile.mine || {};
     const premiumText = premium.active ? (plan.title || "Premium активен") : "не активен";
-    const itemList = (mine.activeItems || []).slice(0, 12).map(item =>
-      `${item.name}${item.quantity > 1 ? ` ×${item.quantity}` : ""}`
-    );
-    const items = itemList.map(name => `<span>${escapeHtml(name)}</span>`).join(", ");
-    const achievements = (mine.achievements || []).slice(-6).map(item => escapeHtml(item.name)).join(", ");
+    const groupedItems = {};
+    (mine.activeItems || []).slice(0, 18).forEach(item => {
+      const key = item.group || "consumable";
+      if (!groupedItems[key]) groupedItems[key] = { title: item.groupTitle || "Припасы", items: [] };
+      groupedItems[key].items.push(item);
+    });
+    const groupOrder = ["collection", "permanent", "paid", "tickets", "consumable"];
+    const itemGroupsHtml = groupOrder.filter(key => groupedItems[key]).map(key => {
+      const group = groupedItems[key];
+      const chips = group.items.map(item => `<span class="inventory-chip ${escapeHtml(item.group || "consumable")}">${escapeHtml(item.name)}${item.quantity > 1 ? ` <b>×${item.quantity}</b>` : ""}</span>`).join("");
+      return `<div class="inventory-chip-group">
+        <div class="inventory-chip-title">${escapeHtml(group.title)}</div>
+        <div class="inventory-chips">${chips}</div>
+      </div>`;
+    }).join("");
+    const rareAchievements = (mine.rareAchievements || []).slice(0, 5).map(item => `
+      <div class="achievement-card ${escapeHtml(item.rarity || "common")}">
+        <b>${escapeHtml(item.name)}</b>
+        <div class="achievement-rarity">${escapeHtml(item.rarityTitle || "Обычное")}</div>
+      </div>
+    `).join("");
     content.innerHTML = `<section class="panel">
       <h2>${escapeHtml(user.fullName || "Профиль")}</h2>
       <div class="muted">${user.username ? `@${escapeHtml(user.username)}` : "username не указан"}</div>
@@ -1078,21 +1131,34 @@ MINI_APP_HTML = r"""<!doctype html>
         <div class="profile-card">Уровень<b>${mine.level || 0}</b></div>
         <div class="profile-card">Удача<b>${mine.luck || 0}/100</b></div>
       </div>
+      <div class="profile-actions">
+        <button class="btn secondary" onclick="showFriendsInfo()">Друзья</button>
+        <button class="btn secondary" onclick="showBag()">Сумка</button>
+      </div>
     </section>
     <section class="panel">
       <h2>Шахта</h2>
       <p class="muted">Рекорд: <b>${mine.bestSessionDepth || 0} м</b> · Серия: <b>${mine.streak || 0}</b> · Маршрут: <b>${escapeHtml(mine.route || "не выбран")}</b></p>
       <p class="muted">Достижения: <b>${mine.achievementsTotal || 0}/${mine.achievementsKnown || 0}</b></p>
     </section>
-    ${items ? `<section class="panel"><details>
-      <summary><b>Инвентарь</b> <span class="muted">показано ${itemList.length}/${mine.activeItemsTotal || itemList.length}</span></summary>
-      <p class="muted" style="margin:10px 0 0">${items}${(mine.activeItemsTotal || 0) > itemList.length ? "…" : ""}</p>
-    </details></section>` : ""}
-    ${achievements ? `<section class="panel"><details>
-      <summary><b>Последние достижения</b> <span class="muted">${mine.achievementsTotal || 0}/${mine.achievementsKnown || 0}</span></summary>
-      <p class="muted" style="margin:10px 0 0">${achievements}</p>
-    </details></section>` : ""}
+    ${itemGroupsHtml ? `<section class="panel"><h2>Инвентарь</h2><div class="inventory-groups">${itemGroupsHtml}</div>${(mine.activeItemsTotal || 0) > 18 ? `<p class="muted">И ещё ${mine.activeItemsTotal - 18} предметов в сумке.</p>` : ""}</section>` : ""}
+    ${rareAchievements ? `<section class="panel"><h2>Редчайшие достижения</h2><div class="achievement-showcase">${rareAchievements}</div></section>` : ""}
     <section class="panel"><button class="btn secondary" style="margin:0" onclick="renderMine()">Назад в шахту</button></section>`;
+    scrollToTop();
+  }
+
+  function showFriendsInfo() {
+    setScreenHeader("profile");
+    content.innerHTML = `<section class="panel">
+      <h2>Друзья</h2>
+      <p class="muted">Дружба сейчас привязана к конкретному чату Telegram: в разных группах список может быть разным.</p>
+      <div class="achievement-showcase">
+        <div class="achievement-card rare"><b>Как добавить</b><div class="muted">В группе открой профиль участника ответом на его сообщение или через профиль в меню пользователя, затем нажми «Добавить в друзья».</div></div>
+        <div class="achievement-card epic"><b>Идея для лички</b><div class="muted">Команда вида <code>лс @ник текст</code>: бот доставляет приватную записку, если оба участника уже запускали бота и состоят в этом чате.</div></div>
+        <div class="achievement-card legendary"><b>Идея для Mini App</b><div class="muted">Открывать Mini App из группы с chat_id, тогда здесь можно показать друзей, пару, заявки и быстрые действия.</div></div>
+      </div>
+      <button class="btn secondary" onclick="showProfile()">Назад к профилю</button>
+    </section>`;
     scrollToTop();
   }
 
