@@ -73,3 +73,32 @@ def test_chat_profile_contains_social_summary(tmp_path):
     finally:
         premium.close()
         db.close()
+
+
+def test_user_profile_translates_artifacts_and_rank_achievements(tmp_path):
+    db_path = tmp_path / "profile.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    premium = PremiumService(str(db_path))
+    try:
+        db.register_dig_player(0, 42, "miner", "Шахтёр")
+        db.add_dig_item(0, 42, "artifact_badge", 1)
+        db.add_dig_item(0, 42, "artifact_coin", 1)
+        db.add_dig_item(0, 42, "artifact_set_reward", 1)
+        db.add_dig_achievement(0, 42, "rank_depth")
+        db.add_dig_achievement(0, 42, "rank_digger")
+
+        profile = build_user_profile(db, premium, 42, "miner", "Шахтёр")
+    finally:
+        premium.close()
+        db.close()
+
+    item_names = {item["name"] for item in profile["mine"]["activeItems"]}
+    achievement_names = {item["name"] for item in profile["mine"]["achievements"]}
+    assert "Знак старой бригады" in item_names
+    assert "Старая монета" in item_names
+    assert "Бонус полной коллекции" in item_names
+    assert "artifact_badge" not in item_names
+    assert "Барон глубин" in achievement_names
+    assert "Знак проходчика" in achievement_names
+    assert "rank_depth" not in achievement_names

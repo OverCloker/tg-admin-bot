@@ -17,6 +17,13 @@ def test_shift_contract_has_no_standard_contract_xp() -> None:
     assert bot.dig_contract_xp_reward(["Контракт «Глубина» выполнен: +60 котоинов, +40 XP"]) == 40
 
 
+def test_dig_effects_text_does_not_duplicate_paid_special_items() -> None:
+    text = bot.dig_effects_text({"super_mute30": 1, "super_tag": 1})
+
+    assert text.count("Право на мут 30 минут x1") == 1
+    assert text.count("Право выбрать тег x1") == 1
+
+
 def test_shop_catalog_returns_discounted_server_price(tmp_path) -> None:
     db = Database(str(tmp_path / "bot.sqlite3"))
     db.init()

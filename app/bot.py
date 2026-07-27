@@ -1414,7 +1414,8 @@ def dig_effects_text(items: dict[str, int]) -> str:
         "super_tag": "Право выбрать тег",
     }
 
-    for key in DIG_ITEM_ORDER + list(paid_keys) + list(special_names):
+    ordered_keys = list(dict.fromkeys(DIG_ITEM_ORDER + sorted(paid_keys) + list(special_names)))
+    for key in ordered_keys:
         count = items.get(key, 0)
         if count <= 0 or key in hidden_keys:
             continue

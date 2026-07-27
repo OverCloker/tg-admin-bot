@@ -1062,12 +1062,11 @@ MINI_APP_HTML = r"""<!doctype html>
     const plan = premium.plan || {};
     const mine = profile.mine || {};
     const premiumText = premium.active ? (plan.title || "Premium активен") : "не активен";
-    const items = (mine.activeItems || []).slice(0, 8).map(item =>
-      `<div class="inventory-row"><span>${escapeHtml(item.name)}</span><b>× ${item.quantity}</b></div>`
-    ).join("");
-    const achievements = (mine.achievements || []).slice(-4).map(item =>
-      `<div class="inventory-row"><span>${escapeHtml(item.name)}</span></div>`
-    ).join("");
+    const itemList = (mine.activeItems || []).slice(0, 12).map(item =>
+      `${item.name}${item.quantity > 1 ? ` ×${item.quantity}` : ""}`
+    );
+    const items = itemList.map(name => `<span>${escapeHtml(name)}</span>`).join(", ");
+    const achievements = (mine.achievements || []).slice(-6).map(item => escapeHtml(item.name)).join(", ");
     content.innerHTML = `<section class="panel">
       <h2>${escapeHtml(user.fullName || "Профиль")}</h2>
       <div class="muted">${user.username ? `@${escapeHtml(user.username)}` : "username не указан"}</div>
@@ -1085,8 +1084,14 @@ MINI_APP_HTML = r"""<!doctype html>
       <p class="muted">Рекорд: <b>${mine.bestSessionDepth || 0} м</b> · Серия: <b>${mine.streak || 0}</b> · Маршрут: <b>${escapeHtml(mine.route || "не выбран")}</b></p>
       <p class="muted">Достижения: <b>${mine.achievementsTotal || 0}/${mine.achievementsKnown || 0}</b></p>
     </section>
-    ${items ? `<section class="panel"><h2>Инвентарь</h2><div class="inventory-list">${items}</div></section>` : ""}
-    ${achievements ? `<section class="panel"><h2>Последние достижения</h2><div class="inventory-list">${achievements}</div></section>` : ""}
+    ${items ? `<section class="panel"><details>
+      <summary><b>Инвентарь</b> <span class="muted">показано ${itemList.length}/${mine.activeItemsTotal || itemList.length}</span></summary>
+      <p class="muted" style="margin:10px 0 0">${items}${(mine.activeItemsTotal || 0) > itemList.length ? "…" : ""}</p>
+    </details></section>` : ""}
+    ${achievements ? `<section class="panel"><details>
+      <summary><b>Последние достижения</b> <span class="muted">${mine.achievementsTotal || 0}/${mine.achievementsKnown || 0}</span></summary>
+      <p class="muted" style="margin:10px 0 0">${achievements}</p>
+    </details></section>` : ""}
     <section class="panel"><button class="btn secondary" style="margin:0" onclick="renderMine()">Назад в шахту</button></section>`;
     scrollToTop();
   }

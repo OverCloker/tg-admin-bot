@@ -30,6 +30,10 @@ ACHIEVEMENT_NAMES = {
     "route_master": "Картограф",
     "expedition": "Бригада",
     "coins_10000": "Крупный вклад",
+    "rank_digger": "Знак проходчика",
+    "rank_artifacts": "Коллекция бригадира",
+    "rank_depth": "Барон глубин",
+    "rank_master": "Хозяин коллекции",
 }
 
 ITEM_NAMES = {
@@ -66,6 +70,17 @@ ITEM_NAMES = {
     "star_dig": "Оплаченная копка",
     "star_lucky_dig": "Копка со 100 удачей",
     "star_depth_10": "Прокопать 10 м",
+    "golden_ticket": "Золотой билет",
+    "super_game_pass": "Супер-игра 9×9",
+    "super_mute30": "Право на мут 30 минут",
+    "super_tag": "Право выбрать тег",
+    "artifact_coin": "Старая монета",
+    "artifact_fossil": "Окаменелость",
+    "artifact_crystal": "Подземный кристалл",
+    "artifact_tool": "Ржавый шахтёрский инструмент",
+    "artifact_gem": "Необработанный самоцвет",
+    "artifact_badge": "Знак старой бригады",
+    "artifact_set_reward": "Бонус полной коллекции",
 }
 
 RANKS = [
