@@ -97,6 +97,20 @@ MINI_APP_HTML = r"""<!doctype html>
     .profile-card { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
     .profile-card b { display: block; margin-top: 4px; font-size: 18px; overflow-wrap: anywhere; }
     .radio-player { width: 100%; margin-top: 10px; }
+    .persistent-radio {
+      position: fixed;
+      left: 16px;
+      right: 16px;
+      bottom: max(12px, env(safe-area-inset-bottom));
+      z-index: 80;
+      display: none;
+      width: min(calc(100% - 32px), 528px);
+      margin: 0 auto;
+      border-radius: 999px;
+      background: #111;
+      box-shadow: 0 8px 28px #0009;
+    }
+    .persistent-radio.active { display: block; }
     .radio-list { display: grid; gap: 8px; margin-top: 12px; }
     .radio-row { display: grid; grid-template-columns: minmax(0, 1fr) 44px; gap: 8px; }
     .radio-row .btn { min-height: 42px; margin: 0; text-align: left; }
@@ -612,14 +626,28 @@ MINI_APP_HTML = r"""<!doctype html>
   </header>
   <div id="content"></div>
 </main>
+<audio id="radioPlayer" class="persistent-radio" controls preload="none"></audio>
 <script>
   const telegram = window.Telegram && window.Telegram.WebApp;
   const content = document.getElementById("content");
   const nameNode = document.getElementById("name");
   const screenTitle = document.getElementById("screen-title");
+  const radioPlayer = document.getElementById("radioPlayer");
   let state = null;
   let busy = false;
   let shopCategory = "";
+
+  radioPlayer.addEventListener("play", () => {
+    radioPlayer.classList.add("active");
+    if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing";
+  });
+  radioPlayer.addEventListener("pause", () => {
+    if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
+  });
+  radioPlayer.addEventListener("ended", () => {
+    radioPlayer.classList.remove("active");
+    if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "none";
+  });
 
   function setScreenHeader(view) {
     document.body.dataset.view = view;
@@ -935,6 +963,12 @@ MINI_APP_HTML = r"""<!doctype html>
   function showRadio() {
     setScreenHeader("radio");
     const last = loadLastRadioStation();
+    if (last && last.streamUrl && !radioPlayer.src) {
+      radioPlayer.src = last.streamUrl;
+    }
+    if (radioPlayer.src) {
+      radioPlayer.classList.add("active");
+    }
     content.innerHTML = `<section class="panel">
       <h2>Radio Browser</h2>
       <div class="mini-form">
@@ -945,7 +979,7 @@ MINI_APP_HTML = r"""<!doctype html>
         </div>
       </div>
       <div id="radioNow" class="muted" style="margin-top:10px">${last ? `Последняя станция: ${escapeHtml(last.name)}` : "Станция не выбрана."}</div>
-      <audio id="radioPlayer" class="radio-player" controls ${last ? `src="${escapeHtml(last.url)}"` : ""}></audio>
+      <p class="muted">Плеер закреплён снизу и не сбрасывается при переходе по Mini App.</p>
       <div id="radioStations" class="radio-list"></div>
       <button class="btn secondary" onclick="renderMine()">Назад в шахту</button>
     </section>`;
@@ -957,18 +991,9 @@ MINI_APP_HTML = r"""<!doctype html>
     const query = document.getElementById("radioSearch").value.trim();
     const target = document.getElementById("radioStations");
     target.innerHTML = `<div class="muted">Ищу станции...</div>`;
-    const params = new URLSearchParams({
-      hidebroken: "true",
-      codec: "MP3",
-      order: "clickcount",
-      reverse: "true",
-      limit: "30",
-    });
-    if (query) params.set("name", query);
     try {
-      const response = await fetch(`https://de1.api.radio-browser.info/json/stations/search?${params}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      radioResults = await response.json();
+      const result = await api(`/miniapp/radio/search?q=${encodeURIComponent(query)}`);
+      radioResults = result.items || [];
       renderRadioResults("Станции не найдены.");
     } catch (error) {
       target.innerHTML = `<div class="muted">Не удалось загрузить станции: ${escapeHtml(error.message)}</div>`;
@@ -977,17 +1002,30 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function playRadioStation(index) {
     const station = radioResults[index];
-    const player = document.getElementById("radioPlayer");
-    const url = station.url_resolved || station.url;
-    player.src = url;
-    player.play();
+    const url = station.streamUrl || station.url_resolved || station.url;
+    radioPlayer.src = url;
+    radioPlayer.classList.add("active");
+    radioPlayer.play().catch(error => {
+      const now = document.getElementById("radioNow");
+      if (now) now.textContent = `Не удалось запустить: ${error.message || error}`;
+    });
     document.getElementById("radioNow").textContent = `Сейчас играет: ${station.name || "Без названия"}`;
+    if ("mediaSession" in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: station.name || "Радио",
+        artist: station.country || "Radio Browser",
+      });
+      navigator.mediaSession.playbackState = "playing";
+    }
     localStorage.setItem("miniAppLastRadioStation", JSON.stringify({
       name: station.name || "Без названия",
-      url,
+      url: station.url_resolved || station.url || "",
+      streamUrl: station.streamUrl || "",
       uuid: station.stationuuid || "",
     }));
-    fetch(`https://de1.api.radio-browser.info/json/url/${station.stationuuid || station.uuid}`).catch(() => {});
+    api("/miniapp/radio/click", {
+      method: "POST", body: JSON.stringify({ item_key: station.stationuuid || station.uuid || "" })
+    }).catch(() => {});
   }
 
   function toggleFavoriteRadioStation(index) {
@@ -999,6 +1037,7 @@ MINI_APP_HTML = r"""<!doctype html>
     else favorites.push({
       name: station.name || "Без названия",
       url: station.url_resolved || station.url,
+      streamUrl: station.streamUrl || "",
       uuid,
     });
     localStorage.setItem("miniAppFavoriteRadioStations", JSON.stringify(favorites));
@@ -1010,6 +1049,7 @@ MINI_APP_HTML = r"""<!doctype html>
       name: station.name,
       url: station.url,
       url_resolved: station.url,
+      streamUrl: station.streamUrl,
       stationuuid: station.uuid,
     }));
     renderRadioResults("В избранном пока нет станций.");

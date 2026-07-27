@@ -180,7 +180,9 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function showRadio()' in MINI_APP_HTML
     assert 'function searchRadioStations()' in MINI_APP_HTML
     assert 'miniAppFavoriteRadioStations' in MINI_APP_HTML
-    assert 'https://de1.api.radio-browser.info/json/stations/search' in MINI_APP_HTML
+    assert 'api(`/miniapp/radio/search?q=${encodeURIComponent(query)}`)' in MINI_APP_HTML
+    assert 'station.streamUrl || station.url_resolved || station.url' in MINI_APP_HTML
+    assert 'class="persistent-radio"' in MINI_APP_HTML
 
 
 def test_miniapp_replaces_rank_card_with_two_utility_buttons_on_mine() -> None:

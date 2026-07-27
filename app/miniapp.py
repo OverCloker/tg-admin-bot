@@ -4,15 +4,18 @@ import hashlib
 import hmac
 import json
 import secrets
+import base64
+import time
 from pathlib import Path
 from threading import Lock
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl
+import aiohttp
 from aiogram import Bot
 from aiogram.types import LabeledPrice
 from fastapi import APIRouter, Header, HTTPException, Response
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from .config import load_config
 from .db import Database
@@ -125,6 +128,60 @@ def _telegram_user(init_data: str | None) -> dict[str, Any]:
                 "full_name": " ".join(filter(None, [tg_user.get("first_name"), tg_user.get("last_name")])) or str(tg_user["id"])}
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(401, "Данные пользователя Telegram устарели.") from exc
+
+
+def _radio_stream_token(url: str) -> str:
+    payload = {
+        "url": url,
+        "exp": int(time.time()) + 30 * 24 * 60 * 60,
+    }
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
+    body = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    secret = load_config().bot_token.encode()
+    signature = hmac.new(secret, body.encode(), hashlib.sha256).hexdigest()[:40]
+    return f"{body}.{signature}"
+
+
+def _radio_stream_url(token: str) -> str:
+    try:
+        body, signature = token.rsplit(".", 1)
+    except ValueError as exc:
+        raise HTTPException(400, "Ссылка радиопотока устарела.") from exc
+    secret = load_config().bot_token.encode()
+    expected = hmac.new(secret, body.encode(), hashlib.sha256).hexdigest()[:40]
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(403, "Подпись радиопотока неверна.")
+    try:
+        padded = body + "=" * (-len(body) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(400, "Ссылка радиопотока повреждена.") from exc
+    if int(payload.get("exp") or 0) < int(time.time()):
+        raise HTTPException(410, "Ссылка радиопотока устарела. Найди станцию заново.")
+    url = str(payload.get("url") or "")
+    if not url:
+        raise HTTPException(400, "В ссылке радиопотока нет адреса.")
+    return url
+
+
+def _radio_station_public(station: dict[str, Any]) -> dict[str, Any]:
+    url = str(station.get("url_resolved") or station.get("url") or "")
+    uuid = str(station.get("stationuuid") or station.get("uuid") or "")
+    result = {
+        "name": str(station.get("name") or "Без названия"),
+        "stationuuid": uuid,
+        "url": url,
+        "url_resolved": url,
+        "favicon": str(station.get("favicon") or ""),
+        "country": str(station.get("country") or ""),
+        "tags": str(station.get("tags") or ""),
+        "bitrate": station.get("bitrate"),
+        "codec": str(station.get("codec") or ""),
+        "homepage": str(station.get("homepage") or ""),
+    }
+    if url:
+        result["streamUrl"] = f"/miniapp/radio/stream?token={_radio_stream_token(url)}"
+    return result
 
 
 def _state(db: Database, user_id: int) -> dict[str, Any]:
@@ -793,6 +850,99 @@ async def miniapp_weather(
     from .admin_api import weather_payload
 
     return await weather_payload(q, "MonkeyDin-MiniApp/0.3")
+
+
+@router.get("/miniapp/radio/search")
+async def miniapp_radio_search(
+    q: str = "",
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    _telegram_user(x_telegram_init_data)
+    query = q.strip()
+    params = {
+        "hidebroken": "true",
+        "order": "clickcount",
+        "reverse": "true",
+        "limit": "30",
+    }
+    if query:
+        params["name"] = query
+    timeout = aiohttp.ClientTimeout(total=12)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
+                "https://de1.api.radio-browser.info/json/stations/search",
+                params=params,
+                headers={"User-Agent": "MonkeyDin-MiniApp/0.3"},
+            ) as response:
+                if response.status != 200:
+                    raise HTTPException(502, "Radio Browser временно недоступен.")
+                stations = await response.json(content_type=None)
+    except aiohttp.ClientError as exc:
+        raise HTTPException(502, "Не удалось связаться с Radio Browser.") from exc
+    return {"items": [_radio_station_public(station) for station in (stations or []) if station.get("url_resolved") or station.get("url")]}
+
+
+@router.post("/miniapp/radio/click")
+async def miniapp_radio_click(
+    payload: ShopPurchase,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, bool]:
+    _telegram_user(x_telegram_init_data)
+    station_uuid = payload.item_key.strip()
+    if not station_uuid:
+        return {"ok": False}
+    timeout = aiohttp.ClientTimeout(total=4)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
+                f"https://de1.api.radio-browser.info/json/url/{station_uuid}",
+                headers={"User-Agent": "MonkeyDin-MiniApp/0.3"},
+            ):
+                pass
+    except aiohttp.ClientError:
+        pass
+    return {"ok": True}
+
+
+@router.get("/miniapp/radio/stream")
+async def miniapp_radio_stream(token: str) -> StreamingResponse:
+    from .admin_api import PinnedPublicResolver, resolve_public_stream_url
+
+    raw_url = _radio_stream_url(token)
+    checked_url, hostname, addresses = resolve_public_stream_url(raw_url)
+    connector = aiohttp.TCPConnector(
+        resolver=PinnedPublicResolver(hostname, addresses),
+        use_dns_cache=False,
+        force_close=True,
+        limit=1,
+    )
+    timeout = aiohttp.ClientTimeout(total=None, connect=12, sock_read=30)
+    session = aiohttp.ClientSession(connector=connector, timeout=timeout, auto_decompress=False)
+
+    async def stream() -> Any:
+        response = None
+        try:
+            response = await session.get(
+                checked_url,
+                allow_redirects=False,
+                headers={"User-Agent": "MonkeyDin-MiniApp/0.3", "Icy-MetaData": "0"},
+            )
+            if response.status < 200 or response.status >= 300:
+                return
+            async for chunk in response.content.iter_chunked(64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            if response is not None:
+                response.close()
+            await session.close()
+
+    return StreamingResponse(
+        stream(),
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/miniapp/mine/register")
