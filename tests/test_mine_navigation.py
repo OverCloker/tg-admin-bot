@@ -138,7 +138,7 @@ def test_ticket_picks_update_in_place_without_scrolling_or_full_render() -> None
 def test_miniapp_has_no_close_button() -> None:
     assert 'id="close"' not in MINI_APP_HTML
     assert "telegram.close()" not in MINI_APP_HTML
-    assert "showProfile()" in MINI_APP_HTML
+    assert "handleTopProfileButton()" in MINI_APP_HTML
     assert ">Профиль<" in MINI_APP_HTML
 
 
@@ -179,6 +179,11 @@ def test_shop_deep_link_opens_a_distinct_compact_screen() -> None:
 
 def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'api("/miniapp/profile")' in MINI_APP_HTML
+    assert "MonkeyDin" not in MINI_APP_HTML
+    assert "Загружаю профиль..." in MINI_APP_HTML
+    assert 'topProfileButton.textContent = activeView === "profile" ? "Назад" : "Профиль"' in MINI_APP_HTML
+    assert 'function returnFromProfile()' in MINI_APP_HTML
+    assert 'profileReturnView = activeView || "mine"' in MINI_APP_HTML
     assert 'api(`/miniapp/weather?q=${encodeURIComponent(city)}`)' in MINI_APP_HTML
     assert 'function showWeather()' in MINI_APP_HTML
     assert 'function showRadio()' in MINI_APP_HTML

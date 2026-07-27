@@ -662,7 +662,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <div id="name" class="muted">Загрузка...</div>
     </div>
     <div class="top-actions">
-      <button class="top-profile" onclick="showProfile()">Профиль</button>
+      <button class="top-profile" onclick="handleTopProfileButton()">Профиль</button>
     </div>
   </header>
   <div id="content"></div>
@@ -673,10 +673,13 @@ MINI_APP_HTML = r"""<!doctype html>
   const content = document.getElementById("content");
   const nameNode = document.getElementById("name");
   const screenTitle = document.getElementById("screen-title");
+  const topProfileButton = document.querySelector(".top-profile");
   const radioPlayer = document.getElementById("radioPlayer");
   let state = null;
   let busy = false;
   let shopCategory = "";
+  let activeView = "mine";
+  let profileReturnView = "mine";
 
   radioPlayer.addEventListener("play", () => {
     radioPlayer.classList.add("active");
@@ -691,6 +694,7 @@ MINI_APP_HTML = r"""<!doctype html>
   });
 
   function setScreenHeader(view) {
+    activeView = view;
     document.body.dataset.view = view;
     if (view === "shop") {
       screenTitle.textContent = "🛒 Магазин";
@@ -700,7 +704,7 @@ MINI_APP_HTML = r"""<!doctype html>
       nameNode.textContent = "Инвентарь шахтёра";
     } else if (view === "profile") {
       screenTitle.textContent = "👤 Профиль";
-      nameNode.textContent = "MonkeyDin";
+      nameNode.textContent = "Информация игрока";
     } else if (view === "weather") {
       screenTitle.textContent = "🌦️ Погода";
       nameNode.textContent = "Город и текущая сводка";
@@ -711,6 +715,29 @@ MINI_APP_HTML = r"""<!doctype html>
       screenTitle.textContent = "⛏️ Шахта";
       nameNode.textContent = state && state.registered ? state.name : "Новая вылазка";
     }
+    updateTopProfileButton();
+  }
+
+  function updateTopProfileButton() {
+    if (!topProfileButton) return;
+    topProfileButton.textContent = activeView === "profile" ? "Назад" : "Профиль";
+  }
+
+  function handleTopProfileButton() {
+    if (activeView === "profile") {
+      returnFromProfile();
+    } else {
+      showProfile();
+    }
+  }
+
+  function returnFromProfile() {
+    const target = profileReturnView || "mine";
+    if (target === "shop") return showShop(shopCategory);
+    if (target === "bag") return showBag();
+    if (target === "weather") return showWeather();
+    if (target === "radio") return showRadio();
+    return renderMine();
   }
 
   function scrollToTop() {
@@ -1179,8 +1206,11 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   async function showProfile() {
+    if (activeView !== "profile") {
+      profileReturnView = activeView || "mine";
+    }
     setScreenHeader("profile");
-    content.innerHTML = `<section class="panel muted">Загружаю профиль MonkeyDin...</section>`;
+    content.innerHTML = `<section class="panel muted">Загружаю профиль...</section>`;
     try {
       renderProfile(await api("/miniapp/profile"));
     } catch (error) {
