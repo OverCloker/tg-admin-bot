@@ -6653,7 +6653,7 @@ async def secret_message_private_compose(message: Message) -> None:
     try:
         await message.bot.send_message(
             compose.chat_id,
-            "В чате появилось скрытое сообщение. Открыть сможет только адресат.",
+            f"{escape(compose.target_name)}, вам анонимное письмецо в конверте.",
             reply_markup=secret_message_markup(message_id),
             disable_web_page_preview=True,
         )
