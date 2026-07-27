@@ -169,6 +169,9 @@ def test_shop_deep_link_opens_a_distinct_compact_screen() -> None:
     assert 'class="shop-hero"' in MINI_APP_HTML
     assert 'class="shop-products"' in MINI_APP_HTML
     assert "overflow-x: auto" in MINI_APP_HTML
+    assert "scrollbar-width: thin" in MINI_APP_HTML
+    assert "function enableHorizontalWheelScroll" in MINI_APP_HTML
+    assert 'enableHorizontalWheelScroll(".shop-tabs")' in MINI_APP_HTML
     assert 'class="btn shop-buy"' in MINI_APP_HTML
     assert 'window.scrollTo(0, 0)' in MINI_APP_HTML
     assert 'class="inventory-group"' in MINI_APP_HTML
@@ -181,6 +184,7 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function showRadio()' in MINI_APP_HTML
     assert 'function showFriendsInfo()' in MINI_APP_HTML
     assert 'onclick="showFriendsInfo()">Друзья</button>' in MINI_APP_HTML
+    assert 'content.querySelectorAll(".achievement-card.epic, .achievement-card.legendary").forEach(node => node.remove())' in MINI_APP_HTML
     assert 'function searchRadioStations()' in MINI_APP_HTML
     assert 'miniAppFavoriteRadioStations' in MINI_APP_HTML
     assert 'api(`/miniapp/radio/search?q=${encodeURIComponent(query)}`)' in MINI_APP_HTML

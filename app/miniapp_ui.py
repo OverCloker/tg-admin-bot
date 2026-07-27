@@ -377,10 +377,14 @@ MINI_APP_HTML = r"""<!doctype html>
       display: flex;
       gap: 7px;
       overflow-x: auto;
-      scrollbar-width: none;
+      padding-bottom: 4px;
+      scrollbar-width: thin;
+      scrollbar-color: #c98e49 #211811;
       scroll-snap-type: x proximity;
     }
-    .shop-tabs::-webkit-scrollbar { display: none; }
+    .shop-tabs::-webkit-scrollbar { height: 6px; }
+    .shop-tabs::-webkit-scrollbar-track { background: #211811; border-radius: 999px; }
+    .shop-tabs::-webkit-scrollbar-thumb { background: #c98e49; border-radius: 999px; }
     .shop-tab {
       flex: 0 0 auto;
       min-height: 38px;
@@ -711,6 +715,17 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function scrollToTop() {
     window.scrollTo(0, 0);
+  }
+
+  function enableHorizontalWheelScroll(selector) {
+    const node = document.querySelector(selector);
+    if (!node || node.dataset.wheelScrollBound === "1") return;
+    node.dataset.wheelScrollBound = "1";
+    node.addEventListener("wheel", event => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) || node.scrollWidth <= node.clientWidth) return;
+      event.preventDefault();
+      node.scrollLeft += event.deltaY;
+    }, { passive: false });
   }
 
   if (telegram) {
@@ -1159,6 +1174,7 @@ MINI_APP_HTML = r"""<!doctype html>
       </div>
       <button class="btn secondary" onclick="showProfile()">Назад к профилю</button>
     </section>`;
+    content.querySelectorAll(".achievement-card.epic, .achievement-card.legendary").forEach(node => node.remove());
     scrollToTop();
   }
 
@@ -1596,6 +1612,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <div class="shop-products">${products}</div>
       <div class="shop-back"><button class="btn secondary" onclick="showBag()">Назад в сумку</button></div>
     </section>`;
+    enableHorizontalWheelScroll(".shop-tabs");
     scrollToTop();
   }
 

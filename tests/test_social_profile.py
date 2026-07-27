@@ -114,6 +114,7 @@ def test_user_profile_exposes_item_groups_and_rarest_achievements(tmp_path):
         db.add_dig_item(0, 42, "artifact_badge", 1)
         db.add_dig_item(0, 42, "super_mute30", 1)
         db.add_dig_item(0, 42, "tea", 2)
+        db.add_dig_item(0, 42, "cart", 1)
         db.add_dig_achievement(0, 42, "first_dig")
         db.add_dig_achievement(0, 42, "rank_depth")
         db.add_dig_achievement(0, 42, "collector_all")
@@ -127,6 +128,8 @@ def test_user_profile_exposes_item_groups_and_rarest_achievements(tmp_path):
     assert items["artifact_badge"]["group"] == "collection"
     assert items["super_mute30"]["group"] == "paid"
     assert items["tea"]["group"] == "consumable"
+    assert items["cart"]["name"] == "Вагонетка"
+    assert items["cart"]["group"] == "permanent"
 
     rare = profile["mine"]["rareAchievements"]
     assert rare[0]["key"] in {"collector_all", "rank_depth"}
