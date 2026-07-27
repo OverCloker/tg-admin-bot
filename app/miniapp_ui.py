@@ -31,6 +31,19 @@ MINI_APP_HTML = r"""<!doctype html>
     button { font: inherit; }
     main { width: min(100%, 560px); margin: 0 auto; }
     .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .top-actions { display: flex; align-items: center; gap: 8px; }
+    .top-profile {
+      width: auto;
+      min-height: 38px;
+      margin: 0;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-2);
+      color: var(--text);
+      font-weight: 800;
+      white-space: nowrap;
+    }
     h1, h2, p { margin-top: 0; }
     h1 { margin-bottom: 2px; font-size: 34px; letter-spacing: 0; }
     h2 { margin-bottom: 10px; font-size: 23px; letter-spacing: 0; }
@@ -65,6 +78,29 @@ MINI_APP_HTML = r"""<!doctype html>
     .rank-card.rank-3, .rank-badge.rank-3 { --rank-color:#ce9b49; border-color:#ce9b49; }
     .rank-card.rank-4, .rank-badge.rank-4 { --rank-color:#bc6f88; border-color:#bc6f88; }
     .rank-badge { display:inline-flex; align-items:center; gap:7px; margin-top:10px; padding:7px 10px; border:1px solid var(--line); border-radius:8px; background: color-mix(in srgb, var(--rank-color, #678fb2) 18%, var(--panel)); font-size:13px; font-weight:800; }
+    .utility-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+    .utility-actions .btn { min-height: 46px; margin: 0; }
+    .mini-form { display: grid; gap: 8px; margin-top: 12px; }
+    .mini-form input {
+      width: 100%;
+      min-height: 44px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0f1c2a;
+      color: var(--text);
+      font: inherit;
+    }
+    .mini-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .mini-row .btn { min-height: 44px; margin: 0; }
+    .profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+    .profile-card { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .profile-card b { display: block; margin-top: 4px; font-size: 18px; overflow-wrap: anywhere; }
+    .radio-player { width: 100%; margin-top: 10px; }
+    .radio-list { display: grid; gap: 8px; margin-top: 12px; }
+    .radio-row { display: grid; grid-template-columns: minmax(0, 1fr) 44px; gap: 8px; }
+    .radio-row .btn { min-height: 42px; margin: 0; text-align: left; }
+    .radio-row .favorite-btn { padding: 8px; text-align: center; }
     .shift-card .shift-options { display:grid; gap:8px; margin-top:10px; }
     .shift-card .shift-options .btn { margin-top:0; min-height:44px; }
     .btn {
@@ -570,6 +606,9 @@ MINI_APP_HTML = r"""<!doctype html>
       <h1 id="screen-title">⛏️ Шахта</h1>
       <div id="name" class="muted">Загрузка...</div>
     </div>
+    <div class="top-actions">
+      <button class="top-profile" onclick="showProfile()">Профиль</button>
+    </div>
   </header>
   <div id="content"></div>
 </main>
@@ -590,6 +629,15 @@ MINI_APP_HTML = r"""<!doctype html>
     } else if (view === "bag") {
       screenTitle.textContent = "🎒 Сумка";
       nameNode.textContent = "Инвентарь шахтёра";
+    } else if (view === "profile") {
+      screenTitle.textContent = "👤 Профиль";
+      nameNode.textContent = "MonkeyDin";
+    } else if (view === "weather") {
+      screenTitle.textContent = "🌦️ Погода";
+      nameNode.textContent = "Город и текущая сводка";
+    } else if (view === "radio") {
+      screenTitle.textContent = "📻 Радио";
+      nameNode.textContent = "Поиск станций и избранное";
     } else {
       screenTitle.textContent = "⛏️ Шахта";
       nameNode.textContent = state && state.registered ? state.name : "Новая вылазка";
@@ -700,6 +748,9 @@ MINI_APP_HTML = r"""<!doctype html>
     const normalized = String(value || "").trim().toLowerCase();
     if (normalized === "shop" || normalized.startsWith("shop_")) return "shop";
     if (normalized === "bag" || normalized.startsWith("bag_")) return "bag";
+    if (normalized === "profile" || normalized.startsWith("profile_")) return "profile";
+    if (normalized === "weather" || normalized.startsWith("weather_")) return "weather";
+    if (normalized === "radio" || normalized.startsWith("radio_")) return "radio";
     if (normalized === "mine" || normalized.startsWith("mine_")) return "mine";
     return normalized;
   }
@@ -739,7 +790,7 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   function readStartOwner() {
-    const match = readRawStartParam().match(/^(?:mine|shop|bag)_(\d+)$/);
+    const match = readRawStartParam().match(/^(?:mine|shop|bag|profile|weather|radio)_(\d+)$/);
     return match ? Number(match[1]) : null;
   }
 
@@ -764,6 +815,250 @@ MINI_APP_HTML = r"""<!doctype html>
       <div class="rank-line"><span class="rank-emblem">${rankEmblem(rank.level)}</span><span>${escapeHtml(rank.name)}</span></div>
       <div class="muted" style="margin-top:7px">${escapeHtml(text)}</div>
     </section>`;
+  }
+
+  function utilityActionsHtml() {
+    return `<div class="utility-actions">
+      <button class="btn secondary" onclick="showWeather()">Погода</button>
+      <button class="btn secondary" onclick="showRadio()">Радио</button>
+    </div>`;
+  }
+
+  function loadMiniSettings() {
+    try {
+      return JSON.parse(localStorage.getItem("miniAppSettings") || "{}");
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function saveMiniSettings(settings) {
+    localStorage.setItem("miniAppSettings", JSON.stringify(settings));
+  }
+
+  function weatherDescription(code) {
+    const map = {
+      0: "Ясно", 1: "Преимущественно ясно", 2: "Переменная облачность", 3: "Пасмурно",
+      45: "Туман", 48: "Туман", 51: "Слабая морось", 53: "Морось", 55: "Сильная морось",
+      61: "Небольшой дождь", 63: "Дождь", 65: "Сильный дождь", 71: "Небольшой снег",
+      73: "Снег", 75: "Сильный снег", 80: "Небольшой ливень", 81: "Ливень",
+      82: "Сильный ливень", 95: "Гроза", 96: "Гроза с градом", 99: "Сильная гроза"
+    };
+    return map[Number(code)] || "Нет данных";
+  }
+
+  function renderWeather(data = null, message = "") {
+    setScreenHeader("weather");
+    const settings = loadMiniSettings();
+    const weatherBlock = data ? `
+      <section class="panel">
+        <h2>${escapeHtml(data.location || settings.weatherCity || "Погода")}</h2>
+        <p>${escapeHtml(weatherDescription(data.weatherCode))} · <b>${escapeHtml(String(data.temperature ?? "?"))}°C</b></p>
+        <p class="muted">Ощущается ${escapeHtml(String(data.apparentTemperature ?? "?"))}°C · Влажность ${escapeHtml(String(data.humidity ?? "?"))}% · Ветер ${escapeHtml(String(data.windSpeed ?? "?"))} км/ч</p>
+        ${data.updatedAt ? `<p class="muted">Обновлено: ${new Date(data.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>` : ""}
+      </section>` : `<section class="panel muted">${escapeHtml(message || "Укажи город и нажми «Обновить».")}</section>`;
+    content.innerHTML = `<section class="panel">
+      <h2>Настройка погоды</h2>
+      <div class="mini-form">
+        <input id="weatherCityInput" placeholder="Например: Кривой Рог" value="${escapeHtml(settings.weatherCity || "")}">
+        <div class="mini-row">
+          <button class="btn" onclick="refreshMiniWeather(true)">Обновить</button>
+          <button class="btn secondary" onclick="renderMine()">Назад</button>
+        </div>
+      </div>
+    </section>${weatherBlock}`;
+    scrollToTop();
+  }
+
+  async function showWeather() {
+    renderWeather();
+    const settings = loadMiniSettings();
+    if (settings.weatherCity) await refreshMiniWeather(false);
+  }
+
+  async function refreshMiniWeather(manual = true) {
+    const input = document.getElementById("weatherCityInput");
+    const city = (input ? input.value : loadMiniSettings().weatherCity || "").trim();
+    if (!city) {
+      renderWeather(null, "Укажи город для погоды.");
+      return;
+    }
+    const settings = loadMiniSettings();
+    settings.weatherCity = city;
+    saveMiniSettings(settings);
+    if (manual) renderWeather(null, "Обновляю погоду...");
+    try {
+      const data = await api(`/miniapp/weather?q=${encodeURIComponent(city)}`);
+      renderWeather(data);
+    } catch (error) {
+      renderWeather(null, `Не удалось загрузить погоду: ${error.message || error}`);
+    }
+  }
+
+  let radioResults = [];
+
+  function loadLastRadioStation() {
+    try {
+      return JSON.parse(localStorage.getItem("miniAppLastRadioStation") || "null");
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function loadFavoriteRadioStations() {
+    try {
+      return JSON.parse(localStorage.getItem("miniAppFavoriteRadioStations") || "[]");
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function isFavoriteRadioStation(uuid) {
+    return loadFavoriteRadioStations().some(station => station.uuid === uuid);
+  }
+
+  function renderRadioResults(emptyText = "Найди станцию или открой избранное.") {
+    const target = document.getElementById("radioStations");
+    if (!target) return;
+    target.innerHTML = radioResults.map((station, index) => `
+      <div class="radio-row">
+        <button class="btn secondary" onclick="playRadioStation(${index})">
+          ${escapeHtml(station.name || "Без названия")}
+        </button>
+        <button class="btn secondary favorite-btn" onclick="toggleFavoriteRadioStation(${index})">
+          ${isFavoriteRadioStation(station.stationuuid) ? "★" : "☆"}
+        </button>
+      </div>
+    `).join("") || `<div class="muted">${escapeHtml(emptyText)}</div>`;
+  }
+
+  function showRadio() {
+    setScreenHeader("radio");
+    const last = loadLastRadioStation();
+    content.innerHTML = `<section class="panel">
+      <h2>Radio Browser</h2>
+      <div class="mini-form">
+        <input id="radioSearch" placeholder="Название станции или жанр">
+        <div class="mini-row">
+          <button class="btn" onclick="searchRadioStations()">Найти</button>
+          <button class="btn secondary" onclick="showFavoriteRadioStations()">Избранное</button>
+        </div>
+      </div>
+      <div id="radioNow" class="muted" style="margin-top:10px">${last ? `Последняя станция: ${escapeHtml(last.name)}` : "Станция не выбрана."}</div>
+      <audio id="radioPlayer" class="radio-player" controls ${last ? `src="${escapeHtml(last.url)}"` : ""}></audio>
+      <div id="radioStations" class="radio-list"></div>
+      <button class="btn secondary" onclick="renderMine()">Назад в шахту</button>
+    </section>`;
+    renderRadioResults();
+    scrollToTop();
+  }
+
+  async function searchRadioStations() {
+    const query = document.getElementById("radioSearch").value.trim();
+    const target = document.getElementById("radioStations");
+    target.innerHTML = `<div class="muted">Ищу станции...</div>`;
+    const params = new URLSearchParams({
+      hidebroken: "true",
+      codec: "MP3",
+      order: "clickcount",
+      reverse: "true",
+      limit: "30",
+    });
+    if (query) params.set("name", query);
+    try {
+      const response = await fetch(`https://de1.api.radio-browser.info/json/stations/search?${params}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      radioResults = await response.json();
+      renderRadioResults("Станции не найдены.");
+    } catch (error) {
+      target.innerHTML = `<div class="muted">Не удалось загрузить станции: ${escapeHtml(error.message)}</div>`;
+    }
+  }
+
+  function playRadioStation(index) {
+    const station = radioResults[index];
+    const player = document.getElementById("radioPlayer");
+    const url = station.url_resolved || station.url;
+    player.src = url;
+    player.play();
+    document.getElementById("radioNow").textContent = `Сейчас играет: ${station.name || "Без названия"}`;
+    localStorage.setItem("miniAppLastRadioStation", JSON.stringify({
+      name: station.name || "Без названия",
+      url,
+      uuid: station.stationuuid || "",
+    }));
+    fetch(`https://de1.api.radio-browser.info/json/url/${station.stationuuid || station.uuid}`).catch(() => {});
+  }
+
+  function toggleFavoriteRadioStation(index) {
+    const station = radioResults[index];
+    const uuid = station.stationuuid || station.uuid || "";
+    const favorites = loadFavoriteRadioStations();
+    const existing = favorites.findIndex(item => item.uuid === uuid);
+    if (existing >= 0) favorites.splice(existing, 1);
+    else favorites.push({
+      name: station.name || "Без названия",
+      url: station.url_resolved || station.url,
+      uuid,
+    });
+    localStorage.setItem("miniAppFavoriteRadioStations", JSON.stringify(favorites));
+    renderRadioResults();
+  }
+
+  function showFavoriteRadioStations() {
+    radioResults = loadFavoriteRadioStations().map(station => ({
+      name: station.name,
+      url: station.url,
+      url_resolved: station.url,
+      stationuuid: station.uuid,
+    }));
+    renderRadioResults("В избранном пока нет станций.");
+  }
+
+  function renderProfile(profile) {
+    setScreenHeader("profile");
+    const user = profile.user || {};
+    const premium = profile.premium || {};
+    const plan = premium.plan || {};
+    const mine = profile.mine || {};
+    const premiumText = premium.active ? (plan.title || "Premium активен") : "не активен";
+    const items = (mine.activeItems || []).slice(0, 8).map(item =>
+      `<div class="inventory-row"><span>${escapeHtml(item.name)}</span><b>× ${item.quantity}</b></div>`
+    ).join("");
+    const achievements = (mine.achievements || []).slice(-4).map(item =>
+      `<div class="inventory-row"><span>${escapeHtml(item.name)}</span></div>`
+    ).join("");
+    content.innerHTML = `<section class="panel">
+      <h2>${escapeHtml(user.fullName || "Профиль")}</h2>
+      <div class="muted">${user.username ? `@${escapeHtml(user.username)}` : "username не указан"}</div>
+      <div class="profile-grid">
+        <div class="profile-card">Premium<b>${escapeHtml(premiumText)}</b></div>
+        <div class="profile-card">Ранг<b>${escapeHtml(mine.rank || "Новичок")}</b></div>
+        <div class="profile-card">Котоины<b>${mine.coins || 0}</b></div>
+        <div class="profile-card">Глубина<b>${mine.totalDepth || 0} м</b></div>
+        <div class="profile-card">Уровень<b>${mine.level || 0}</b></div>
+        <div class="profile-card">Удача<b>${mine.luck || 0}/100</b></div>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Шахта</h2>
+      <p class="muted">Рекорд: <b>${mine.bestSessionDepth || 0} м</b> · Серия: <b>${mine.streak || 0}</b> · Маршрут: <b>${escapeHtml(mine.route || "не выбран")}</b></p>
+      <p class="muted">Достижения: <b>${mine.achievementsTotal || 0}/${mine.achievementsKnown || 0}</b></p>
+    </section>
+    ${items ? `<section class="panel"><h2>Инвентарь</h2><div class="inventory-list">${items}</div></section>` : ""}
+    ${achievements ? `<section class="panel"><h2>Последние достижения</h2><div class="inventory-list">${achievements}</div></section>` : ""}
+    <section class="panel"><button class="btn secondary" style="margin:0" onclick="renderMine()">Назад в шахту</button></section>`;
+    scrollToTop();
+  }
+
+  async function showProfile() {
+    setScreenHeader("profile");
+    content.innerHTML = `<section class="panel muted">Загружаю профиль MonkeyDin...</section>`;
+    try {
+      renderProfile(await api("/miniapp/profile"));
+    } catch (error) {
+      showError(error);
+    }
   }
 
   function shiftContractHtml() {
@@ -814,7 +1109,7 @@ MINI_APP_HTML = r"""<!doctype html>
         <div class="stat">🍀<b>${state.luck}/100</b></div>
         <div class="stat">🏆<b>${state.record} м</b></div>
       </div>
-      ${rankCosmeticHtml(false)}
+      ${utilityActionsHtml()}
       ${shiftContractHtml()}
       <section class="panel">
         <div class="muted">Текущая вылазка</div>
@@ -891,7 +1186,7 @@ MINI_APP_HTML = r"""<!doctype html>
   async function load() {
     const initialView = readStartParam();
     const intendedOwner = readStartOwner();
-    setScreenHeader(initialView === "shop" ? "shop" : initialView === "bag" ? "bag" : "mine");
+    setScreenHeader(["shop", "bag", "profile", "weather", "radio"].includes(initialView) ? initialView : "mine");
     try {
       state = await api("/miniapp/mine");
       if (intendedOwner && Number(state.userId) !== intendedOwner) {
@@ -901,6 +1196,9 @@ MINI_APP_HTML = r"""<!doctype html>
       }
       if (initialView === "shop") await showShop();
       else if (initialView === "bag") await showBag();
+      else if (initialView === "profile") await showProfile();
+      else if (initialView === "weather") await showWeather();
+      else if (initialView === "radio") showRadio();
       else renderMine();
     } catch (error) {
       nameNode.textContent = "Ошибка загрузки";

@@ -137,6 +137,8 @@ def test_ticket_picks_update_in_place_without_scrolling_or_full_render() -> None
 def test_miniapp_has_no_close_button() -> None:
     assert 'id="close"' not in MINI_APP_HTML
     assert "telegram.close()" not in MINI_APP_HTML
+    assert "showProfile()" in MINI_APP_HTML
+    assert ">Профиль<" in MINI_APP_HTML
 
 
 def test_mine_actions_refresh_without_scrolling_to_top() -> None:
@@ -160,7 +162,7 @@ def test_mine_actions_refresh_without_scrolling_to_top() -> None:
 
 
 def test_shop_deep_link_opens_a_distinct_compact_screen() -> None:
-    assert 'setScreenHeader(initialView === "shop" ? "shop"' in MINI_APP_HTML
+    assert '["shop", "bag", "profile", "weather", "radio"].includes(initialView)' in MINI_APP_HTML
     assert 'screenTitle.textContent = "🛒 Магазин"' in MINI_APP_HTML
     assert 'setScreenHeader("shop");' in MINI_APP_HTML
     assert 'class="shop-hero"' in MINI_APP_HTML
@@ -169,3 +171,22 @@ def test_shop_deep_link_opens_a_distinct_compact_screen() -> None:
     assert 'class="btn shop-buy"' in MINI_APP_HTML
     assert 'window.scrollTo(0, 0)' in MINI_APP_HTML
     assert 'class="inventory-group"' in MINI_APP_HTML
+
+
+def test_miniapp_has_profile_weather_and_radio_screens() -> None:
+    assert 'api("/miniapp/profile")' in MINI_APP_HTML
+    assert 'api(`/miniapp/weather?q=${encodeURIComponent(city)}`)' in MINI_APP_HTML
+    assert 'function showWeather()' in MINI_APP_HTML
+    assert 'function showRadio()' in MINI_APP_HTML
+    assert 'function searchRadioStations()' in MINI_APP_HTML
+    assert 'miniAppFavoriteRadioStations' in MINI_APP_HTML
+    assert 'https://de1.api.radio-browser.info/json/stations/search' in MINI_APP_HTML
+
+
+def test_miniapp_replaces_rank_card_with_two_utility_buttons_on_mine() -> None:
+    mine_html = MINI_APP_HTML.split("function mineHtml()", 1)[1].split("function goldTicketHtml()", 1)[0]
+
+    assert "${utilityActionsHtml()}" in mine_html
+    assert "${rankCosmeticHtml(false)}" not in mine_html
+    assert '<button class="btn secondary" onclick="showWeather()">Погода</button>' in MINI_APP_HTML
+    assert '<button class="btn secondary" onclick="showRadio()">Радио</button>' in MINI_APP_HTML

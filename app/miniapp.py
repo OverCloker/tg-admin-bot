@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field
 from .config import load_config
 from .db import Database
 from .miniapp_ui import MINI_APP_HTML as MINI_APP_UI_HTML
+from .premium import PremiumService
+from .user_profile import build_user_profile
 
 router = APIRouter()
 DIG_LOCK = Lock()
@@ -760,6 +762,37 @@ def miniapp_mine(x_telegram_init_data: str | None = Header(default=None, alias="
         return _state(db, user["id"])
     finally:
         db.close()
+
+
+@router.get("/miniapp/profile")
+def miniapp_profile(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    config = load_config()
+    db = Database(config.db_path)
+    premium = PremiumService(config.db_path)
+    try:
+        db.init()
+        return build_user_profile(
+            db,
+            premium,
+            user["id"],
+            user.get("username"),
+            user["full_name"],
+        )
+    finally:
+        premium.close()
+        db.close()
+
+
+@router.get("/miniapp/weather")
+async def miniapp_weather(
+    q: str,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    _telegram_user(x_telegram_init_data)
+    from .admin_api import weather_payload
+
+    return await weather_payload(q, "MonkeyDin-MiniApp/0.3")
 
 
 @router.post("/miniapp/mine/register")
