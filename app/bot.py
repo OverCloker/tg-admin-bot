@@ -3514,7 +3514,7 @@ def social_profile_markup(chat_id: int, viewer_id: int, target_id: int) -> Inlin
 def secret_message_markup(message_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Открыть личное сообщение", callback_data=f"sec:open:{message_id}")]
+            [InlineKeyboardButton(text="Открыть скрытое сообщение", callback_data=f"sec:open:{message_id}")]
         ]
     )
 
@@ -3742,7 +3742,7 @@ async def cb_secret_message_open(callback: CallbackQuery) -> None:
         if callback.message:
             try:
                 await callback.message.edit_text(
-                    f"{escape(secret_message.target_name)}, скрытое сообщение открыто.",
+                    "Скрытое сообщение открыто.",
                     reply_markup=None,
                 )
             except (TelegramBadRequest, TelegramForbiddenError):
@@ -3769,7 +3769,7 @@ async def cb_secret_message_open(callback: CallbackQuery) -> None:
     if callback.message:
         try:
             await callback.message.edit_text(
-                f"{escape(secret_message.target_name)}, скрытое сообщение слишком длинное для окна и доставлено в личку.",
+                "Скрытое сообщение слишком длинное для окна и доставлено адресату в личку.",
                 reply_markup=None,
             )
         except (TelegramBadRequest, TelegramForbiddenError):
@@ -6650,11 +6650,10 @@ async def secret_message_private_compose(message: Message) -> None:
         text=text,
     )
     db.delete_secret_message_compose(compose.compose_id)
-    sender_name = f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name
     try:
         await message.bot.send_message(
             compose.chat_id,
-            f"{escape(compose.target_name)}, тебе скрытое сообщение от <b>{escape(sender_name)}</b>.",
+            "В чате появилось скрытое сообщение. Открыть сможет только адресат.",
             reply_markup=secret_message_markup(message_id),
             disable_web_page_preview=True,
         )
