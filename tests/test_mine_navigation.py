@@ -210,3 +210,4 @@ def test_secret_message_command_detects_hidden_text_separately() -> None:
     assert unsafe
     assert unsafe.group(1) == "@target_user"
     assert unsafe.group(2) == "этот текст нельзя в группу"
+    assert bot.SECRET_MESSAGE_ALERT_LIMIT <= 200

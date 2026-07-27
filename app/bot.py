@@ -127,6 +127,7 @@ ALARM_TOPIC_COMMAND_RE = re.compile(
 ALERTS_LOCATION_UID = "46"
 ALERTS_LOCATION_TITLE = "Криворізький район"
 ALERTS_POLL_INTERVAL_SECONDS = 60
+SECRET_MESSAGE_ALERT_LIMIT = 190
 GIVEAWAY_TOP_RE = re.compile(r"^топ\s+пидоров[?!.]?$", re.IGNORECASE)
 SECRET_MESSAGE_RE = re.compile(
     r"^\s*(?:лс|личка)(?:\s+(@[A-Za-z0-9_]{5,32}))?(?:\s+(.+))?\s*$",
@@ -3734,6 +3735,20 @@ async def cb_secret_message_open(callback: CallbackQuery) -> None:
         return
 
     sender = f"@{secret_message.sender_username}" if secret_message.sender_username else secret_message.sender_name
+    alert_text = f"От {sender}:\n\n{secret_message.text}"
+    if len(alert_text) <= SECRET_MESSAGE_ALERT_LIMIT:
+        await callback.answer(alert_text, show_alert=True)
+        db.mark_secret_message_delivered(message_id)
+        if callback.message:
+            try:
+                await callback.message.edit_text(
+                    f"{escape(secret_message.target_name)}, скрытое сообщение открыто.",
+                    reply_markup=None,
+                )
+            except (TelegramBadRequest, TelegramForbiddenError):
+                pass
+        return
+
     chat_title = callback.message.chat.title if callback.message and callback.message.chat else "чате"
     try:
         await callback.bot.send_message(
@@ -3754,7 +3769,7 @@ async def cb_secret_message_open(callback: CallbackQuery) -> None:
     if callback.message:
         try:
             await callback.message.edit_text(
-                f"{escape(secret_message.target_name)}, скрытое сообщение доставлено в личку.",
+                f"{escape(secret_message.target_name)}, скрытое сообщение слишком длинное для окна и доставлено в личку.",
                 reply_markup=None,
             )
         except (TelegramBadRequest, TelegramForbiddenError):
