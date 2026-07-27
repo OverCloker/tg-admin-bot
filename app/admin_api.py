@@ -3121,6 +3121,8 @@ def access_session(token: str) -> dict[str, Any] | None:
 def api_audit_action(method: str, path: str) -> str:
     if path == "/miniapp/mine/dig":
         return "Ручная раскопка завершена"
+    if path == "/miniapp/super-game/start":
+        return "Супер-игра 9×9 начата"
     if path == "/miniapp/super-game/pick":
         return "Супер-игра 9×9 завершена"
     if path == "/miniapp/shop/buy":
@@ -3154,24 +3156,55 @@ def api_audit_action(method: str, path: str) -> str:
     return f"{method} в панели"
 
 
-def miniapp_shop_purchase_details(response) -> str | None:
-    item_key = (response.headers.get("X-Miniapp-Shop-Item-Key") or "").strip()
-    if not item_key:
-        return None
+def miniapp_shop_item_name(item_key: str) -> str:
     try:
         from . import bot as game
 
         item = game.DIG_SHOP_ITEMS.get(item_key)
-        item_name = item[0] if item else item_key
+        return item[0] if item else item_key
     except Exception:
         logging.exception("Could not resolve Mini App shop item name for audit")
-        item_name = item_key
+        return item_key
+
+
+def miniapp_shop_purchase_details(
+    db: Database,
+    user_id: int | None,
+    item_key: str | None,
+    response=None,
+) -> str | None:
+    item_key = (item_key or "").strip()
+    if not item_key and response is not None:
+        item_key = (response.headers.get("X-Miniapp-Shop-Item-Key") or "").strip()
+    if not item_key:
+        return None
+    item_name = miniapp_shop_item_name(item_key)
+    quantity = 1
     try:
-        quantity = int(response.headers.get("X-Miniapp-Shop-Item-Quantity") or "1")
-    except ValueError:
-        quantity = 1
+        if user_id is not None:
+            quantity = db.get_dig_item_quantity(0, user_id, item_key)
+        elif response is not None:
+            quantity = int(response.headers.get("X-Miniapp-Shop-Item-Quantity") or "1")
+    except (TypeError, ValueError):
+        pass
     suffix = f" x{quantity}" if quantity > 1 else ""
     return f"купил {item_name}{suffix}"
+
+
+async def miniapp_shop_buy_item_key(request: Request) -> str | None:
+    if request.url.path != "/miniapp/shop/buy":
+        return None
+    body = await request.body()
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request._receive = receive
+    try:
+        payload = json.loads(body.decode("utf-8") or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    item_key = payload.get("item_key")
+    return str(item_key).strip() if item_key is not None else None
 
 
 def miniapp_actor_from_request(request: Request) -> tuple[int | None, str | None] | None:
@@ -3194,6 +3227,7 @@ def miniapp_actor_from_request(request: Request) -> tuple[int | None, str | None
 async def audit_api_request(request: Request, call_next):
     chat_match = re.search(r"/admin/chats/(-?\d+)", request.url.path)
     chat_id = int(chat_match.group(1)) if chat_match else None
+    miniapp_shop_item_key = await miniapp_shop_buy_item_key(request)
     chat_token = CURRENT_ADMIN_CHAT_ID.set(chat_id)
     try:
         response = await call_next(request)
@@ -3237,16 +3271,21 @@ async def audit_api_request(request: Request, call_next):
                 audit_details = f"{request.url.path} · ключ: {label}"
     if request.url.path == "/miniapp/mine/dig" and response.headers.get("X-Miniapp-Dig-Finished") != "1":
         return response
-    if request.url.path == "/miniapp/super-game/pick" and response.headers.get("X-Miniapp-Super-Game-Finished") != "1":
+    if request.url.path == "/miniapp/super-game/pick":
         return response
     action = api_audit_action(request.method, request.url.path)
-    if request.url.path == "/miniapp/shop/buy":
-        audit_details = miniapp_shop_purchase_details(response) or audit_details
     chat_title = None
     try:
         with open_db() as db:
             chat = db.get_chat(chat_id) if chat_id is not None else None
             chat_title = chat.title if chat else None
+            if request.url.path == "/miniapp/shop/buy":
+                audit_details = miniapp_shop_purchase_details(
+                    db,
+                    actor_id,
+                    miniapp_shop_item_key,
+                    response=response,
+                ) or audit_details
             db.add_audit_log(
                 "приложение",
                 action,
