@@ -4651,7 +4651,7 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
         if owner_id is None:
             return
         if action == "mode":
-            if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+            if chat_id != 0 and not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
                 await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
                 return
             await safe_edit(
@@ -4664,7 +4664,7 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
             await callback.answer()
             return
         if action == "manual":
-            if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+            if chat_id != 0 and not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
                 await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
                 return
             try:
@@ -4691,7 +4691,7 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
         owner_id = await resolve_dig_button_owner(callback, None)
         if owner_id is None:
             return
-    if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
+    if chat_id != 0 and not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
         await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
         return
 
@@ -5282,28 +5282,41 @@ async def cb_feedback_start(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("dig:register"))
 async def cb_dig_register(callback: CallbackQuery) -> None:
-    if not callback.message or callback.message.chat.type not in SUPPORTED_CHAT_TYPES:
-        await callback.answer("Регистрироваться нужно в группе.", show_alert=True)
+    if not callback.message:
+        await callback.answer("Не вижу сообщение регистрации.", show_alert=True)
         return
     parts = callback.data.split(":")
     owner_id = await resolve_dig_button_owner(callback, parts[2] if len(parts) > 2 else None)
     if owner_id is None:
         return
 
-    await register_current_chat(callback.message)
+    is_private = callback.message.chat.type == "private"
+    if not is_private and callback.message.chat.type not in SUPPORTED_CHAT_TYPES:
+        await callback.answer("Регистрироваться можно в группе или в личном чате с ботом.", show_alert=True)
+        return
+    chat_id = 0 if is_private else callback.message.chat.id
+    if not is_private:
+        await register_current_chat(callback.message)
     user = callback.from_user
     created = db.register_dig_player(
-        chat_id=callback.message.chat.id,
+        chat_id=chat_id,
         user_id=user.id,
         username=user.username,
         full_name=user.full_name,
     )
     if created:
         await callback.answer("Ты в игре.", show_alert=True)
-        await callback.message.answer(
-            f"{escape(dig_player_name(user.username, user.full_name))} зарегистрировался в раскопках.\n"
-            "Теперь можно писать: <code>копай</code>"
-        )
+        if is_private:
+            await callback.message.answer(
+                "Ты зарегистрирован в шахте.\n\n"
+                "Теперь можно писать <code>копай</code> прямо здесь или открыть Mini App.",
+                reply_markup=user_dig_mode_menu(0, user.id),
+            )
+        else:
+            await callback.message.answer(
+                f"{escape(dig_player_name(user.username, user.full_name))} зарегистрировался в раскопках.\n"
+                "Теперь можно писать: <code>копай</code>"
+            )
     else:
         await callback.answer("Ты уже зарегистрирован.", show_alert=True)
 
@@ -9168,9 +9181,23 @@ async def chat_profile(message: Message) -> None:
 
 @router.message(F.text.casefold() == "копай")
 async def dig_command(message: Message) -> None:
-    if message.chat.type not in SUPPORTED_CHAT_TYPES:
-        return
     if not message.from_user:
+        return
+    if message.chat.type == "private":
+        player = db.get_dig_player(0, message.from_user.id)
+        registered_text = ""
+        if player is None:
+            db.register_dig_player(0, message.from_user.id, message.from_user.username, message.from_user.full_name)
+            registered_text = "Ты зарегистрирован в шахте.\n\n"
+        await message.answer(
+            registered_text
+            + "Выбери способ раскопки:\n\n"
+            "• <b>Автоматически</b> — быстрый результат, добыча ниже, без ручных событий, руды и купца.\n"
+            "• <b>Вручную</b> — Mini App: клетки, события, руда, купец и выборы по ходу вылазки.",
+            reply_markup=user_dig_mode_menu(0, message.from_user.id),
+        )
+        return
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
         return
 
     await remember_sender(message)
