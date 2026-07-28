@@ -2965,29 +2965,52 @@ async def set_chat_available_reactions(bot: Bot, chat_id: int, reactions: list) 
 async def safe_edit(callback: CallbackQuery, text: str, **kwargs) -> None:
     if not callback.message:
         return
+    retry_on_flood = bool(kwargs.pop("retry_on_flood", True))
     if callback.message.text is None:
-        with suppress(TelegramBadRequest, TelegramForbiddenError):
+        with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
             await callback.message.edit_reply_markup(reply_markup=None)
-        with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound):
+        with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
             await callback.message.answer(text, **kwargs)
         return
     try:
         await callback.message.edit_text(text, **kwargs)
+    except TelegramRetryAfter as exc:
+        if not retry_on_flood:
+            return
+        await asyncio.sleep(int(getattr(exc, "retry_after", 3)) + 1)
+        try:
+            await callback.message.edit_text(text, **kwargs)
+        except TelegramBadRequest as retry_exc:
+            if "message is not modified" in str(retry_exc).lower():
+                return
+            if message_edit_target_is_missing(retry_exc):
+                with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
+                    await callback.message.answer(text, **kwargs)
+                return
+            raise
+        except (TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
+            return
     except TelegramBadRequest as exc:
         error = str(exc).lower()
         if "message is not modified" in error:
             return
         if message_edit_target_is_missing(exc):
-            with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound):
+            with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
                 await callback.message.answer(text, **kwargs)
             return
         if "can't parse entities" in error:
             safe_text = escape(unescape(strip_html(text)))
             try:
                 await callback.message.edit_text(safe_text, **kwargs)
+            except TelegramRetryAfter as retry_after_exc:
+                if not retry_on_flood:
+                    return
+                await asyncio.sleep(int(getattr(retry_after_exc, "retry_after", 3)) + 1)
+                with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
+                    await callback.message.edit_text(safe_text, **kwargs)
             except TelegramBadRequest as retry_exc:
                 if message_edit_target_is_missing(retry_exc):
-                    with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound):
+                    with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
                         await callback.message.answer(safe_text, **kwargs)
                     return
                 raise
@@ -4739,9 +4762,7 @@ async def cb_interactive_dig_cell(callback: CallbackQuery) -> None:
 
         current_depth = int(session["depth"])
         next_depth = current_depth + 1
-        await safe_edit(callback, "🐱 Кот подходит к выбранному слою…")
-        await asyncio.sleep(0.6)
-        await safe_edit(callback, "⛏ Удар киркой…")
+        await safe_edit(callback, "⛏ Кот бьёт киркой по выбранному слою…", retry_on_flood=False)
         await asyncio.sleep(0.6)
 
         resolved = resolve_cell(cells[cell_index])
