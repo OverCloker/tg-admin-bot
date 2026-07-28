@@ -1,19 +1,23 @@
 import json
 import random
+from datetime import datetime
 
 from app.db import Database
 from app.dig_game import (
     INTERACTIVE_DIG_MAX_CELLS_PER_METER,
     INTERACTIVE_DIG_MIN_CELLS_PER_METER,
     INTERACTIVE_DIG_SUCCESS_CHANCES,
+    cell_ore_units,
     cell_reward,
     collapse_payout,
     final_cell_chance,
     final_depth_bonus,
     generate_dig_cells,
     generate_dig_stage,
+    merchant_ore_price,
     mine_type_for_total_depth,
     resolve_cell,
+    scale_interactive_reward,
 )
 
 
@@ -58,8 +62,20 @@ def test_roots_and_unknown_resolve_after_selection() -> None:
 def test_temp_reward_and_collapse_payout() -> None:
     assert cell_reward(10, 1.0, {"reward_multiplier": 1.35}, 0) == 14
     assert cell_reward(10, 2.0, {"reward_multiplier": 1.6}, 20) == 39
+    assert scale_interactive_reward(14) == 6
+    assert scale_interactive_reward(39) == 17
     assert collapse_payout(100) == (70, 30)
     assert collapse_payout(100, protected_loss_percent=10) == (80, 20)
+
+
+def test_ore_and_merchant_price_are_predictable_for_current_bucket() -> None:
+    moment = datetime.fromisoformat("2026-07-28T08:15:00+00:00")
+
+    assert cell_ore_units({"resolved_kind": "ore"}) == 1
+    assert cell_ore_units({"resolved_kind": "hard"}) == 2
+    assert cell_ore_units({"resolved_kind": "normal"}) == 0
+    assert merchant_ore_price(moment) == merchant_ore_price(moment.replace(minute=59))
+    assert 10 <= merchant_ore_price(moment) <= 40
 
 
 def test_interactive_session_blocks_same_cell_and_foreign_user(tmp_path) -> None:

@@ -22,6 +22,7 @@ from .db import Database
 from .dig_game import (
     INTERACTIVE_DIG_DURABILITY,
     INTERACTIVE_DIG_MAX_DEPTH,
+    cell_ore_units,
     cell_reward,
     collapse_payout,
     event_choice,
@@ -29,8 +30,10 @@ from .dig_game import (
     final_depth_bonus,
     generate_dig_cells,
     generate_dig_stage,
+    merchant_ore_price,
     mine_type_for_total_depth,
     resolve_cell,
+    scale_interactive_reward,
 )
 from .miniapp_ui import MINI_APP_HTML as MINI_APP_UI_HTML
 from .premium import PremiumService
@@ -104,6 +107,8 @@ def _interactive_dig_public(db: Database, user_id: int) -> dict[str, Any] | None
         "durability": int(session["durability"]),
         "maxDurability": INTERACTIVE_DIG_DURABILITY,
         "temporaryCoins": int(session["temporary_coins"]),
+        "oreUnits": int(snapshot.get("ore_units", 0)),
+        "merchantPrice": merchant_ore_price(),
         "luck": int(session["luck_snapshot"]),
         "mineTitle": snapshot.get("mine_title") or "Старая шахта",
         "mineEmoji": snapshot.get("mine_emoji") or "⛏",
@@ -674,6 +679,7 @@ def _begin_interactive_manual(db: Database, game: Any, user: dict[str, Any], now
         "miner_hearing_count": int(items.get("miner_hearing", 0)),
         "magnet_count": int(items.get("magnet", 0)),
         "cat_companion_count": int(items.get("cat_companion", 0)),
+        "ore_units": 0,
         "used_tools": [],
         "used_effects": effects,
     }
@@ -1150,6 +1156,13 @@ def _settle_interactive_manual(
     event = None
     artifact = None
     if depth > 0 and not collapsed:
+        ore_units = int(snapshot.get("ore_units", 0))
+        if ore_units:
+            price = merchant_ore_price(now)
+            coins += ore_units * price
+            snapshot["ore_units"] = 0
+            effects.append(f"Оставшаяся руда продана при выходе: {ore_units} × {price}")
+    if depth > 0 and not collapsed:
         before_event = coins
         coins, event = game.dig_random_event(depth, coins)
         if coins < before_event and items.get("medkit", 0) > 0 and db.consume_dig_item(0, uid, "medkit"):
@@ -1584,6 +1597,11 @@ def miniapp_interactive_cell(
                 gained = cell_reward(game.dig_coin_reward(next_depth), float(snapshot.get("route_coins", 1.0)), resolved, int(snapshot.get("coin_bonus_percent", 0)))
                 if int(cells[payload.cell].get("reward_bonus", 0)):
                     gained = (gained * (100 + int(cells[payload.cell].get("reward_bonus", 0))) + 99) // 100
+                gained = scale_interactive_reward(gained)
+                ore_gained = cell_ore_units(resolved)
+                if ore_gained:
+                    snapshot["ore_units"] = int(snapshot.get("ore_units", 0)) + ore_gained
+                ore_text = f" Руда: +{ore_gained} ед." if ore_gained else ""
                 if next_depth >= INTERACTIVE_DIG_MAX_DEPTH:
                     next_stage = generate_dig_stage(INTERACTIVE_DIG_MAX_DEPTH, str(snapshot.get("mine_key") or "old_mine"))
                     db.update_interactive_dig_session(
@@ -1592,8 +1610,9 @@ def miniapp_interactive_cell(
                         temporary_coins=int(session["temporary_coins"]) + gained,
                         cells_json=json.dumps(next_stage, ensure_ascii=False),
                         used_cells_json="[]",
+                        equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
                     )
-                    return {"ok": True, "message": f"Слой пройден: {cell_name}. +{gained} котоинов. Впереди финальная комната.", "state": _state(db, user["id"])}
+                    return {"ok": True, "message": f"Слой пройден: {cell_name}. +{gained} котоинов.{ore_text} Впереди финальная комната.", "state": _state(db, user["id"])}
                 next_stage = generate_dig_stage(next_depth + 1, str(snapshot.get("mine_key") or "old_mine"))
                 db.update_interactive_dig_session(
                     session["id"],
@@ -1601,8 +1620,9 @@ def miniapp_interactive_cell(
                     temporary_coins=int(session["temporary_coins"]) + gained,
                     cells_json=json.dumps(next_stage, ensure_ascii=False),
                     used_cells_json="[]",
+                    equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
                 )
-                return {"ok": True, "message": f"Слой пройден: {cell_name}. +{gained} котоинов.", "state": _state(db, user["id"])}
+                return {"ok": True, "message": f"Слой пройден: {cell_name}. +{gained} котоинов.{ore_text}", "state": _state(db, user["id"])}
 
             used = sorted(set(used) | {payload.cell})
             durability = int(session["durability"])
@@ -1719,14 +1739,35 @@ def miniapp_interactive_event(
                 raise HTTPException(400, "Такого выбора нет.")
             snapshot = json.loads(session["equipment_snapshot"] or "{}")
             depth = INTERACTIVE_DIG_MAX_DEPTH if stage.get("type") == "final" else int(session["depth"]) + int(choice.get("depth", 0))
-            coins = max(0, int(session["temporary_coins"]) + int(choice.get("coins", 0)))
+            choice_coins = int(choice.get("coins", 0))
+            if choice_coins > 0:
+                choice_coins = scale_interactive_reward(choice_coins)
+            coins = max(0, int(session["temporary_coins"]) + choice_coins)
             durability = int(session["durability"])
+            merchant_message = ""
+            if choice.get("merchant"):
+                ore_units = int(snapshot.get("ore_units", 0))
+                price = merchant_ore_price()
+                sold = ore_units * price
+                coins += sold
+                snapshot["ore_units"] = 0
+                merchant_message = (
+                    f" Купец купил руду: {ore_units} × {price} = {sold} котоинов."
+                    if ore_units
+                    else " Руды для продажи пока нет."
+                )
             collapsed = False
             if int(choice.get("risk", 0)) and secrets.randbelow(100) < int(choice.get("risk", 0)):
                 durability -= 1
                 collapsed = durability <= 0
             if choice.get("settle") or stage.get("type") == "final" or collapsed:
-                db.update_interactive_dig_session(session["id"], depth=depth, durability=max(0, durability), temporary_coins=coins)
+                db.update_interactive_dig_session(
+                    session["id"],
+                    depth=depth,
+                    durability=max(0, durability),
+                    temporary_coins=coins,
+                    equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
+                )
                 finished = db.get_interactive_dig_session(session["id"])
                 message = _settle_interactive_manual(db, game, user, finished, datetime.now(timezone.utc), collapsed=collapsed)
                 return {"ok": True, "finished": True, "message": message, "state": _state(db, user["id"])}
@@ -1742,7 +1783,7 @@ def miniapp_interactive_event(
                 used_cells_json="[]",
                 equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
             )
-            return {"ok": True, "message": f"Выбор принят: {choice.get('label', 'действие')}.", "state": _state(db, user["id"])}
+            return {"ok": True, "message": f"Выбор принят: {choice.get('label', 'действие')}.{merchant_message}", "state": _state(db, user["id"])}
         finally:
             db.close()
 

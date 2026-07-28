@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 
@@ -11,6 +12,7 @@ INTERACTIVE_DIG_MIN_CELLS_PER_METER = 3
 INTERACTIVE_DIG_MAX_CELLS_PER_METER = 7
 INTERACTIVE_DIG_CELLS_PER_METER = 5
 INTERACTIVE_DIG_DURABILITY = 3
+INTERACTIVE_DIG_REWARD_SCALE_PERCENT = 42
 
 MINE_TYPES = [
     {
@@ -82,9 +84,10 @@ EVENT_ROOMS: dict[str, dict[str, Any]] = {
     "merchant": {
         "emoji": "🧑‍🌾",
         "title": "Подземный торговец",
-        "text": "Кот встретил торговца с подозрительно чистыми сапогами.",
+        "text": "Кот встретил торговца с подозрительно чистыми сапогами. Он скупает руду по текущей цене.",
         "choices": [
-            {"key": "trade", "label": "Взять припасы", "coins": 6, "durability": 1, "next": "cells"},
+            {"key": "sell_ore", "label": "Продать руду", "merchant": True, "next": "cells"},
+            {"key": "trade", "label": "Взять припасы", "coins": 3, "durability": 1, "next": "cells"},
             {"key": "ignore", "label": "Идти дальше", "coins": 0, "next": "cells"},
         ],
     },
@@ -399,6 +402,26 @@ def cell_reward(base_reward: int, route_multiplier: float, cell: Mapping[str, An
     if coin_bonus_percent:
         coins = (coins * (100 + int(coin_bonus_percent)) + 99) // 100
     return max(1, coins)
+
+
+def scale_interactive_reward(coins: int) -> int:
+    return max(1, (max(0, int(coins)) * INTERACTIVE_DIG_REWARD_SCALE_PERCENT + 99) // 100)
+
+
+def cell_ore_units(cell: Mapping[str, Any]) -> int:
+    kind = str(cell.get("resolved_kind") or cell.get("kind") or "")
+    if kind == "hard":
+        return 2
+    if kind == "ore":
+        return 1
+    return 0
+
+
+def merchant_ore_price(now: datetime | None = None) -> int:
+    current = now or datetime.now(timezone.utc)
+    bucket = int(current.timestamp()) // (4 * 60 * 60)
+    rng = random.Random(f"mine-merchant-price:{bucket}")
+    return rng.randint(10, 40)
 
 
 def final_depth_bonus(depth: int, mine_key: str, rng: random.Random | None = None) -> tuple[int, str]:

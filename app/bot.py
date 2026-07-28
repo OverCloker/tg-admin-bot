@@ -34,6 +34,7 @@ from .db import Database, RegisteredChat, normalize_trigger, normalize_username
 from .dig_game import (
     INTERACTIVE_DIG_DURABILITY,
     INTERACTIVE_DIG_MAX_DEPTH,
+    cell_ore_units,
     cell_reward,
     collapse_payout,
     event_choice,
@@ -43,8 +44,10 @@ from .dig_game import (
     generate_dig_cells,
     generate_dig_stage,
     generate_event_stage,
+    merchant_ore_price,
     mine_type_for_total_depth,
     resolve_cell,
+    scale_interactive_reward,
 )
 from .premium import PLANS, PREMIUM_PERIOD_DAYS, PremiumLimitError, PremiumRequiredError, PremiumService, plan_public_dict
 from .media_processor import TASK_TITLES, ffmpeg_available, probe_media_duration, process_media, whisper_available
@@ -1961,6 +1964,8 @@ def interactive_dig_view(session: dict, prefix: str | None = None) -> Interactiv
     mine_title = str(snapshot.get("mine_title") or route_name)
     mine_emoji = str(snapshot.get("mine_emoji") or "⛏")
     luck = int(session["luck_snapshot"])
+    ore_units = int(snapshot.get("ore_units", 0))
+    merchant_price = merchant_ore_price()
     lines = []
     if prefix:
         lines.append(prefix)
@@ -1971,7 +1976,7 @@ def interactive_dig_view(session: dict, prefix: str | None = None) -> Interactiv
             f"Глубина: <b>{depth}/{INTERACTIVE_DIG_MAX_DEPTH}</b> м",
             f"Маршрут: <b>{escape(route_name)}</b>",
             f"Удача: <b>{luck}</b>/100 | Прочность: <b>{durability}</b>/{INTERACTIVE_DIG_DURABILITY}",
-            f"Временная добыча: <b>{temporary_coins}</b> котоинов",
+            f"Временная добыча: <b>{temporary_coins}</b> котоинов | Руда: <b>{ore_units}</b> ед.",
         ]
     )
     if isinstance(cells, dict) and cells.get("type") in {"event", "final"}:
@@ -1983,6 +1988,8 @@ def interactive_dig_view(session: dict, prefix: str | None = None) -> Interactiv
                 escape(str(cells.get("text") or "Выбери действие.")),
             ]
         )
+        if cells.get("event") == "merchant":
+            lines.append(f"Текущая цена руды: <b>{merchant_price}</b> котоинов за ед. Цена меняется каждые 4 часа.")
     else:
         lines.extend(
             [
@@ -2117,6 +2124,7 @@ def start_interactive_dig(chat_id: int, user: User) -> InteractiveDigReply:
         "chest_used": chest_used,
         "repair_used": repair_used,
         "used_effects": used_effects,
+        "ore_units": 0,
     }
     session = db.create_interactive_dig_session(
         session_id=uuid4().hex[:16],
@@ -2153,7 +2161,14 @@ def settle_interactive_dig(session: dict, user: User, *, collapsed: bool) -> Dig
     final_bonus_text = ""
     used_effects = list(snapshot.get("used_effects") or [])
     items = dig_items_map(chat_id, user.id)
+    now = datetime.now(timezone.utc)
     if depth > 0 and not collapsed:
+        ore_units = int(snapshot.get("ore_units", 0))
+        if ore_units:
+            price = merchant_ore_price(now)
+            payout += ore_units * price
+            used_effects.append(f"Оставшаяся руда продана при выходе: {ore_units} × {price}")
+            snapshot["ore_units"] = 0
         before_event = payout
         payout, event_text = dig_random_event(depth, payout)
         if payout < before_event and items.get("medkit", 0) > 0 and db.consume_dig_item(chat_id, user.id, "medkit"):
@@ -2187,7 +2202,6 @@ def settle_interactive_dig(session: dict, user: User, *, collapsed: bool) -> Dig
         final_bonus, final_bonus_text = final_depth_bonus(depth, str(snapshot.get("mine_key") or "old_mine"))
         payout += final_bonus
 
-    now = datetime.now(timezone.utc)
     db.update_dig_player_after_dig(
         chat_id=chat_id,
         user_id=user.id,
@@ -4755,22 +4769,33 @@ async def cb_interactive_dig_cell(callback: CallbackQuery) -> None:
             )
             if int(cells[cell_index].get("reward_bonus", 0)):
                 gained = (gained * (100 + int(cells[cell_index].get("reward_bonus", 0))) + 99) // 100
+            gained = scale_interactive_reward(gained)
+            ore_gained = cell_ore_units(resolved)
+            if ore_gained:
+                snapshot["ore_units"] = int(snapshot.get("ore_units", 0)) + ore_gained
             new_depth = next_depth
             new_temp = int(session["temporary_coins"]) + gained
             if new_depth >= INTERACTIVE_DIG_MAX_DEPTH:
                 updated = dict(session)
-                updated.update({"depth": new_depth, "temporary_coins": new_temp, "processing": 0})
+                updated.update({
+                    "depth": new_depth,
+                    "temporary_coins": new_temp,
+                    "equipment_snapshot": json.dumps(snapshot, ensure_ascii=False),
+                    "processing": 0,
+                })
                 db.update_interactive_dig_session(
                     session_id,
                     depth=new_depth,
                     temporary_coins=new_temp,
+                    equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
                     processing=0,
                 )
                 result = settle_interactive_dig(updated, callback.from_user, collapsed=False)
                 await safe_edit(
                     callback,
                     f"✨ Слой пройден: <b>{escape(cell_title)}</b>.\n"
-                    f"+<b>{gained}</b> котоинов во временную добычу.\n\n"
+                    f"+<b>{gained}</b> котоинов во временную добычу."
+                    f"{f' Руда: +{ore_gained} ед.' if ore_gained else ''}\n\n"
                     f"{result.text}",
                     reply_markup=user_mine_menu(int(session["chat_id"]), callback.from_user.id, show_back=False),
                 )
@@ -4783,12 +4808,14 @@ async def cb_interactive_dig_cell(callback: CallbackQuery) -> None:
                 temporary_coins=new_temp,
                 cells_json=json.dumps(next_cells, ensure_ascii=False),
                 used_cells_json="[]",
+                equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
                 processing=0,
             )
             updated = db.get_interactive_dig_session(session_id)
             view = interactive_dig_view(
                 updated,
-                f"✨ Слой пройден: <b>{escape(cell_title)}</b>. +<b>{gained}</b> котоинов.",
+                f"✨ Слой пройден: <b>{escape(cell_title)}</b>. +<b>{gained}</b> котоинов."
+                f"{f' Руда: +{ore_gained} ед.' if ore_gained else ''}",
             )
             await safe_edit(
                 callback,
@@ -5002,7 +5029,10 @@ async def cb_interactive_dig_event(callback: CallbackQuery) -> None:
 
         if choice.get("settle"):
             final_depth = INTERACTIVE_DIG_MAX_DEPTH if stage.get("type") == "final" else int(session["depth"])
-            final_coins = max(0, int(session["temporary_coins"]) + int(choice.get("coins", 0)))
+            choice_coins = int(choice.get("coins", 0))
+            if choice_coins > 0:
+                choice_coins = scale_interactive_reward(choice_coins)
+            final_coins = max(0, int(session["temporary_coins"]) + choice_coins)
             final_durability = int(session["durability"])
             risk = int(choice.get("risk", 0))
             collapsed = False
@@ -5040,7 +5070,10 @@ async def cb_interactive_dig_event(callback: CallbackQuery) -> None:
             return
 
         current_depth = int(session["depth"])
-        temporary_coins = max(0, int(session["temporary_coins"]) + int(choice.get("coins", 0)))
+        choice_coins = int(choice.get("coins", 0))
+        if choice_coins > 0:
+            choice_coins = scale_interactive_reward(choice_coins)
+        temporary_coins = max(0, int(session["temporary_coins"]) + choice_coins)
         durability = min(
             INTERACTIVE_DIG_DURABILITY,
             int(session["durability"]) + int(choice.get("durability", 0)),
@@ -5049,9 +5082,19 @@ async def cb_interactive_dig_event(callback: CallbackQuery) -> None:
             f"{escape(str(stage.get('emoji') or '❔'))} <b>{escape(str(stage.get('title') or 'Событие'))}</b>",
             f"Выбор: <b>{escape(str(choice.get('label') or 'действие'))}</b>.",
         ]
-        if int(choice.get("coins", 0)):
-            sign = "+" if int(choice.get("coins", 0)) > 0 else ""
-            messages.append(f"Добыча: <b>{sign}{int(choice.get('coins', 0))}</b> котоинов.")
+        if choice.get("merchant"):
+            ore_units = int(snapshot.get("ore_units", 0))
+            price = merchant_ore_price()
+            sold = ore_units * price
+            temporary_coins += sold
+            snapshot["ore_units"] = 0
+            if ore_units:
+                messages.append(f"Купец купил руду: <b>{ore_units}</b> × <b>{price}</b> = <b>{sold}</b> котоинов.")
+            else:
+                messages.append("Купец развёл лапами: руды в сумке пока нет.")
+        if choice_coins:
+            sign = "+" if choice_coins > 0 else ""
+            messages.append(f"Добыча: <b>{sign}{choice_coins}</b> котоинов.")
         if int(choice.get("durability", 0)):
             messages.append(f"Прочность: <b>{durability}</b>/{INTERACTIVE_DIG_DURABILITY}.")
         if int(choice.get("chance", 0)):

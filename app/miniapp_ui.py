@@ -1612,14 +1612,16 @@ MINI_APP_HTML = r"""<!doctype html>
     const progress = Math.max(0, Math.min(10, Number(dig.depth || 0)));
     const header = `<div class="section-title"><h2>${escapeHtml(dig.mineEmoji || "⛏")} ${escapeHtml(dig.mineTitle || "Шахта")}</h2><span class="counter">${progress}/10 м</span></div>
       <div class="meter"><div class="fill" style="width:${progress * 10}%"></div></div>
-      <p class="muted">Прочность: <b>${dig.durability}/${dig.maxDurability}</b> · Временная добыча: <b>${dig.temporaryCoins}</b> 🪙 · Удача: <b>${dig.luck}/100</b></p>`;
+      <p class="muted">Прочность: <b>${dig.durability}/${dig.maxDurability}</b> · Временная добыча: <b>${dig.temporaryCoins}</b> 🪙 · Руда: <b>${dig.oreUnits || 0}</b> · Удача: <b>${dig.luck}/100</b></p>`;
     if (stage.type === "event" || stage.type === "final") {
       const choices = (stage.choices || []).map(choice => `
         <button class="btn secondary" onclick="chooseMineEvent('${escapeJs(choice.key)}')">${escapeHtml(choice.label || "Выбрать")}</button>
       `).join("");
+      const merchantPrice = stage.event === "merchant" ? `<p class="muted">Цена руды сейчас: <b>${dig.merchantPrice}</b> котоинов за ед. Меняется каждые 4 часа.</p>` : "";
       return `<section class="panel">${header}
         <h3>${escapeHtml(stage.emoji || "❔")} ${escapeHtml(stage.title || "Событие")}</h3>
         <p>${escapeHtml(stage.text || "Выбери действие.")}</p>
+        ${merchantPrice}
         ${choices}
         <button class="btn danger" onclick="exitInteractiveDig()">💰 Забрать добычу и выйти</button>
       </section>`;
