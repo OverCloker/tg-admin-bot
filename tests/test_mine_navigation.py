@@ -209,6 +209,9 @@ def test_miniapp_has_interface_themes() -> None:
     assert 'id="themeAndroid" value="material"' in MINI_APP_HTML
     assert "theme-switch-knob" in MINI_APP_HTML
     assert "theme-platform-icon theme-android-icon" in MINI_APP_HTML
+    assert "--surface-blur: blur(28px) saturate(1.75)" in MINI_APP_HTML
+    assert 'body[data-theme="glass"] .panel::before' in MINI_APP_HTML
+    assert "inset 0 1px 0 #ffffff70" in MINI_APP_HTML
     assert "function setMiniTheme(theme)" in MINI_APP_HTML
     assert "themeSwitcherHtml()" in MINI_APP_HTML
     assert 'settings.theme' in MINI_APP_HTML
