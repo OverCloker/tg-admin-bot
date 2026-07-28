@@ -1577,8 +1577,8 @@ MINI_APP_HTML = r"""<!doctype html>
     const depth = state.sessionDepth || 0;
     const disabled = isCoolingDown();
     const cooldown = disabled
-      ? `Копать снова можно: ${new Date(state.cooldownUntil).toLocaleString()}`
-      : "Одно нажатие проверяет один следующий метр.";
+      ? `Ручная раскопка будет доступна: ${new Date(state.cooldownUntil).toLocaleString()}`
+      : "Ручная раскопка доступна сейчас.";
     return `
       <div class="stats">
         <div class="stat">🪙<b id="mineCoins">${state.coins}</b></div>
@@ -1599,11 +1599,12 @@ MINI_APP_HTML = r"""<!doctype html>
   function interactiveMineHtml(disabled, cooldown) {
     const dig = state.interactiveMine;
     if (!dig) {
+      const buttonText = disabled ? "⏳ Ручная раскопка недоступна" : "⛏️ Начать ручную раскопку";
       return `<section class="panel">
-        <div class="muted">Ручная вылазка</div>
+        <div class="muted">Ручная раскопка</div>
         <div class="depth">0/10 м</div>
         <div class="meter"><div class="fill" style="width:0%"></div></div>
-        <button class="btn" ${disabled ? "disabled" : ""} onclick="startInteractiveDig(this)">⛏️ Начать вылазку</button>
+        <button class="btn" ${disabled ? "disabled" : ""} onclick="startInteractiveDig(this)">${buttonText}</button>
         <div class="muted" style="margin-top:10px">${escapeHtml(cooldown)}</div>
       </section>`;
     }
