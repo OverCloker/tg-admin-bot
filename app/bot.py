@@ -759,6 +759,15 @@ def callback_query_is_stale(exc: TelegramBadRequest) -> bool:
     return "query is too old" in message or "response timeout expired" in message or "query id is invalid" in message
 
 
+def message_edit_target_is_missing(exc: TelegramBadRequest) -> bool:
+    message = str(exc).casefold()
+    return (
+        "message to edit not found" in message
+        or "message can't be edited" in message
+        or "message identifier is not specified" in message
+    )
+
+
 def preview_html(value: str, limit: int = 140) -> str:
     preview = value.replace("\n", " ").strip()
     if len(preview) <= limit:
@@ -2945,7 +2954,8 @@ async def safe_edit(callback: CallbackQuery, text: str, **kwargs) -> None:
     if callback.message.text is None:
         with suppress(TelegramBadRequest, TelegramForbiddenError):
             await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.message.answer(text, **kwargs)
+        with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound):
+            await callback.message.answer(text, **kwargs)
         return
     try:
         await callback.message.edit_text(text, **kwargs)
@@ -2953,8 +2963,20 @@ async def safe_edit(callback: CallbackQuery, text: str, **kwargs) -> None:
         error = str(exc).lower()
         if "message is not modified" in error:
             return
+        if message_edit_target_is_missing(exc):
+            with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound):
+                await callback.message.answer(text, **kwargs)
+            return
         if "can't parse entities" in error:
-            await callback.message.edit_text(escape(unescape(strip_html(text))), **kwargs)
+            safe_text = escape(unescape(strip_html(text)))
+            try:
+                await callback.message.edit_text(safe_text, **kwargs)
+            except TelegramBadRequest as retry_exc:
+                if message_edit_target_is_missing(retry_exc):
+                    with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound):
+                        await callback.message.answer(safe_text, **kwargs)
+                    return
+                raise
             return
         raise
 

@@ -14,6 +14,15 @@ from app.miniapp_ui import MINI_APP_HTML
 from app import bot
 
 
+class FakeTelegramBadRequest(Exception):
+    def __str__(self) -> str:
+        return "Telegram server says - Bad Request: message to edit not found"
+
+
+def test_message_edit_not_found_is_treated_as_missing_target() -> None:
+    assert bot.message_edit_target_is_missing(FakeTelegramBadRequest())
+
+
 def test_group_dig_mode_uses_callback_and_main_miniapp_link(monkeypatch) -> None:
     monkeypatch.delenv("MINI_APP_SHORT_NAME", raising=False)
     buttons = [button for row in user_dig_mode_menu(-1001, 42).inline_keyboard for button in row]
