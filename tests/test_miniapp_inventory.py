@@ -1,4 +1,5 @@
 from app.db import Database
+from app import miniapp
 from app.miniapp import _shop_catalog
 
 
@@ -81,3 +82,10 @@ def test_dig_player_tag_can_be_saved(tmp_path) -> None:
         assert db.get_dig_player_tag(42) == "Deep Baron"
     finally:
         db.close()
+
+
+def test_miniapp_does_not_rebind_bot_global_database() -> None:
+    source = miniapp.__loader__.get_source(miniapp.__name__) or ""
+    assert "game.db =" not in source
+    assert "game.dig_items_map(" not in source
+    assert "game.dig_route(" not in source

@@ -68,15 +68,50 @@ def _super_ticket_public(db: Database, user_id: int) -> dict[str, Any] | None:
 def _db() -> Database:
     db = Database(load_config().db_path)
     db.init()
-    # The legacy mine helpers in bot.py use its shared DB handle. The API
-    # process has its own request-scoped connection, so bind it before using
-    # those helpers from Mini App endpoints.
-    from . import bot as game
-    game.db = db
     return db
 
 
-def _rank_shift_public(user_id: int, game: Any, items: dict[str, int]) -> dict[str, Any]:
+def _items_map(db: Database, user_id: int, chat_id: int = 0) -> dict[str, int]:
+    return {item.item_key: item.quantity for item in db.list_dig_items(chat_id, user_id)}
+
+
+def _refreshed_luck(db: Database, game: Any, user_id: int, luck: int, last_luck_at: str, now: datetime) -> int:
+    try:
+        last = datetime.fromisoformat(last_luck_at)
+    except ValueError:
+        return max(0, min(100, luck))
+    elapsed = max(0, (now - last).total_seconds())
+    items = _items_map(db, user_id)
+    multiplier = float(game.get_premium_service().get_mine_bonuses(user_id)["luck_regen_multiplier"])
+    hourly_regen = game.DIG_LUCK_REGEN_PER_HOUR + game.dig_rank_bonuses(items)["luck_regen"]
+    restored = int((elapsed / 3600) * hourly_regen * multiplier)
+    return max(0, min(100, luck + restored))
+
+
+def _dig_route(db: Database, game: Any, user_id: int) -> tuple[str, tuple[str, int, float, float, float, int]]:
+    progress = db.get_dig_progress(user_id)
+    key = str(progress.get("selected_route") or "old_mine")
+    return (key, game.DIG_ROUTES[key]) if key in game.DIG_ROUTES else ("old_mine", game.DIG_ROUTES["old_mine"])
+
+
+def _ensure_daily_contracts(db: Database, game: Any, user_id: int) -> tuple[str, list[dict]]:
+    import random
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    existing = db.list_dig_contracts(user_id, today)
+    if not existing:
+        rng = random.Random(f"{today}:{user_id}:contracts")
+        keys = rng.sample(list(game.DIG_STANDARD_CONTRACTS), 3)
+        db.ensure_dig_contracts(user_id, today, [(key, game.DIG_STANDARD_CONTRACTS[key][1]) for key in keys])
+    return today, db.list_dig_contracts(user_id, today)
+
+
+def _rank_shift_contract(db: Database, game: Any, user_id: int) -> dict | None:
+    _, contracts = _ensure_daily_contracts(db, game, user_id)
+    return next((item for item in contracts if item["contract_key"] in game.DIG_RANK_SHIFT_CONTRACTS), None)
+
+
+def _rank_shift_public(db: Database, user_id: int, game: Any, items: dict[str, int]) -> dict[str, Any]:
     rank_name = game.dig_rank_name(items)
     if rank_name == "Новичок":
         return {
@@ -85,7 +120,7 @@ def _rank_shift_public(user_id: int, game: Any, items: dict[str, int]) -> dict[s
             "options": [],
             "selected": None,
         }
-    selected = game.dig_rank_shift_contract(user_id)
+    selected = _rank_shift_contract(db, game, user_id)
     options = [
         {"key": key, "name": name, "target": target, "reward": reward}
         for key, (name, _, target, reward) in game.DIG_RANK_SHIFT_CONTRACTS.items()
@@ -108,6 +143,125 @@ def _rank_shift_public(user_id: int, game: Any, items: dict[str, int]) -> dict[s
         "options": options if not selected_public else [],
         "selected": selected_public,
     }
+
+
+def _select_rank_shift_contract(db: Database, game: Any, user_id: int, contract_key: str) -> str | None:
+    if contract_key not in game.DIG_RANK_SHIFT_CONTRACTS:
+        return "Такого сменного задания нет."
+    if game.dig_rank_name(_items_map(db, user_id)) == "Новичок":
+        return "Сменные задания доступны после покупки ранга."
+    if _rank_shift_contract(db, game, user_id):
+        return "Сменное задание на сегодня уже выбрано."
+    today = datetime.now(timezone.utc).date().isoformat()
+    _, _, target, _ = game.DIG_RANK_SHIFT_CONTRACTS[contract_key]
+    db.ensure_dig_contracts(user_id, today, [(contract_key, target)])
+    return None
+
+
+def _consume_star_dig(db: Database, items: dict[str, int], user_id: int, chat_id: int = 0) -> tuple[bool, bool, bool]:
+    if items.get("star_depth_10", 0) > 0 and db.consume_dig_item(chat_id, user_id, "star_depth_10"):
+        return True, True, True
+    if items.get("star_lucky_dig", 0) > 0 and db.consume_dig_item(chat_id, user_id, "star_lucky_dig"):
+        return True, True, False
+    if items.get("star_dig", 0) > 0 and db.consume_dig_item(chat_id, user_id, "star_dig"):
+        return True, False, False
+    return False, False, False
+
+
+def _update_contracts(db: Database, game: Any, user_id: int, dug: int, coins: int, artifact_found: bool) -> list[str]:
+    today, _ = _ensure_daily_contracts(db, game, user_id)
+    values = {"depth": dug, "coins": coins, "artifact": 1 if artifact_found else 0, "success": 1 if dug > 0 else 0}
+    for key, (_, progress_key, _, _) in game.DIG_RANK_SHIFT_CONTRACTS.items():
+        values[key] = values[progress_key]
+    db.add_dig_contract_progress(user_id, today, values)
+    claimed = db.claim_ready_dig_contracts(user_id, today)
+    rewards = []
+    for key in claimed:
+        if key in game.DIG_RANK_SHIFT_CONTRACTS:
+            reward = game.DIG_RANK_SHIFT_CONTRACTS[key][3]
+            db.add_dig_coins(0, user_id, reward)
+            rewards.append(f"Сменное задание «{game.DIG_CONTRACTS[key][0]}» выполнено: +{reward} котоинов")
+        else:
+            db.add_dig_coins(0, user_id, game.DIG_CONTRACT_REWARD_COINS)
+            rewards.append(f"Контракт «{game.DIG_CONTRACTS[key][0]}» выполнен: +{game.DIG_CONTRACT_REWARD_COINS} котоинов, +{game.DIG_CONTRACT_REWARD_XP} XP")
+    return rewards
+
+
+def _find_artifact(db: Database, game: Any, user_id: int, depth: int, items: dict[str, int], chance_bonus: int = 0) -> tuple[int, str | None]:
+    if depth <= 0 or secrets.randbelow(100) >= min(60, 5 + depth + chance_bonus):
+        return 0, None
+    key = list(game.DIG_ARTIFACTS)[secrets.randbelow(len(game.DIG_ARTIFACTS))]
+    name = game.DIG_ARTIFACTS[key]
+    if items.get(key, 0) > 0:
+        bonus = 20 + depth * 3
+        return bonus, f"Артефакт: снова найден «{name}». Дубликат продан за <b>{bonus}</b> котоинов."
+    db.add_dig_item(0, user_id, key, 1)
+    items[key] = 1
+    text = f"Артефакт: найден «{name}» и добавлен в коллекцию."
+    if all(items.get(artifact_key, 0) > 0 for artifact_key in game.DIG_ARTIFACTS) and items.get("artifact_set_reward", 0) <= 0:
+        db.add_dig_item(0, user_id, "artifact_set_reward", 1)
+        items["artifact_set_reward"] = 1
+        return 250, text + " Коллекция собрана: <b>+250</b> котоинов и постоянный бонус +5% к наградам."
+    return 0, text
+
+
+def _award_achievement(db: Database, game: Any, user_id: int, achievement_key: str) -> str | None:
+    achievement = game.DIG_ACHIEVEMENTS.get(achievement_key)
+    if achievement is None:
+        return None
+    if not db.add_dig_achievement(0, user_id, achievement_key):
+        return None
+    name, _, coins, item_key = achievement
+    if coins:
+        db.add_dig_coins(0, user_id, coins)
+    item_text = ""
+    if item_key:
+        db.add_dig_item(0, user_id, item_key, 1)
+        item_name = game.DIG_SHOP_ITEMS.get(item_key, (item_key, 0, ""))[0]
+        item_text = f", предмет: {item_name}"
+    return f"{name}: +{coins} котоинов{item_text}"
+
+
+def _check_achievements(db: Database, game: Any, user_id: int, player, dug: int, coins_before_reward: int, collapse_depth: int, stopped_by_stone: bool) -> list[str]:
+    total_depth = player.total_depth + dug
+    total_coins = player.coins + coins_before_reward
+    checks = ["first_dig"]
+    if dug >= 1:
+        checks.append("first_meter")
+    if dug >= 5:
+        checks.append("five_meter_run")
+    if dug >= 10:
+        checks.append("ten_meter_run")
+    if total_depth >= 25:
+        checks.append("total_25")
+    if total_depth >= 100:
+        checks.append("total_100")
+    if total_coins >= 500:
+        checks.append("coins_500")
+    if stopped_by_stone and dug == 0:
+        checks.append("stone_zero")
+    if collapse_depth:
+        checks.append("collapse_survive")
+    items = _items_map(db, user_id)
+    artifact_count = sum(1 for key in game.DIG_ARTIFACTS if items.get(key, 0) > 0)
+    rank = game.dig_rank_name(items)
+    if rank != "Новичок" and total_depth >= 25:
+        checks.append("rank_digger")
+    if rank != "Новичок" and artifact_count >= 3:
+        checks.append("rank_artifacts")
+    if rank != "Новичок" and total_depth >= 150:
+        checks.append("rank_depth")
+    if items.get("rank_4", 0) > 0 and artifact_count == len(game.DIG_ARTIFACTS):
+        checks.append("rank_master")
+    return [text for key in checks for text in [_award_achievement(db, game, user_id, key)] if text]
+
+
+def _display_name(db: Database, game: Any, user_id: int, username: str | None, full_name: str) -> str:
+    name = game.dig_player_name(username, full_name)
+    items = _items_map(db, user_id)
+    tag = db.get_dig_player_tag(user_id)
+    tag_suffix = f" «{tag}»" if tag else ""
+    return f"{name}{tag_suffix}{game.dig_title_suffix(items)}"
 
 
 def _telegram_user(init_data: str | None) -> dict[str, Any]:
@@ -201,16 +355,16 @@ def _state(db: Database, user_id: int) -> dict[str, Any]:
     rank_key = next((key for key, _ in game.DIG_RANKS if items.get(key, 0) > 0), None)
     rank_level = {"rank_1": 1, "rank_2": 2, "rank_3": 3, "rank_4": 4}.get(rank_key, 0)
     return {"registered": True, "userId": user_id,
-            "name": game.dig_display_name(0, player.user_id, player.username, player.full_name),
+            "name": _display_name(db, game, player.user_id, player.username, player.full_name),
             "coins": player.coins,
-            "luck": game.refreshed_dig_luck(user_id, player.luck, player.last_luck_at, now),
+            "luck": _refreshed_luck(db, game, user_id, player.luck, player.last_luck_at, now),
             "totalDepth": player.total_depth, "record": player.best_session_depth,
             "level": progress["level"], "xp": progress["xp"], "streak": progress["streak"],
             "sessionDepth": int(session["depth"]) if session else 0, "inSession": bool(session),
             "cooldownUntil": cooldown,
             "items": items,
             "rank": {"key": rank_key, "name": game.dig_rank_name(items), "level": rank_level},
-            "rankShift": _rank_shift_public(user_id, game, items),
+            "rankShift": _rank_shift_public(db, user_id, game, items),
             "goldenTickets": db.get_dig_item_quantity(0, user_id, "golden_ticket"),
             "ticketGame": _ticket_public(db, user_id),
             "superPasses": db.get_dig_item_quantity(0, user_id, "super_game_pass"),
@@ -231,11 +385,11 @@ def _begin(db: Database, game: Any, user: dict[str, Any], now: datetime) -> None
         if now < next_dig:
             left = max(1, int((next_dig - now).total_seconds()))
             raise HTTPException(429, f"Кирка отдыхает еще {left // 3600} ч {(left % 3600) // 60} мин.")
-    route_key, route = game.dig_route(uid)
-    luck = game.refreshed_dig_luck(uid, player.luck, player.last_luck_at, now)
+    route_key, route = _dig_route(db, game, uid)
+    luck = _refreshed_luck(db, game, uid, player.luck, player.last_luck_at, now)
     if luck < game.DIG_LUCK_COST:
         raise HTTPException(400, f"Недостаточно удачи: нужно {game.DIG_LUCK_COST}, сейчас {luck}.")
-    items = game.dig_items_map(0, uid)
+    items = _items_map(db, uid)
     helmet = items.get("helmet", 0) > 0 and db.consume_dig_item(0, uid, "helmet")
     shovel = items.get("shovel", 0) > 0 and db.consume_dig_item(0, uid, "shovel")
     flashlight = items.get("flashlight", 0) > 0 and db.consume_dig_item(0, uid, "flashlight")
@@ -255,8 +409,8 @@ def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) 
     if not player:
         raise HTTPException(400, "Сначала зарегистрируйтесь в игре.")
 
-    items = game.dig_items_map(0, uid)
-    star_dig_used, forced_luck, forced_depth = game.consume_star_dig(0, uid, items)
+    items = _items_map(db, uid)
+    star_dig_used, forced_luck, forced_depth = _consume_star_dig(db, items, uid)
     camp_used = False
     if player.last_dig_at and not star_dig_used:
         last_dig = datetime.fromisoformat(player.last_dig_at)
@@ -270,9 +424,9 @@ def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) 
             left = max(1, int((next_dig - now).total_seconds()))
             raise HTTPException(429, f"Кирка отдыхает еще {left // 3600} ч {(left % 3600) // 60} мин.")
 
-    route_key, route = game.dig_route(uid)
+    route_key, route = _dig_route(db, game, uid)
     route_name, route_chance, route_coins, route_artifacts, route_collapse, _ = route
-    luck = game.refreshed_dig_luck(uid, player.luck, player.last_luck_at, now)
+    luck = _refreshed_luck(db, game, uid, player.luck, player.last_luck_at, now)
     if luck < game.DIG_LUCK_COST and not forced_luck:
         raise HTTPException(400, f"Недостаточно удачи: нужно {game.DIG_LUCK_COST}, сейчас {luck}.")
 
@@ -381,13 +535,13 @@ def _finish(db: Database, game: Any, user: dict[str, Any], session: dict[str, An
             depth = max(0, depth - lost)
     coins = max(1, int(game.dig_coin_reward(depth) * data["routeCoins"] + 0.9999))
     coins, event = game.dig_random_event(depth, coins)
-    artifact_coins, artifact = game.find_dig_artifact(0, uid, depth, game.dig_items_map(0, uid), max(0, int((data["routeArtifacts"] - 1) * 10)))
+    artifact_coins, artifact = _find_artifact(db, game, uid, depth, _items_map(db, uid), max(0, int((data["routeArtifacts"] - 1) * 10)))
     coins = game.apply_premium_coin_bonus(uid, coins + artifact_coins, effects)
     text = now.isoformat(timespec="seconds")
     db.update_dig_player_after_dig(0, uid, user.get("username"), user["full_name"], coins, depth, depth, data["luckAfter"], text, text)
     db.add_dig_weekly_depth(uid, game.dig_week_start(now), depth)
     progress = db.update_dig_progress(uid, 5 + depth * 10, depth > 0, session["route_key"])
-    game.update_dig_contracts(uid, depth, coins, artifact is not None)
+    _update_contracts(db, game, uid, depth, coins, artifact is not None)
     expedition = db.add_dig_expedition_progress(0, uid, now.date().isoformat(), depth, game.DIG_EXPEDITION_TARGET)
     if expedition["completed"]:
         db.reward_dig_expedition(0, now.date().isoformat(), game.DIG_EXPEDITION_REWARD)
@@ -412,7 +566,7 @@ def _finish_manual(db: Database, game: Any, user: dict[str, Any], session: dict[
     player_before = db.get_dig_player(0, uid)
     data = json.loads(session["route_data"])
     effects = json.loads(session["used_effects"] or "[]")
-    items = game.dig_items_map(0, uid)
+    items = _items_map(db, uid)
 
     collapse = max(0, int(max(0, 100 - data["luckForChance"]) * data["routeCollapse"]))
     collapse = max(0, collapse - int(data.get("helmetReduction", 0)))
@@ -450,7 +604,7 @@ def _finish_manual(db: Database, game: Any, user: dict[str, Any], session: dict[
         + int(data.get("artifactBonus", 0))
         + (15 if data.get("map") else 0)
     )
-    artifact_coins, artifact = game.find_dig_artifact(0, uid, depth, items, artifact_chance_bonus)
+    artifact_coins, artifact = _find_artifact(db, game, uid, depth, items, artifact_chance_bonus)
     coins += artifact_coins
 
     if data.get("talisman"):
@@ -494,14 +648,14 @@ def _finish_manual(db: Database, game: Any, user: dict[str, Any], session: dict[
     text = now.isoformat(timespec="seconds")
     db.update_dig_player_after_dig(0, uid, user.get("username"), user["full_name"], coins, depth, depth, data["luckAfter"], text, text)
     db.add_dig_weekly_depth(uid, game.dig_week_start(now), depth)
-    contract_updates = game.update_dig_contracts(uid, depth, coins, artifact is not None)
+    contract_updates = _update_contracts(db, game, uid, depth, coins, artifact is not None)
     progress = db.update_dig_progress(
         uid,
         5 + depth * 10 + game.dig_contract_xp_reward(contract_updates),
         depth > 0,
         session["route_key"],
     )
-    achievement_updates = game.check_dig_achievements(0, uid, player_before, depth, coins, lost, depth == 0)
+    achievement_updates = _check_achievements(db, game, uid, player_before, depth, coins, lost, depth == 0)
 
     expedition = db.add_dig_expedition_progress(0, uid, now.date().isoformat(), depth, game.DIG_EXPEDITION_TARGET)
     if expedition["completed"]:
@@ -703,7 +857,7 @@ def miniapp_shop_buy(
             item = game.DIG_SHOP_ITEMS.get(payload.item_key)
             if not item or payload.item_key == "prank":
                 raise HTTPException(400, "Этот товар нельзя купить в Mini App.")
-            items = game.dig_items_map(0, user["id"])
+            items = _items_map(db, user["id"])
             purchase_error = game.dig_purchase_error(items, payload.item_key)
             if purchase_error:
                 raise HTTPException(400, purchase_error)
@@ -781,7 +935,7 @@ def miniapp_shop_use(
             if not db.consume_dig_item(0, user["id"], "tea"):
                 raise HTTPException(400, "В сумке нет чая.")
             now = datetime.now(timezone.utc)
-            luck = game.refreshed_dig_luck(user["id"], player.luck, player.last_luck_at, now)
+            luck = _refreshed_luck(db, game, user["id"], player.luck, player.last_luck_at, now)
             restored_luck = min(100, luck + 35)
             db.set_dig_luck(0, user["id"], restored_luck, now.isoformat(timespec="seconds"))
             return {
@@ -808,7 +962,7 @@ def miniapp_shift_contract(
         try:
             if not db.get_dig_player(0, user["id"]):
                 raise HTTPException(400, "Сначала зарегистрируйтесь в шахте.")
-            error = game.select_dig_rank_shift_contract(user["id"], payload.contract_key)
+            error = _select_rank_shift_contract(db, game, user["id"], payload.contract_key)
             if error:
                 raise HTTPException(400, error)
             return {"ok": True, "state": _state(db, user["id"])}
@@ -1139,7 +1293,7 @@ def miniapp_dig_manual(
                 response.headers["X-Miniapp-Dig-Finished"] = "1"
                 return {"ok": True, "finished": True, "meter": 10, "chance": 100, "message": message, "state": _state(db, user["id"])}
 
-            items = game.dig_items_map(0, user["id"])
+            items = _items_map(db, user["id"])
             chance = min(
                 95.0,
                 float(game.DIG_SUCCESS_CHANCES[meter - 1])
@@ -1200,7 +1354,7 @@ def miniapp_dig(x_telegram_init_data: str | None = Header(default=None, alias="X
                 session = db.get_dig_session(user["id"])
             meter = int(session["depth"]) + 1
             data = json.loads(session["route_data"])
-            chance = min(95.0, float(game.DIG_SUCCESS_CHANCES[meter - 1]) + float(data["routeChance"]) + (10 if data["flashlight"] else 0) + game.dig_permanent_shovel_bonus(game.dig_items_map(0, user["id"])))
+            chance = min(95.0, float(game.DIG_SUCCESS_CHANCES[meter - 1]) + float(data["routeChance"]) + (10 if data["flashlight"] else 0) + game.dig_permanent_shovel_bonus(_items_map(db, user["id"])))
             success = secrets.randbelow(10000) < int(chance * 100)
             if success and meter < 10:
                 db.save_dig_session(user["id"], meter, int(session["luck_before"]), session["route_key"], session["route_data"], session["used_effects"], session["started_at"])
