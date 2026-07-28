@@ -200,6 +200,16 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert "mine.rareAchievements" in MINI_APP_HTML
 
 
+def test_miniapp_has_interface_themes() -> None:
+    assert 'body[data-theme="material"]' in MINI_APP_HTML
+    assert 'body[data-theme="glass"]' in MINI_APP_HTML
+    assert "Material You" in MINI_APP_HTML
+    assert "Liquid Glass" in MINI_APP_HTML
+    assert "function setMiniTheme(theme)" in MINI_APP_HTML
+    assert "themeSwitcherHtml()" in MINI_APP_HTML
+    assert 'settings.theme' in MINI_APP_HTML
+
+
 def test_miniapp_replaces_rank_card_with_two_utility_buttons_on_mine() -> None:
     mine_html = MINI_APP_HTML.split("function mineHtml()", 1)[1].split("function goldTicketHtml()", 1)[0]
 

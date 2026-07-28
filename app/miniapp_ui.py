@@ -21,6 +21,48 @@ MINI_APP_HTML = r"""<!doctype html>
       --accent-2: #e5a64a;
       --ok: #5ecb83;
       --danger: #d95c62;
+      --radius: 20px;
+      --radius-sm: 14px;
+      --button-radius: 18px;
+      --input-bg: #0f1c2a;
+      --panel-shadow: 0 14px 38px #00000024;
+      --surface-blur: none;
+    }
+    body[data-theme="material"] {
+      --bg: #0b1420;
+      --panel: #17283a;
+      --panel-2: #20364b;
+      --line: #2b455e;
+      --text: #f5f7fa;
+      --muted: #aeb9c6;
+      --accent: #69b7ff;
+      --accent-2: #e5a64a;
+      --input-bg: #0f1c2a;
+      background:
+        radial-gradient(circle at 12% 0%, #24517a80, transparent 28%),
+        radial-gradient(circle at 88% 8%, #6c4a9a44, transparent 30%),
+        var(--bg);
+    }
+    body[data-theme="glass"] {
+      --bg: #07111c;
+      --panel: #dceeff16;
+      --panel-2: #c5e8ff22;
+      --line: #d8f0ff38;
+      --text: #f7fbff;
+      --muted: #c5d4e4;
+      --accent: #a8ddff;
+      --accent-2: #fff2a8;
+      --radius: 26px;
+      --radius-sm: 18px;
+      --button-radius: 22px;
+      --input-bg: #0714219c;
+      --panel-shadow: 0 22px 60px #00000042, inset 0 1px 0 #ffffff2c;
+      --surface-blur: blur(18px);
+      background:
+        radial-gradient(circle at 18% 4%, #9adfff44, transparent 26%),
+        radial-gradient(circle at 82% 0%, #ffffff24, transparent 22%),
+        radial-gradient(circle at 50% 100%, #6b8cff24, transparent 34%),
+        var(--bg);
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
@@ -38,7 +80,7 @@ MINI_APP_HTML = r"""<!doctype html>
       margin: 0;
       padding: 8px 12px;
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: var(--button-radius);
       background: var(--panel-2);
       color: var(--text);
       font-weight: 800;
@@ -52,16 +94,20 @@ MINI_APP_HTML = r"""<!doctype html>
       margin-top: 14px;
       padding: 16px;
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: var(--radius);
       background: var(--panel);
+      box-shadow: var(--panel-shadow);
+      backdrop-filter: var(--surface-blur);
     }
     .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
     .stat {
       min-width: 0;
       padding: 12px;
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: var(--radius-sm);
       background: var(--panel);
+      box-shadow: var(--panel-shadow);
+      backdrop-filter: var(--surface-blur);
     }
     .stat b { display: block; margin-top: 4px; font-size: 20px; overflow-wrap: anywhere; }
     .rank-card {
@@ -72,12 +118,12 @@ MINI_APP_HTML = r"""<!doctype html>
       box-shadow: 0 0 0 1px color-mix(in srgb, var(--rank-color, #678fb2) 45%, transparent) inset;
     }
     .rank-card .rank-line { display:flex; align-items:center; gap:10px; font-weight:800; }
-    .rank-card .rank-emblem { display:grid; place-items:center; width:42px; height:42px; border-radius:8px; background: color-mix(in srgb, var(--rank-color, #678fb2) 28%, #07111c); font-size:26px; }
+    .rank-card .rank-emblem { display:grid; place-items:center; width:42px; height:42px; border-radius:var(--radius-sm); background: color-mix(in srgb, var(--rank-color, #678fb2) 28%, #07111c); font-size:26px; }
     .rank-card.rank-1, .rank-badge.rank-1 { --rank-color:#678fb2; border-color:#678fb2; }
     .rank-card.rank-2, .rank-badge.rank-2 { --rank-color:#62a879; border-color:#62a879; }
     .rank-card.rank-3, .rank-badge.rank-3 { --rank-color:#ce9b49; border-color:#ce9b49; }
     .rank-card.rank-4, .rank-badge.rank-4 { --rank-color:#bc6f88; border-color:#bc6f88; }
-    .rank-badge { display:inline-flex; align-items:center; gap:7px; margin-top:10px; padding:7px 10px; border:1px solid var(--line); border-radius:8px; background: color-mix(in srgb, var(--rank-color, #678fb2) 18%, var(--panel)); font-size:13px; font-weight:800; }
+    .rank-badge { display:inline-flex; align-items:center; gap:7px; margin-top:10px; padding:7px 10px; border:1px solid var(--line); border-radius:var(--radius-sm); background: color-mix(in srgb, var(--rank-color, #678fb2) 18%, var(--panel)); font-size:13px; font-weight:800; }
     .utility-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
     .utility-actions .btn { min-height: 46px; margin: 0; }
     .mini-form { display: grid; gap: 8px; margin-top: 12px; }
@@ -86,15 +132,15 @@ MINI_APP_HTML = r"""<!doctype html>
       min-height: 44px;
       padding: 10px 12px;
       border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #0f1c2a;
+      border-radius: var(--radius-sm);
+      background: var(--input-bg);
       color: var(--text);
       font: inherit;
     }
     .mini-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .mini-row .btn { min-height: 44px; margin: 0; }
     .profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
-    .profile-card { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .profile-card { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
     .profile-card b { display: block; margin-top: 4px; font-size: 18px; overflow-wrap: anywhere; }
     .profile-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
     .profile-actions .btn { margin: 0; min-height: 44px; }
@@ -123,7 +169,7 @@ MINI_APP_HTML = r"""<!doctype html>
     .achievement-card {
       padding: 10px 11px;
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: var(--radius-sm);
       background: var(--panel);
     }
     .achievement-card b { display:block; }
@@ -160,7 +206,7 @@ MINI_APP_HTML = r"""<!doctype html>
       margin-top: 12px;
       padding: 12px 14px;
       border: 0;
-      border-radius: 8px;
+      border-radius: var(--button-radius);
       background: var(--accent);
       color: white;
       font-weight: 750;
@@ -168,6 +214,16 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     .btn.secondary { background: var(--panel-2); }
     .btn:disabled { opacity: .45; cursor: default; }
+    .theme-switcher { display:grid; gap:8px; margin-top:12px; }
+    .theme-options { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .theme-option {
+      min-height: 46px;
+      margin: 0;
+      border: 1px solid var(--line);
+      color: var(--text);
+      background: var(--panel-2);
+    }
+    .theme-option.active { outline: 2px solid var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent); }
     .depth { padding: 18px 0; text-align: center; font-size: 48px; font-weight: 850; }
     .meter { height: 12px; overflow: hidden; border-radius: 7px; background: #09111c; }
     .fill { height: 100%; background: var(--accent); transition: width .25s ease; }
@@ -943,6 +999,43 @@ MINI_APP_HTML = r"""<!doctype html>
     localStorage.setItem("miniAppSettings", JSON.stringify(settings));
   }
 
+  const MINI_APP_THEMES = {
+    material: "Material You",
+    glass: "Liquid Glass",
+  };
+
+  function currentMiniTheme() {
+    const theme = loadMiniSettings().theme || "material";
+    return Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "material";
+  }
+
+  function applyMiniTheme(theme) {
+    const safeTheme = Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "material";
+    document.body.dataset.theme = safeTheme;
+  }
+
+  function setMiniTheme(theme) {
+    const settings = loadMiniSettings();
+    settings.theme = Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "material";
+    saveMiniSettings(settings);
+    applyMiniTheme(settings.theme);
+    const block = document.getElementById("themeSwitcher");
+    if (block) block.outerHTML = themeSwitcherHtml();
+  }
+
+  function themeSwitcherHtml() {
+    const theme = currentMiniTheme();
+    return `<div id="themeSwitcher" class="theme-switcher">
+      <div class="muted">Тема интерфейса</div>
+      <div class="theme-options">
+        <button class="btn secondary theme-option ${theme === "material" ? "active" : ""}" onclick="setMiniTheme('material')">Material You</button>
+        <button class="btn secondary theme-option ${theme === "glass" ? "active" : ""}" onclick="setMiniTheme('glass')">Liquid Glass</button>
+      </div>
+    </div>`;
+  }
+
+  applyMiniTheme(currentMiniTheme());
+
   function weatherDescription(code) {
     const map = {
       0: "Ясно", 1: "Преимущественно ясно", 2: "Переменная облачность", 3: "Пасмурно",
@@ -1177,6 +1270,7 @@ MINI_APP_HTML = r"""<!doctype html>
         <button class="btn secondary" onclick="showFriendsInfo()">Друзья</button>
         <button class="btn secondary" onclick="showBag()">Сумка</button>
       </div>
+      ${themeSwitcherHtml()}
     </section>
     <section class="panel">
       <h2>Шахта</h2>
