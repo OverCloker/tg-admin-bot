@@ -415,6 +415,21 @@ MINI_APP_HTML = r"""<!doctype html>
     .notice { white-space: pre-line; border-color: #4b6f91; }
     .section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .counter { white-space: nowrap; font-weight: 800; }
+    .mine-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; margin-top: 12px; }
+    .mine-cell {
+      min-height: 56px;
+      border: 1px solid #50708d;
+      border-radius: 14px;
+      background: linear-gradient(145deg, #263d55, #102132);
+      color: var(--text);
+      font-size: 23px;
+      font-weight: 850;
+      box-shadow: inset 0 2px 2px #ffffff1c, 0 5px 9px #02060b60;
+    }
+    .mine-cell.used { opacity: .45; filter: grayscale(.4); }
+    .tool-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 12px; }
+    .small-btn { padding: 10px 12px; font-size: 14px; }
+    .btn.danger { background: linear-gradient(135deg, #7b3b2f, #4b2230); }
     .ticket-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin-top: 12px; }
     .ticket-cell, .super-cell {
       position: relative;
@@ -1022,6 +1037,10 @@ MINI_APP_HTML = r"""<!doctype html>
     })[char]);
   }
 
+  function escapeJs(value) {
+    return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  }
+
   function plainText(value) {
     const template = document.createElement("template");
     template.innerHTML = String(value ?? "").replace(/<br\s*\/?>/gi, "\n");
@@ -1568,19 +1587,59 @@ MINI_APP_HTML = r"""<!doctype html>
       </div>
       ${utilityActionsHtml()}
       ${shiftContractHtml()}
-      <section class="panel">
-        <div class="muted">Текущая вылазка</div>
-        <div class="depth">${depth}/10 м</div>
-        <div class="meter"><div class="fill" style="width:${depth * 10}%"></div></div>
-        <button class="btn" ${disabled ? "disabled" : ""} onclick="digOneMeter(this)">⛏️ Копать следующий метр</button>
-        <div class="muted" style="margin-top:10px">${escapeHtml(cooldown)}</div>
-      </section>
+      ${interactiveMineHtml(disabled, cooldown)}
       ${goldTicketHtml()}
       ${superGameHtml()}
       <section class="panel">Уровень <b>${state.level}</b> · XP <b>${state.xp}</b> · серия <b>${state.streak}</b></section>
       <section class="panel">
         <button class="btn secondary" style="margin:0" onclick="showBag()">Сумка</button>
       </section>`;
+  }
+
+  function interactiveMineHtml(disabled, cooldown) {
+    const dig = state.interactiveMine;
+    if (!dig) {
+      return `<section class="panel">
+        <div class="muted">Ручная вылазка</div>
+        <div class="depth">0/10 м</div>
+        <div class="meter"><div class="fill" style="width:0%"></div></div>
+        <button class="btn" ${disabled ? "disabled" : ""} onclick="startInteractiveDig(this)">⛏️ Начать вылазку</button>
+        <div class="muted" style="margin-top:10px">${escapeHtml(cooldown)}</div>
+      </section>`;
+    }
+    const stage = dig.stage || {};
+    const progress = Math.max(0, Math.min(10, Number(dig.depth || 0)));
+    const header = `<div class="section-title"><h2>${escapeHtml(dig.mineEmoji || "⛏")} ${escapeHtml(dig.mineTitle || "Шахта")}</h2><span class="counter">${progress}/10 м</span></div>
+      <div class="meter"><div class="fill" style="width:${progress * 10}%"></div></div>
+      <p class="muted">Прочность: <b>${dig.durability}/${dig.maxDurability}</b> · Временная добыча: <b>${dig.temporaryCoins}</b> 🪙 · Удача: <b>${dig.luck}/100</b></p>`;
+    if (stage.type === "event" || stage.type === "final") {
+      const choices = (stage.choices || []).map(choice => `
+        <button class="btn secondary" onclick="chooseMineEvent('${escapeJs(choice.key)}')">${escapeHtml(choice.label || "Выбрать")}</button>
+      `).join("");
+      return `<section class="panel">${header}
+        <h3>${escapeHtml(stage.emoji || "❔")} ${escapeHtml(stage.title || "Событие")}</h3>
+        <p>${escapeHtml(stage.text || "Выбери действие.")}</p>
+        ${choices}
+        <button class="btn danger" onclick="exitInteractiveDig()">💰 Забрать добычу и выйти</button>
+      </section>`;
+    }
+    const cells = Array.isArray(stage) ? stage : (stage.cells || []);
+    const used = new Set((dig.usedCells || []).map(Number));
+    const emoji = { normal: "🟫", ore: "✨", hard: "🪨", roots: "🌿", unknown: "❓" };
+    const cellHtml = cells.map((cell, index) => {
+      const disabledCell = used.has(index);
+      const revealed = cell.revealed ? `👁${emoji[cell.revealed] || "❓"}` : `${emoji[cell.kind] || "❓"}${index + 1}`;
+      return `<button class="mine-cell ${disabledCell ? "used" : ""}" ${disabledCell ? "disabled" : ""} onclick="pickMineCell(${index}, this)">${revealed}</button>`;
+    }).join("");
+    const labels = { flashlight: "🔦 Фонарь", map: "🗺 Карта", dynamite: "🧨 Динамит", miner_hearing: "👂 Слух", magnet: "🧲 Магнит", cat_companion: "🐈 Компаньон" };
+    const tools = (dig.tools || []).map(key => `<button class="btn secondary small-btn" onclick="useMineTool('${escapeJs(key)}')">${labels[key] || key}</button>`).join("");
+    return `<section class="panel">${header}
+      <p class="muted">Выбери клетку. Можно сначала использовать предмет разведки.</p>
+      <div class="mine-grid">${cellHtml}</div>
+      ${dig.preview ? `<p class="muted">🗺 Следующий ряд: ${escapeHtml(dig.preview)}</p>` : ""}
+      ${tools ? `<div class="tool-grid">${tools}</div>` : ""}
+      <button class="btn danger" onclick="exitInteractiveDig()">💰 Забрать добычу и выйти</button>
+    </section>`;
   }
 
   function goldTicketHtml() {
@@ -1712,6 +1771,95 @@ MINI_APP_HTML = r"""<!doctype html>
       showNotice(error.message);
     } finally {
       overlay.remove();
+      busy = false;
+    }
+  }
+
+  async function startInteractiveDig(button) {
+    if (busy) return;
+    busy = true;
+    if (button) button.disabled = true;
+    try {
+      const result = await api("/miniapp/mine/interactive/start", { method: "POST" });
+      state = result.state;
+      renderMine(false);
+      showNotice(result.message || "Вылазка началась.");
+    } catch (error) {
+      showNotice(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function pickMineCell(cell, button) {
+    if (busy) return;
+    busy = true;
+    if (button) button.disabled = true;
+    const overlay = showDigAnimation();
+    try {
+      const [result] = await Promise.all([
+        api("/miniapp/mine/interactive/cell", {
+          method: "POST", body: JSON.stringify({ cell })
+        }),
+        sleep(900)
+      ]);
+      state = result.state;
+      renderMine(false);
+      showNotice(result.message);
+    } catch (error) {
+      renderMine(false);
+      showNotice(error.message);
+    } finally {
+      overlay.remove();
+      busy = false;
+    }
+  }
+
+  async function useMineTool(itemKey) {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/mine/interactive/tool", {
+        method: "POST", body: JSON.stringify({ item_key: itemKey })
+      });
+      state = result.state;
+      renderMine(false);
+      showNotice(result.message);
+    } catch (error) {
+      showNotice(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function chooseMineEvent(choiceKey) {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/mine/interactive/event", {
+        method: "POST", body: JSON.stringify({ choice_key: choiceKey })
+      });
+      state = result.state;
+      renderMine(false);
+      showNotice(result.message);
+    } catch (error) {
+      showNotice(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function exitInteractiveDig() {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/mine/interactive/exit", { method: "POST" });
+      state = result.state;
+      renderMine(false);
+      showNotice(result.message);
+    } catch (error) {
+      showNotice(error.message);
+    } finally {
       busy = false;
     }
   }

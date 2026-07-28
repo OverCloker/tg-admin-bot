@@ -19,6 +19,19 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from .config import load_config
 from .db import Database
+from .dig_game import (
+    INTERACTIVE_DIG_DURABILITY,
+    INTERACTIVE_DIG_MAX_DEPTH,
+    cell_reward,
+    collapse_payout,
+    event_choice,
+    final_cell_chance,
+    final_depth_bonus,
+    generate_dig_cells,
+    generate_dig_stage,
+    mine_type_for_total_depth,
+    resolve_cell,
+)
 from .miniapp_ui import MINI_APP_HTML as MINI_APP_UI_HTML
 from .premium import PremiumService
 from .user_profile import build_user_profile
@@ -43,6 +56,18 @@ class ShiftContractPick(BaseModel):
     contract_key: str = Field(min_length=1, max_length=64)
 
 
+class MineCellPick(BaseModel):
+    cell: int = Field(ge=0, le=6)
+
+
+class MineToolUse(BaseModel):
+    item_key: str = Field(min_length=1, max_length=64)
+
+
+class MineEventChoice(BaseModel):
+    choice_key: str = Field(min_length=1, max_length=64)
+
+
 def _ticket_public(db: Database, user_id: int) -> dict[str, Any] | None:
     game = db.get_gold_ticket_game(user_id)
     if not game:
@@ -63,6 +88,48 @@ def _super_ticket_public(db: Database, user_id: int) -> dict[str, Any] | None:
         "opened": json.loads(game["opened_json"] or "[]"),
         "attemptsLeft": int(game["attempts_left"]),
     }
+
+
+def _interactive_dig_public(db: Database, user_id: int) -> dict[str, Any] | None:
+    session = db.get_active_interactive_dig_session(user_id)
+    if not session:
+        return None
+    stage = json.loads(session["cells_json"] or "[]")
+    used = [int(item) for item in json.loads(session["used_cells_json"] or "[]")]
+    snapshot = json.loads(session["equipment_snapshot"] or "{}")
+    tools = _interactive_dig_tools(snapshot, stage)
+    return {
+        "id": session["id"],
+        "depth": int(session["depth"]),
+        "durability": int(session["durability"]),
+        "maxDurability": INTERACTIVE_DIG_DURABILITY,
+        "temporaryCoins": int(session["temporary_coins"]),
+        "luck": int(session["luck_snapshot"]),
+        "mineTitle": snapshot.get("mine_title") or "Старая шахта",
+        "mineEmoji": snapshot.get("mine_emoji") or "⛏",
+        "routeName": snapshot.get("route_name") or "",
+        "stage": stage,
+        "usedCells": used,
+        "tools": tools,
+        "preview": stage.get("preview") if isinstance(stage, dict) else None,
+    }
+
+
+def _interactive_dig_tools(snapshot: dict[str, Any], stage: Any) -> list[str]:
+    if isinstance(stage, dict) and stage.get("type") not in {"cells"}:
+        return []
+    used = set(snapshot.get("used_tools") or [])
+    tools = []
+    for key in ("flashlight", "map", "dynamite", "miner_hearing", "magnet", "cat_companion"):
+        if int(snapshot.get(f"{key}_count", 0)) > 0 and key not in used:
+            tools.append(key)
+    return tools
+
+
+def _interactive_cells(stage: Any) -> list[dict[str, Any]]:
+    if isinstance(stage, dict):
+        return list(stage.get("cells") or [])
+    return list(stage or [])
 
 
 def _db() -> Database:
@@ -344,9 +411,10 @@ def _state(db: Database, user_id: int) -> dict[str, Any]:
     if not player:
         return {"registered": False, "userId": user_id}
     session = db.get_dig_session(user_id)
+    interactive_session = _interactive_dig_public(db, user_id)
     now = datetime.now(timezone.utc)
     cooldown = None
-    if player.last_dig_at and not session:
+    if player.last_dig_at and not session and not interactive_session:
         cooldown_at = datetime.fromisoformat(player.last_dig_at) + game.user_dig_cooldown(user_id)
         if cooldown_at > now:
             cooldown = cooldown_at.isoformat()
@@ -360,7 +428,9 @@ def _state(db: Database, user_id: int) -> dict[str, Any]:
             "luck": _refreshed_luck(db, game, user_id, player.luck, player.last_luck_at, now),
             "totalDepth": player.total_depth, "record": player.best_session_depth,
             "level": progress["level"], "xp": progress["xp"], "streak": progress["streak"],
-            "sessionDepth": int(session["depth"]) if session else 0, "inSession": bool(session),
+            "sessionDepth": int(interactive_session["depth"]) if interactive_session else int(session["depth"]) if session else 0,
+            "inSession": bool(session or interactive_session),
+            "interactiveMine": interactive_session,
             "cooldownUntil": cooldown,
             "items": items,
             "rank": {"key": rank_key, "name": game.dig_rank_name(items), "level": rank_level},
@@ -517,6 +587,111 @@ def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) 
     text = now.isoformat(timespec="seconds")
     db.set_dig_luck(0, uid, data["luckAfter"], text)
     db.save_dig_session(uid, 0, luck, route_key, json.dumps(data), json.dumps(effects), text)
+
+
+def _begin_interactive_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) -> dict[str, Any]:
+    uid = user["id"]
+    player = db.get_dig_player(0, uid)
+    if not player:
+        raise HTTPException(400, "Сначала зарегистрируйтесь в игре.")
+    active = db.get_active_interactive_dig_session(uid)
+    if active:
+        return active
+
+    items = _items_map(db, uid)
+    star_dig_used, forced_luck, forced_depth = _consume_star_dig(db, items, uid)
+
+    camp_used = False
+    if player.last_dig_at and not star_dig_used:
+        last_dig = datetime.fromisoformat(player.last_dig_at)
+        cooldown = game.user_dig_cooldown(uid)
+        next_dig = last_dig + cooldown
+        if now < next_dig and items.get("camp", 0) > 0 and now >= last_dig + cooldown / 2:
+            camp_used = db.consume_dig_item(0, uid, "camp")
+            if camp_used:
+                next_dig = now
+        if now < next_dig:
+            left = max(1, int((next_dig - now).total_seconds()))
+            raise HTTPException(429, f"Кирка отдыхает еще {left // 3600} ч {(left % 3600) // 60} мин.")
+
+    route_key, route = _dig_route(db, game, uid)
+    route_name, route_chance, route_coins, route_artifacts, route_collapse, _ = route
+    mine = mine_type_for_total_depth(player.total_depth)
+    luck = _refreshed_luck(db, game, uid, player.luck, player.last_luck_at, now)
+    if luck < game.DIG_LUCK_COST and not forced_luck and not forced_depth:
+        raise HTTPException(400, f"Недостаточно удачи: нужно {game.DIG_LUCK_COST}, сейчас {luck}.")
+
+    helmet = not forced_luck and items.get("helmet", 0) > 0 and db.consume_dig_item(0, uid, "helmet")
+    shovel = not forced_luck and items.get("shovel", 0) > 0 and db.consume_dig_item(0, uid, "shovel")
+    bucket = items.get("bucket", 0) > 0 and db.consume_dig_item(0, uid, "bucket")
+    compass = items.get("compass", 0) > 0 and db.consume_dig_item(0, uid, "compass")
+    scanner = items.get("scanner", 0) > 0 and db.consume_dig_item(0, uid, "scanner")
+    talisman = items.get("talisman", 0) > 0 and db.consume_dig_item(0, uid, "talisman")
+    chest = items.get("mystery_chest", 0) > 0 and db.consume_dig_item(0, uid, "mystery_chest")
+
+    if compass:
+        route_chance = round(route_chance * 1.25)
+        route_coins *= 1.15
+    route_coins *= (100 + int(mine.get("reward_bonus", 0))) / 100
+    shovel_bonus = game.dig_permanent_shovel_bonus(items)
+    cart_bonus = game.dig_cart_bonus(items)
+    backpack_bonus = game.dig_backpack_bonus(items)
+    helmet_reduction = game.dig_helmet_reduction(items)
+    rank_bonuses = game.dig_rank_bonuses(items)
+    collection_bonus = items.get("artifact_set_reward", 0) > 0
+    premium_multiplier = float(game.get_premium_service().get_mine_bonuses(uid)["coins_multiplier"])
+    premium_bonus = max(0, round((premium_multiplier - 1) * 100))
+    coin_bonus_percent = (25 if bucket else 0) + cart_bonus + backpack_bonus + (5 if collection_bonus else 0) + rank_bonuses["coins"] + premium_bonus
+    chance_bonus = route_chance + float(mine.get("chance_bonus", 0.0)) + shovel_bonus + rank_bonuses["chance"]
+    loss_protection = (15 if shovel else 0) + (5 if scanner else 0) + helmet_reduction // 3
+    effects = [f"Маршрут: {route_name}"]
+    if camp_used:
+        effects.append("Лагерь: ожидание сокращено")
+    if star_dig_used:
+        effects.append("Оплаченная раскопка: ожидание пропущено" + (" и действует 100 удачи" if forced_luck else ""))
+
+    snapshot = {
+        "route_name": route_name,
+        "route_chance": route_chance,
+        "route_coins": route_coins,
+        "route_artifacts": route_artifacts,
+        "route_collapse": route_collapse,
+        "mine_key": mine["key"],
+        "mine_title": mine["title"],
+        "mine_emoji": mine["emoji"],
+        "luck_before": luck,
+        "luck_after": luck if forced_luck else luck - game.DIG_LUCK_COST,
+        "chance_bonus": chance_bonus,
+        "coin_bonus_percent": coin_bonus_percent,
+        "loss_protection": loss_protection,
+        "map_used": False,
+        "talisman_used": talisman,
+        "chest_used": chest,
+        "insurance_count": int(items.get("insurance", 0)),
+        "flashlight_count": int(items.get("flashlight", 0)),
+        "map_count": int(items.get("map", 0)),
+        "dynamite_count": int(items.get("dynamite", 0)),
+        "miner_hearing_count": int(items.get("miner_hearing", 0)),
+        "magnet_count": int(items.get("magnet", 0)),
+        "cat_companion_count": int(items.get("cat_companion", 0)),
+        "used_tools": [],
+        "used_effects": effects,
+    }
+    db.set_dig_luck(0, uid, int(snapshot["luck_after"]), now.isoformat(timespec="seconds"))
+    initial_depth = INTERACTIVE_DIG_MAX_DEPTH - 1 if forced_depth else 0
+    initial_stage = generate_dig_stage(INTERACTIVE_DIG_MAX_DEPTH, str(mine["key"])) if forced_depth else generate_dig_stage(1, str(mine["key"]))
+    return db.create_interactive_dig_session(
+        session_id=secrets.token_hex(8),
+        user_id=uid,
+        chat_id=0,
+        route_key=route_key,
+        depth=initial_depth,
+        durability=INTERACTIVE_DIG_DURABILITY,
+        temporary_coins=0,
+        luck_snapshot=100 if forced_luck else luck,
+        equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
+        cells_json=json.dumps(initial_stage, ensure_ascii=False),
+    )
 
 
 def _finish(db: Database, game: Any, user: dict[str, Any], session: dict[str, Any], depth: int, now: datetime) -> str:
@@ -949,6 +1124,97 @@ def miniapp_shop_use(
             db.close()
 
 
+def _settle_interactive_manual(
+    db: Database,
+    game: Any,
+    user: dict[str, Any],
+    session: dict[str, Any],
+    now: datetime,
+    *,
+    collapsed: bool,
+) -> str:
+    uid = user["id"]
+    player_before = db.get_dig_player(0, uid)
+    if not player_before:
+        db.finish_interactive_dig_session(session["id"], "cancelled")
+        return "Игрок не найден, вылазка закрыта."
+    snapshot = json.loads(session["equipment_snapshot"] or "{}")
+    depth = int(session["depth"])
+    temporary = int(session["temporary_coins"])
+    if collapsed:
+        coins, lost = collapse_payout(temporary, int(snapshot.get("loss_protection", 0)))
+    else:
+        coins, lost = temporary, 0
+    effects = list(snapshot.get("used_effects") or [])
+    items = _items_map(db, uid)
+    event = None
+    artifact = None
+    if depth > 0 and not collapsed:
+        before_event = coins
+        coins, event = game.dig_random_event(depth, coins)
+        if coins < before_event and items.get("medkit", 0) > 0 and db.consume_dig_item(0, uid, "medkit"):
+            coins = before_event
+            effects.append("Аптечка: потеря котоинов отменена")
+        artifact_bonus = max(0, int((float(snapshot.get("route_artifacts", 1.0)) - 1) * 10))
+        artifact_coins, artifact = _find_artifact(
+            db,
+            game,
+            uid,
+            depth,
+            items,
+            artifact_bonus + (15 if snapshot.get("map_used") else 0),
+        )
+        coins += artifact_coins
+        if snapshot.get("talisman_used"):
+            coins *= 2
+            effects.append("Талисман: котоины удвоены")
+    if depth >= INTERACTIVE_DIG_MAX_DEPTH and not collapsed:
+        final_bonus, final_text = final_depth_bonus(depth, str(snapshot.get("mine_key") or "old_mine"))
+        coins += final_bonus
+        effects.append(final_text)
+
+    text = now.isoformat(timespec="seconds")
+    db.update_dig_player_after_dig(
+        0,
+        uid,
+        user.get("username"),
+        user["full_name"],
+        coins,
+        depth,
+        depth,
+        int(snapshot.get("luck_after", player_before.luck)),
+        text,
+        text,
+    )
+    db.add_dig_weekly_depth(uid, game.dig_week_start(now), depth)
+    contract_updates = _update_contracts(db, game, uid, depth, coins, artifact is not None)
+    progress = db.update_dig_progress(uid, 5 + depth * 10, depth > 0, session["route_key"])
+    expedition = db.add_dig_expedition_progress(0, uid, now.date().isoformat(), depth, game.DIG_EXPEDITION_TARGET)
+    if expedition["completed"]:
+        db.reward_dig_expedition(0, now.date().isoformat(), game.DIG_EXPEDITION_REWARD)
+    if depth > 0 and game.find_golden_ticket(depth):
+        db.add_dig_item(0, uid, "golden_ticket", 1)
+        effects.append("Золотой билет найден")
+    db.finish_interactive_dig_session(session["id"], "collapsed" if collapsed else "finished")
+    lines = [
+        "Обвал!" if collapsed else ("Финальная комната завершена!" if depth >= INTERACTIVE_DIG_MAX_DEPTH else "Добыча забрана."),
+        f"Глубина: {depth} м",
+        f"+{coins} котоинов",
+        f"Уровень {progress['level']}, XP {progress['xp']}",
+    ]
+    if lost:
+        lines.append(f"Обвал унёс {lost} котоинов.")
+    if event:
+        lines.append(event)
+    if artifact:
+        lines.append(artifact)
+    if contract_updates:
+        lines.append("Контракты: " + "; ".join(contract_updates))
+    if effects:
+        lines.append("Эффекты: " + "; ".join(str(item) for item in effects[-6:]))
+    return "\n".join(lines)
+
+
 @router.post("/miniapp/mine/shift")
 def miniapp_shift_contract(
     payload: ShiftContractPick,
@@ -1264,6 +1530,237 @@ def super_game_pick(
             return {"ok": True, "cell": payload.cell, "coins": reward if isinstance(reward, int) else 0,
                     "reward": reward_key, "attemptsLeft": attempts_left, "game": next_game,
                     "state": _state(db, user["id"])}
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/mine/interactive/start")
+def miniapp_interactive_start(
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    with DIG_LOCK:
+        db = _db()
+        try:
+            from . import bot as game
+            _begin_interactive_manual(db, game, user, datetime.now(timezone.utc))
+            return {"ok": True, "message": "Вылазка началась.", "state": _state(db, user["id"])}
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/mine/interactive/cell")
+def miniapp_interactive_cell(
+    payload: MineCellPick,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    with DIG_LOCK:
+        db = _db()
+        try:
+            from . import bot as game
+            session = db.get_active_interactive_dig_session(user["id"])
+            if not session:
+                raise HTTPException(400, "Сначала начни вылазку.")
+            stage = json.loads(session["cells_json"] or "{}")
+            if isinstance(stage, dict) and stage.get("type") != "cells":
+                raise HTTPException(400, "Сейчас нужно выбрать действие события.")
+            cells = _interactive_cells(stage)
+            used = [int(item) for item in json.loads(session["used_cells_json"] or "[]")]
+            if payload.cell in used:
+                raise HTTPException(400, "Эта клетка уже проверена.")
+            if payload.cell >= len(cells):
+                raise HTTPException(400, "Клетка не найдена.")
+            snapshot = json.loads(session["equipment_snapshot"] or "{}")
+            current_depth = int(session["depth"])
+            next_depth = current_depth + 1
+            resolved = resolve_cell(cells[payload.cell])
+            if int(cells[payload.cell].get("bonus", 0)):
+                resolved["chance_modifier"] = float(resolved.get("chance_modifier", 0.0)) + int(cells[payload.cell].get("bonus", 0))
+            chance = final_cell_chance(float(game.DIG_SUCCESS_CHANCES[next_depth - 1]), float(snapshot.get("chance_bonus", 0.0)), resolved)
+            success = secrets.randbelow(10000) < int(chance * 100)
+            cell_name = {"normal": "обычный грунт", "ore": "рудная жила", "hard": "твёрдая порода", "roots": "странные корни"}.get(str(resolved.get("resolved_kind")), "слой")
+            if success:
+                gained = cell_reward(game.dig_coin_reward(next_depth), float(snapshot.get("route_coins", 1.0)), resolved, int(snapshot.get("coin_bonus_percent", 0)))
+                if int(cells[payload.cell].get("reward_bonus", 0)):
+                    gained = (gained * (100 + int(cells[payload.cell].get("reward_bonus", 0))) + 99) // 100
+                if next_depth >= INTERACTIVE_DIG_MAX_DEPTH:
+                    next_stage = generate_dig_stage(INTERACTIVE_DIG_MAX_DEPTH, str(snapshot.get("mine_key") or "old_mine"))
+                    db.update_interactive_dig_session(
+                        session["id"],
+                        depth=INTERACTIVE_DIG_MAX_DEPTH - 1,
+                        temporary_coins=int(session["temporary_coins"]) + gained,
+                        cells_json=json.dumps(next_stage, ensure_ascii=False),
+                        used_cells_json="[]",
+                    )
+                    return {"ok": True, "message": f"Слой пройден: {cell_name}. +{gained} котоинов. Впереди финальная комната.", "state": _state(db, user["id"])}
+                next_stage = generate_dig_stage(next_depth + 1, str(snapshot.get("mine_key") or "old_mine"))
+                db.update_interactive_dig_session(
+                    session["id"],
+                    depth=next_depth,
+                    temporary_coins=int(session["temporary_coins"]) + gained,
+                    cells_json=json.dumps(next_stage, ensure_ascii=False),
+                    used_cells_json="[]",
+                )
+                return {"ok": True, "message": f"Слой пройден: {cell_name}. +{gained} котоинов.", "state": _state(db, user["id"])}
+
+            used = sorted(set(used) | {payload.cell})
+            durability = int(session["durability"])
+            saved = False
+            if int(snapshot.get("insurance_count", 0)) > 0 and not snapshot.get("insurance_used"):
+                if db.consume_dig_item(0, user["id"], "insurance"):
+                    snapshot["insurance_used"] = True
+                    snapshot["insurance_count"] = max(0, int(snapshot.get("insurance_count", 0)) - 1)
+                    saved = True
+            protection = min(45, int(snapshot.get("loss_protection", 0)))
+            if not saved and protection and secrets.randbelow(100) < protection:
+                saved = True
+            if not saved:
+                durability -= 1
+            if durability <= 0:
+                db.update_interactive_dig_session(
+                    session["id"],
+                    durability=0,
+                    used_cells_json=json.dumps(used),
+                    equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
+                )
+                finished = db.get_interactive_dig_session(session["id"])
+                message = _settle_interactive_manual(db, game, user, finished, datetime.now(timezone.utc), collapsed=True)
+                return {"ok": True, "finished": True, "message": message, "state": _state(db, user["id"])}
+            db.update_interactive_dig_session(
+                session["id"],
+                durability=durability,
+                used_cells_json=json.dumps(used),
+                equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
+            )
+            suffix = "Страховка/снаряжение спасли прочность." if saved else f"Прочность: {durability}/{INTERACTIVE_DIG_DURABILITY}."
+            return {"ok": True, "message": f"Слой не поддался: {cell_name}. {suffix}", "state": _state(db, user["id"])}
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/mine/interactive/tool")
+def miniapp_interactive_tool(
+    payload: MineToolUse,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    with DIG_LOCK:
+        db = _db()
+        try:
+            session = db.get_active_interactive_dig_session(user["id"])
+            if not session:
+                raise HTTPException(400, "Сначала начни вылазку.")
+            stage = json.loads(session["cells_json"] or "{}")
+            if isinstance(stage, dict) and stage.get("type") != "cells":
+                raise HTTPException(400, "В этой комнате предмет не нужен.")
+            cells = _interactive_cells(stage)
+            if not isinstance(stage, dict):
+                stage = {"type": "cells", "cells": cells}
+            snapshot = json.loads(session["equipment_snapshot"] or "{}")
+            tool = payload.item_key
+            if tool not in {"flashlight", "map", "dynamite", "miner_hearing", "magnet", "cat_companion"}:
+                raise HTTPException(400, "Такого предмета нет.")
+            used_tools = set(snapshot.get("used_tools") or [])
+            if tool in used_tools or int(snapshot.get(f"{tool}_count", 0)) <= 0:
+                raise HTTPException(400, "Этот предмет уже использован.")
+            if tool in {"flashlight", "map", "dynamite"} and not db.consume_dig_item(0, user["id"], tool):
+                raise HTTPException(400, "Предмета уже нет в сумке.")
+            available = list(range(len(cells)))
+            message = "Предмет использован."
+            if tool == "flashlight" and available:
+                index = available[secrets.randbelow(len(available))]
+                cells[index]["revealed"] = cells[index].get("kind", "unknown")
+                message = f"Фонарь подсветил клетку {index + 1}."
+            elif tool == "map":
+                preview = generate_dig_cells(int(session["depth"]) + 2, mine_key=str(snapshot.get("mine_key") or "old_mine"))
+                emoji = {"normal": "🟫", "ore": "✨", "hard": "🪨", "roots": "🌿", "unknown": "❓"}
+                stage["preview"] = " ".join(emoji.get(str(cell.get("kind")), "❓") for cell in preview)
+                snapshot["map_used"] = True
+                message = "Карта показала следующий ряд."
+            elif tool == "dynamite":
+                targets = [i for i, cell in enumerate(cells) if cell.get("kind") in {"hard", "unknown", "roots"}] or available
+                secrets.SystemRandom().shuffle(targets)
+                for index in targets[:3]:
+                    cells[index]["revealed"] = cells[index].get("kind", "unknown")
+                    cells[index]["bonus"] = int(cells[index].get("bonus", 0)) + 8
+                message = "Динамит ослабил несколько клеток."
+            used_tools.add(tool)
+            snapshot["used_tools"] = sorted(used_tools)
+            snapshot[f"{tool}_count"] = max(0, int(snapshot.get(f"{tool}_count", 0)) - 1)
+            db.update_interactive_dig_session(
+                session["id"],
+                cells_json=json.dumps(stage, ensure_ascii=False),
+                equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
+            )
+            return {"ok": True, "message": message, "state": _state(db, user["id"])}
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/mine/interactive/event")
+def miniapp_interactive_event(
+    payload: MineEventChoice,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    with DIG_LOCK:
+        db = _db()
+        try:
+            from . import bot as game
+            session = db.get_active_interactive_dig_session(user["id"])
+            if not session:
+                raise HTTPException(400, "Сначала начни вылазку.")
+            stage = json.loads(session["cells_json"] or "{}")
+            if not isinstance(stage, dict) or stage.get("type") not in {"event", "final"}:
+                raise HTTPException(400, "Сейчас нет события.")
+            choice = event_choice(stage, payload.choice_key)
+            if not choice:
+                raise HTTPException(400, "Такого выбора нет.")
+            snapshot = json.loads(session["equipment_snapshot"] or "{}")
+            depth = INTERACTIVE_DIG_MAX_DEPTH if stage.get("type") == "final" else int(session["depth"]) + int(choice.get("depth", 0))
+            coins = max(0, int(session["temporary_coins"]) + int(choice.get("coins", 0)))
+            durability = int(session["durability"])
+            collapsed = False
+            if int(choice.get("risk", 0)) and secrets.randbelow(100) < int(choice.get("risk", 0)):
+                durability -= 1
+                collapsed = durability <= 0
+            if choice.get("settle") or stage.get("type") == "final" or collapsed:
+                db.update_interactive_dig_session(session["id"], depth=depth, durability=max(0, durability), temporary_coins=coins)
+                finished = db.get_interactive_dig_session(session["id"])
+                message = _settle_interactive_manual(db, game, user, finished, datetime.now(timezone.utc), collapsed=collapsed)
+                return {"ok": True, "finished": True, "message": message, "state": _state(db, user["id"])}
+            if int(choice.get("chance", 0)):
+                snapshot["chance_bonus"] = float(snapshot.get("chance_bonus", 0.0)) + int(choice.get("chance", 0))
+            next_stage = generate_dig_stage(depth + 1, str(snapshot.get("mine_key") or "old_mine"))
+            db.update_interactive_dig_session(
+                session["id"],
+                depth=depth,
+                durability=durability,
+                temporary_coins=coins,
+                cells_json=json.dumps(next_stage, ensure_ascii=False),
+                used_cells_json="[]",
+                equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
+            )
+            return {"ok": True, "message": f"Выбор принят: {choice.get('label', 'действие')}.", "state": _state(db, user["id"])}
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/mine/interactive/exit")
+def miniapp_interactive_exit(
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    with DIG_LOCK:
+        db = _db()
+        try:
+            from . import bot as game
+            session = db.get_active_interactive_dig_session(user["id"])
+            if not session:
+                raise HTTPException(400, "Активной вылазки нет.")
+            message = _settle_interactive_manual(db, game, user, session, datetime.now(timezone.utc), collapsed=False)
+            return {"ok": True, "finished": True, "message": message, "state": _state(db, user["id"])}
         finally:
             db.close()
 
