@@ -435,6 +435,7 @@ def _state(db: Database, user_id: int) -> dict[str, Any]:
             "level": progress["level"], "xp": progress["xp"], "streak": progress["streak"],
             "sessionDepth": int(interactive_session["depth"]) if interactive_session else int(session["depth"]) if session else 0,
             "inSession": bool(session or interactive_session),
+            "autoMineActive": bool(session),
             "interactiveMine": interactive_session,
             "cooldownUntil": cooldown,
             "items": items,
@@ -483,6 +484,8 @@ def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) 
     player = db.get_dig_player(0, uid)
     if not player:
         raise HTTPException(400, "Сначала зарегистрируйтесь в игре.")
+    if db.get_active_interactive_dig_session(uid):
+        raise HTTPException(400, "У тебя уже идет ручная вылазка. Заверши ее перед автоматической раскопкой.")
 
     items = _items_map(db, uid)
     star_dig_used, forced_luck, forced_depth = _consume_star_dig(db, items, uid)
@@ -599,6 +602,8 @@ def _begin_interactive_manual(db: Database, game: Any, user: dict[str, Any], now
     player = db.get_dig_player(0, uid)
     if not player:
         raise HTTPException(400, "Сначала зарегистрируйтесь в игре.")
+    if db.get_dig_session(uid):
+        raise HTTPException(400, "У тебя уже идет автоматическая раскопка. Заверши ее перед ручной вылазкой.")
     active = db.get_active_interactive_dig_session(uid)
     if active:
         return active
@@ -715,7 +720,9 @@ def _finish(db: Database, game: Any, user: dict[str, Any], session: dict[str, An
             lost = 1 + secrets.randbelow(depth)
             depth = max(0, depth - lost)
     coins = max(1, int(game.dig_coin_reward(depth) * data["routeCoins"] + 0.9999))
-    coins, event = game.dig_random_event(depth, coins)
+    coins = game.scale_auto_dig_reward(coins)
+    event = None
+    effects.append("Автоматический режим: добыча снижена, ручных событий и руды нет")
     artifact_coins, artifact = _find_artifact(db, game, uid, depth, _items_map(db, uid), max(0, int((data["routeArtifacts"] - 1) * 10)))
     coins = game.apply_premium_coin_bonus(uid, coins + artifact_coins, effects)
     text = now.isoformat(timespec="seconds")
@@ -774,11 +781,9 @@ def _finish_manual(db: Database, game: Any, user: dict[str, Any], session: dict[
     if data.get("collectionBonus"):
         coins = (coins * 105 + 99) // 100
 
-    coins_before_event = coins
-    coins, event = game.dig_random_event(depth, coins)
-    if coins < coins_before_event and items.get("medkit", 0) > 0 and db.consume_dig_item(0, uid, "medkit"):
-        coins = coins_before_event
-        effects.append("Аптечка: потеря котоинов отменена")
+    coins = game.scale_auto_dig_reward(coins)
+    event = None
+    effects.append("Автоматический режим: добыча снижена, ручных событий и руды нет")
 
     artifact_chance_bonus = (
         max(0, int((data["routeArtifacts"] - 1) * 10))

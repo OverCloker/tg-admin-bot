@@ -173,6 +173,7 @@ DEFAULT_AVAILABLE_REACTIONS = [
 DIG_COOLDOWN = timedelta(hours=3)
 DIG_LUCK_COST = 35
 DIG_LUCK_REGEN_PER_HOUR = 7
+AUTO_DIG_REWARD_SCALE_PERCENT = 65
 DIG_STAR_LUCK_PRICE = 3
 DIG_STAR_COOLDOWN_PRICE = 1
 DIG_STAR_ACTIONS = {
@@ -1059,6 +1060,10 @@ def dig_coin_reward(depth: int) -> int:
     return low + secrets.randbelow(high - low + 1)
 
 
+def scale_auto_dig_reward(coins: int) -> int:
+    return max(1, (max(0, int(coins)) * AUTO_DIG_REWARD_SCALE_PERCENT + 99) // 100)
+
+
 def dig_random_event(depth: int, coins: int) -> tuple[int, str | None]:
     if secrets.randbelow(100) >= 55:
         return coins, None
@@ -1664,6 +1669,8 @@ def run_private_dig(chat_id: int, user: User) -> DigReply:
         return DigReply("Ты еще не зарегистрирован в раскопках. Сначала напиши <code>копай</code> внутри выбранной группы и нажми кнопку регистрации.")
     if db.get_dig_session(user.id):
         return DigReply("У тебя уже идет пошаговая вылазка в шахте Mini App. Продолжи ее там или заверши текущую вылазку.")
+    if db.get_active_interactive_dig_session(user.id):
+        return DigReply("У тебя уже идет ручная вылазка в Mini App. Заверши ее перед автоматической раскопкой.")
 
     now = datetime.now(timezone.utc)
     items = dig_items_map(chat_id, user.id)
@@ -1784,11 +1791,9 @@ def run_private_dig(chat_id: int, user: User) -> DigReply:
         coins = (coins * (100 + backpack_bonus) + 99) // 100
     if collection_bonus:
         coins = (coins * 105 + 99) // 100
-    coins_before_event = coins
-    coins, event_text = dig_random_event(dug, coins)
-    if coins < coins_before_event and medkit_available and db.consume_dig_item(chat_id, user.id, "medkit"):
-        coins = coins_before_event
-        used_effects.append("Аптечка: потеря котоинов отменена")
+    coins = scale_auto_dig_reward(coins)
+    event_text = None
+    used_effects.append("Автоматический режим: добыча снижена, ручных событий и руды нет")
     artifact_bonus, artifact_text = find_dig_artifact(
         chat_id, user.id, dug, items,
         max(0, int((route_artifacts - 1) * 10)) + dig_flashlight_artifact_bonus(items) + (15 if map_used else 0),
@@ -4649,7 +4654,13 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
             if not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
                 await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
                 return
-            await safe_edit(callback, "Выбери способ раскопки:", reply_markup=user_dig_mode_menu(chat_id, owner_id))
+            await safe_edit(
+                callback,
+                "Выбери способ раскопки:\n\n"
+                "• <b>Автоматически</b> — быстрый результат, добыча ниже, без ручных событий, руды и купца.\n"
+                "• <b>Вручную</b> — Mini App: клетки, события, руда, купец и выборы по ходу вылазки.",
+                reply_markup=user_dig_mode_menu(chat_id, owner_id),
+            )
             await callback.answer()
             return
         if action == "manual":
@@ -4659,7 +4670,8 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
             try:
                 await callback.bot.send_message(
                     callback.from_user.id,
-                    "Ручная шахта открывается в Mini App. Нажми кнопку ниже.",
+                    "Ручная шахта открывается в Mini App.\n\n"
+                    "Там есть клетки, события, руда и купец. Автоматический режим быстрее, но добыча ниже и без этих ручных находок.",
                     reply_markup=miniapp_private_menu(),
                 )
             except (TelegramBadRequest, TelegramForbiddenError):
@@ -4683,26 +4695,7 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
         await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
         return
 
-    interactive = start_interactive_dig(chat_id, callback.from_user)
-    if interactive.session:
-        cells, used_cells, _snapshot = interactive_dig_cells(interactive.session)
-        await safe_edit(
-            callback,
-            interactive.text,
-            reply_markup=interactive_dig_menu(
-                interactive.session["id"],
-                int(interactive.session["depth"]),
-                cells,
-                used_cells,
-                interactive_dig_tools(_snapshot, cells),
-            ),
-        )
-        if callback.message:
-            db.update_interactive_dig_session(interactive.session["id"], message_id=callback.message.message_id)
-        await callback.answer()
-        return
-
-    result = DigReply(interactive.text)
+    result = run_private_dig(chat_id, callback.from_user)
     reply_markup = user_mine_menu(chat_id, owner_id, show_back=False)
     if result.rich_message and callback.message:
         try:
@@ -9192,7 +9185,9 @@ async def dig_command(message: Message) -> None:
 
     await temporary_reply(
         message,
-        "Выбери способ раскопки:",
+        "Выбери способ раскопки:\n\n"
+        "• <b>Автоматически</b> — быстрый результат, добыча ниже, без ручных событий, руды и купца.\n"
+        "• <b>Вручную</b> — Mini App: клетки, события, руда, купец и выборы по ходу вылазки.",
         reply_markup=user_dig_mode_menu(message.chat.id, message.from_user.id),
     )
     return
@@ -9332,11 +9327,9 @@ async def dig_command(message: Message) -> None:
         coins = (coins * (100 + backpack_bonus) + 99) // 100
     if collection_bonus:
         coins = (coins * 105 + 99) // 100
-    coins_before_event = coins
-    coins, event_text = dig_random_event(dug, coins)
-    if coins < coins_before_event and medkit_available and db.consume_dig_item(message.chat.id, message.from_user.id, "medkit"):
-        coins = coins_before_event
-        used_effects.append("Аптечка: потеря котоинов отменена")
+    coins = scale_auto_dig_reward(coins)
+    event_text = None
+    used_effects.append("Автоматический режим: добыча снижена, ручных событий и руды нет")
     artifact_chance_bonus = artifact_equipment_bonus + (15 if map_used else 0) + max(0, int((route_artifacts - 1) * 10))
     artifact_bonus, artifact_text = find_dig_artifact(message.chat.id, message.from_user.id, dug, items, artifact_chance_bonus)
     coins += artifact_bonus
