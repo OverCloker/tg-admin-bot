@@ -1,5 +1,6 @@
 import sqlite3
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -886,6 +887,29 @@ class Database:
                 updated_at text not null
             );
 
+            create table if not exists interactive_dig_sessions (
+                id text primary key,
+                user_id integer not null,
+                chat_id integer not null,
+                status text not null default 'active',
+                route_key text not null,
+                depth integer not null default 0,
+                durability integer not null default 3,
+                temporary_coins integer not null default 0,
+                luck_snapshot integer not null default 100,
+                equipment_snapshot text not null default '{}',
+                cells_json text not null default '[]',
+                used_cells_json text not null default '[]',
+                message_id integer,
+                processing integer not null default 0,
+                created_at text not null,
+                updated_at text not null
+            );
+
+            create unique index if not exists interactive_dig_sessions_active_user_uidx
+            on interactive_dig_sessions(user_id)
+            where status = 'active';
+
             create table if not exists dig_weekly_depth (
                 week_start text not null,
                 user_id integer not null,
@@ -1187,6 +1211,167 @@ class Database:
 
     def clear_dig_session(self, user_id: int) -> None:
         self._conn.execute("delete from dig_sessions where user_id = ?", (int(user_id),))
+        self._conn.commit()
+
+    def get_active_interactive_dig_session(self, user_id: int) -> dict | None:
+        row = self._conn.execute(
+            """
+            select id, user_id, chat_id, status, route_key, depth, durability, temporary_coins,
+                   luck_snapshot, equipment_snapshot, cells_json, used_cells_json, message_id,
+                   processing, created_at, updated_at
+            from interactive_dig_sessions
+            where user_id = ? and status = 'active'
+            """,
+            (int(user_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_interactive_dig_session(self, session_id: str) -> dict | None:
+        row = self._conn.execute(
+            """
+            select id, user_id, chat_id, status, route_key, depth, durability, temporary_coins,
+                   luck_snapshot, equipment_snapshot, cells_json, used_cells_json, message_id,
+                   processing, created_at, updated_at
+            from interactive_dig_sessions
+            where id = ?
+            """,
+            (str(session_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def create_interactive_dig_session(
+        self,
+        *,
+        session_id: str,
+        user_id: int,
+        chat_id: int,
+        route_key: str,
+        depth: int,
+        durability: int,
+        temporary_coins: int,
+        luck_snapshot: int,
+        equipment_snapshot: str,
+        cells_json: str,
+        used_cells_json: str = "[]",
+        message_id: int | None = None,
+    ) -> dict:
+        now = utc_now()
+        self._conn.execute(
+            """
+            insert into interactive_dig_sessions (
+                id, user_id, chat_id, status, route_key, depth, durability, temporary_coins,
+                luck_snapshot, equipment_snapshot, cells_json, used_cells_json, message_id,
+                processing, created_at, updated_at
+            )
+            values (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            """,
+            (
+                str(session_id),
+                int(user_id),
+                int(chat_id),
+                route_key,
+                int(depth),
+                int(durability),
+                int(temporary_coins),
+                int(luck_snapshot),
+                equipment_snapshot,
+                cells_json,
+                used_cells_json,
+                int(message_id) if message_id is not None else None,
+                now,
+                now,
+            ),
+        )
+        self._conn.commit()
+        row = self.get_interactive_dig_session(session_id)
+        if row is None:
+            raise RuntimeError("interactive dig session was not created")
+        return row
+
+    def update_interactive_dig_session(
+        self,
+        session_id: str,
+        *,
+        depth: int | None = None,
+        durability: int | None = None,
+        temporary_coins: int | None = None,
+        cells_json: str | None = None,
+        used_cells_json: str | None = None,
+        equipment_snapshot: str | None = None,
+        message_id: int | None = None,
+        processing: int | None = None,
+    ) -> None:
+        fields: list[str] = []
+        values: list[object] = []
+        for name, value in (
+            ("depth", depth),
+            ("durability", durability),
+            ("temporary_coins", temporary_coins),
+            ("cells_json", cells_json),
+            ("used_cells_json", used_cells_json),
+            ("equipment_snapshot", equipment_snapshot),
+            ("message_id", message_id),
+            ("processing", processing),
+        ):
+            if value is not None:
+                fields.append(f"{name} = ?")
+                values.append(value)
+        if not fields:
+            return
+        fields.append("updated_at = ?")
+        values.append(utc_now())
+        values.append(str(session_id))
+        self._conn.execute(
+            f"update interactive_dig_sessions set {', '.join(fields)} where id = ?",
+            tuple(values),
+        )
+        self._conn.commit()
+
+    def lock_interactive_dig_cell(self, session_id: str, user_id: int, depth: int, cell_index: int) -> dict | None:
+        try:
+            self._conn.execute("begin immediate")
+            row = self._conn.execute(
+                """
+                select id, user_id, chat_id, status, route_key, depth, durability, temporary_coins,
+                       luck_snapshot, equipment_snapshot, cells_json, used_cells_json, message_id,
+                       processing, created_at, updated_at
+                from interactive_dig_sessions
+                where id = ? and user_id = ? and status = 'active'
+                """,
+                (str(session_id), int(user_id)),
+            ).fetchone()
+            if row is None:
+                self._conn.rollback()
+                return None
+            data = dict(row)
+            if int(data["processing"]) or int(data["depth"]) != int(depth):
+                self._conn.rollback()
+                return None
+            used = set(json.loads(data["used_cells_json"] or "[]"))
+            if int(cell_index) in used:
+                self._conn.rollback()
+                return None
+            self._conn.execute(
+                "update interactive_dig_sessions set processing = 1, updated_at = ? where id = ?",
+                (utc_now(), str(session_id)),
+            )
+            self._conn.commit()
+            data["processing"] = 1
+            return data
+        except Exception:
+            with suppress(Exception):
+                self._conn.rollback()
+            raise
+
+    def finish_interactive_dig_session(self, session_id: str, status: str = "finished") -> None:
+        self._conn.execute(
+            """
+            update interactive_dig_sessions
+            set status = ?, processing = 0, updated_at = ?
+            where id = ?
+            """,
+            (status, utc_now(), str(session_id)),
+        )
         self._conn.commit()
 
     def get_gold_ticket_game(self, user_id: int) -> dict | None:

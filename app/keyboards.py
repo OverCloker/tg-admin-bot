@@ -310,6 +310,76 @@ def user_dig_mode_menu(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def interactive_dig_menu(
+    session_id: str,
+    depth: int,
+    cells: list[dict] | dict,
+    used_cells: list[int] | None = None,
+    tools: list[str] | None = None,
+) -> InlineKeyboardMarkup:
+    if isinstance(cells, dict) and cells.get("type") in {"event", "final"}:
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text=str(choice.get("label") or "Выбрать"),
+                    callback_data=f"digevent:{session_id}:{int(depth)}:{choice.get('key')}",
+                )
+            ]
+            for choice in cells.get("choices", [])[:3]
+        ]
+        rows.append([InlineKeyboardButton(text="💰 Забрать добычу и выйти", callback_data=f"digexit:{session_id}")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    if isinstance(cells, dict):
+        cells = cells.get("cells", [])
+    emojis = {
+        "normal": "🟫",
+        "ore": "✨",
+        "hard": "🪨",
+        "roots": "🌿",
+        "unknown": "❓",
+    }
+    used = {int(item) for item in (used_cells or [])}
+    cell_rows = []
+    cell_row = []
+    for index, cell in enumerate(cells[:7]):
+        kind = str(cell.get("kind") or "unknown")
+        revealed = cell.get("revealed")
+        prefix = "▫️" if index in used else emojis.get(kind, "❓")
+        text = f"{prefix}{index + 1}" if not revealed else f"👁{emojis.get(str(revealed), '❓')}"
+        cell_row.append(
+            InlineKeyboardButton(
+                text=text,
+                callback_data=f"digcell:{session_id}:{int(depth)}:{index}",
+            )
+        )
+        if len(cell_row) == 4:
+            cell_rows.append(cell_row)
+            cell_row = []
+    if cell_row:
+        cell_rows.append(cell_row)
+    tool_labels = {
+        "flashlight": "🔦 Фонарь",
+        "map": "🗺 Карта",
+        "dynamite": "🧨 Динамит",
+        "miner_hearing": "👂 Слух",
+        "magnet": "🧲 Магнит",
+        "cat_companion": "🐈 Компаньон",
+    }
+    tool_rows = [
+        [InlineKeyboardButton(text=tool_labels[key], callback_data=f"digtool:{session_id}:{int(depth)}:{key}")]
+        for key in (tools or [])
+        if key in tool_labels
+    ]
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            *cell_rows,
+            *tool_rows,
+            [InlineKeyboardButton(text="💰 Забрать добычу и выйти", callback_data=f"digexit:{session_id}")],
+        ]
+    )
+
+
 def user_mine_menu(chat_id: int, user_id: int, show_back: bool = True) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="\u041a\u043e\u043f\u0430\u0442\u044c", callback_data=f"user:dig:mode:{chat_id}:{user_id}")],
