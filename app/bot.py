@@ -1476,6 +1476,45 @@ def paragraph(text: str) -> InputRichBlockParagraph:
     return InputRichBlockParagraph(text=text)
 
 
+def rich_plain_text(text: str) -> str:
+    cleaned = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"</(?:p|div|li|tr|h[1-6])\s*>", "\n", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"<[^>]+>", "", cleaned)
+    cleaned = unescape(cleaned)
+    return re.sub(r"[ \t]+", " ", cleaned).strip()
+
+
+def rich_sentence_paragraphs(text: str) -> list[str]:
+    return [
+        part.strip()
+        for part in re.split(r"(?<=[.!?])\s+(?=[A-ZА-ЯЁ0-9@«])", text.strip())
+        if part.strip()
+    ]
+
+
+def rich_detail_paragraphs(text: str) -> list[str]:
+    cleaned = rich_plain_text(text)
+    if not cleaned:
+        return []
+    lines: list[str] = []
+    for raw_line in re.split(r"\n+", cleaned):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if ";" in line:
+            head, _, tail = line.partition(":")
+            if tail:
+                lines.append(f"{head.strip()}:")
+                for part in tail.split(";"):
+                    lines.extend(rich_sentence_paragraphs(part))
+                continue
+            for part in line.split(";"):
+                lines.extend(rich_sentence_paragraphs(part))
+            continue
+        lines.extend(rich_sentence_paragraphs(line))
+    return lines
+
+
 def build_dig_rich_message(
     *,
     player_name: str,
@@ -1493,10 +1532,14 @@ def build_dig_rich_message(
     details: list[str],
 ) -> InputRichMessage:
     detail_blocks = [
-        paragraph(f"Маршрут: {route_name}. Уровень {level}, XP {xp}, серия {streak}."),
-        paragraph(f"Экспедиция группы: {expedition_progress}/{expedition_target} м."),
+        paragraph(line)
+        for line in rich_detail_paragraphs(
+            f"Маршрут: {route_name}. Уровень {level}, XP {xp}, серия {streak}.\n"
+            f"Экспедиция группы: {expedition_progress}/{expedition_target} м."
+        )
     ]
-    detail_blocks.extend(paragraph(item) for item in details if item)
+    for item in details:
+        detail_blocks.extend(paragraph(line) for line in rich_detail_paragraphs(item))
     return InputRichMessage(
         blocks=[
             paragraph(f"⛏ {player_name}"),

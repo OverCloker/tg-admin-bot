@@ -15,7 +15,10 @@ def test_dig_rich_message_keeps_details_collapsed() -> None:
         streak=21,
         expedition_progress=33,
         expedition_target=50,
-        details=["Сработали эффекты: кирка +6%; вагонетка +35%"],
+        details=[
+            "Артефакт: снова найден «Старая монета». Дубликат продан за <b>2</b> котоинов.",
+            "Сработали эффекты: кирка +6%; вагонетка +35%",
+        ],
     )
 
     dumped = message.model_dump(mode="json", exclude_none=True)
@@ -30,9 +33,14 @@ def test_dig_rich_message_keeps_details_collapsed() -> None:
         "type": "details",
         "summary": "Подробнее ниже",
         "blocks": [
-            {"type": "paragraph", "text": "Маршрут: Глубинная зона. Уровень 50, XP 14580, серия 21."},
+            {"type": "paragraph", "text": "Маршрут: Глубинная зона."},
+            {"type": "paragraph", "text": "Уровень 50, XP 14580, серия 21."},
             {"type": "paragraph", "text": "Экспедиция группы: 33/50 м."},
-            {"type": "paragraph", "text": "Сработали эффекты: кирка +6%; вагонетка +35%"},
+            {"type": "paragraph", "text": "Артефакт: снова найден «Старая монета»."},
+            {"type": "paragraph", "text": "Дубликат продан за 2 котоинов."},
+            {"type": "paragraph", "text": "Сработали эффекты:"},
+            {"type": "paragraph", "text": "кирка +6%"},
+            {"type": "paragraph", "text": "вагонетка +35%"},
         ],
         "is_open": False,
     }
