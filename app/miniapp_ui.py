@@ -214,16 +214,116 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     .btn.secondary { background: var(--panel-2); }
     .btn:disabled { opacity: .45; cursor: default; }
-    .theme-switcher { display:grid; gap:8px; margin-top:12px; }
-    .theme-options { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-    .theme-option {
-      min-height: 46px;
-      margin: 0;
-      border: 1px solid var(--line);
-      color: var(--text);
-      background: var(--panel-2);
+    .theme-switcher { display:grid; gap:8px; margin-top:14px; }
+    .theme-platform-switch {
+      position: relative;
+      width: min(100%, 330px);
+      margin: 0 auto;
+      padding-top: 62px;
     }
-    .theme-option.active { outline: 2px solid var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent); }
+    .theme-platform-switch input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .theme-switch-icons,
+    .theme-switch-labels {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      text-align: center;
+    }
+    .theme-switch-icons {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      align-items: end;
+    }
+    .theme-platform-icon {
+      display: grid;
+      place-items: center;
+      height: 48px;
+      color: var(--muted);
+      opacity: .58;
+      transition: .25s ease;
+      cursor: pointer;
+    }
+    .theme-platform-icon svg {
+      width: 34px;
+      height: 34px;
+      fill: currentColor;
+      filter: drop-shadow(0 1px 0 rgba(255,255,255,.22));
+    }
+    .theme-switch-track {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      height: 30px;
+      overflow: hidden;
+      border: 1px solid color-mix(in srgb, var(--line) 72%, #ffffff);
+      border-radius: 999px;
+      background:
+        linear-gradient(to bottom, #fdfdfd 0%, #d7d7d7 42%, #a9a9a9 50%, #f5f5f5 60%, #dddddd 100%);
+      box-shadow:
+        0 5px 12px rgba(0,0,0,.32),
+        inset 0 1px 2px rgba(255,255,255,.95),
+        inset 0 -1px 1px rgba(0,0,0,.2);
+    }
+    .theme-switch-track label {
+      position: relative;
+      z-index: 2;
+      cursor: pointer;
+    }
+    .theme-switch-track label + label { border-left: 1px solid rgba(50,50,50,.72); }
+    .theme-switch-knob {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: calc(50% - 6px);
+      height: 22px;
+      border: 1px solid #777;
+      border-radius: 999px;
+      background:
+        linear-gradient(to bottom, #ffffff 0%, #f3f3f3 42%, #b6b6b6 51%, #fbfbfb 61%, #dedede 100%);
+      box-shadow:
+        0 2px 3px rgba(0,0,0,.3),
+        inset 0 1px 1px rgba(255,255,255,.95);
+      transition: transform .28s cubic-bezier(.22,.8,.3,1);
+    }
+    .theme-switch-knob::after {
+      content: "";
+      position: absolute;
+      left: 14px;
+      right: 14px;
+      bottom: -2px;
+      height: 2px;
+      border-radius: 2px;
+      background: #c2008f;
+      box-shadow: 0 0 5px rgba(194,0,143,.55);
+    }
+    .theme-switch-labels {
+      margin-top: 11px;
+      color: var(--muted);
+      font-size: 16px;
+      font-weight: 850;
+    }
+    .theme-switch-labels label {
+      cursor: pointer;
+      transition: .25s ease;
+    }
+    #themeApple:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(0); }
+    #themeAndroid:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(calc(100% + 6px)); }
+    #themeApple:checked ~ .theme-switch-icons .theme-apple-icon,
+    #themeApple:checked ~ .theme-switch-labels .theme-apple-label,
+    #themeAndroid:checked ~ .theme-switch-icons .theme-android-icon,
+    #themeAndroid:checked ~ .theme-switch-labels .theme-android-label {
+      color: var(--text);
+      opacity: 1;
+    }
+    .theme-platform-switch:focus-within .theme-switch-track {
+      outline: 3px solid color-mix(in srgb, var(--accent) 24%, transparent);
+      outline-offset: 4px;
+    }
     .depth { padding: 18px 0; text-align: center; font-size: 48px; font-weight: 850; }
     .meter { height: 12px; overflow: hidden; border-radius: 7px; background: #09111c; }
     .fill { height: 100%; background: var(--accent); transition: width .25s ease; }
@@ -1027,9 +1127,30 @@ MINI_APP_HTML = r"""<!doctype html>
     const theme = currentMiniTheme();
     return `<div id="themeSwitcher" class="theme-switcher">
       <div class="muted">Тема интерфейса</div>
-      <div class="theme-options">
-        <button class="btn secondary theme-option ${theme === "material" ? "active" : ""}" onclick="setMiniTheme('material')">Material You</button>
-        <button class="btn secondary theme-option ${theme === "glass" ? "active" : ""}" onclick="setMiniTheme('glass')">Liquid Glass</button>
+      <div class="theme-platform-switch">
+        <input type="radio" name="miniAppTheme" id="themeApple" value="glass" ${theme === "glass" ? "checked" : ""} onchange="setMiniTheme('glass')">
+        <input type="radio" name="miniAppTheme" id="themeAndroid" value="material" ${theme === "material" ? "checked" : ""} onchange="setMiniTheme('material')">
+        <div class="theme-switch-icons">
+          <label class="theme-platform-icon theme-apple-icon" for="themeApple" aria-label="Liquid Glass">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M17.2 12.5c0-2.5 2.1-3.7 2.2-3.8-1.2-1.8-3.1-2-3.8-2-1.6-.2-3.1.9-3.9.9-.8 0-2-.9-3.3-.9-1.7 0-3.2 1-4.1 2.4-1.8 3-.5 7.5 1.3 10 .9 1.2 1.9 2.6 3.3 2.5 1.3-.1 1.8-.8 3.4-.8 1.6 0 2 .8 3.4.8 1.4 0 2.3-1.2 3.1-2.5 1-1.4 1.4-2.8 1.4-2.9-.1 0-3-.9-3-3.7zM14.6 5c.7-.8 1.2-2 1.1-3.1-1 .1-2.2.7-2.9 1.5-.6.7-1.2 1.9-1.1 3 1.1.1 2.2-.6 2.9-1.4z"/>
+            </svg>
+          </label>
+          <label class="theme-platform-icon theme-android-icon" for="themeAndroid" aria-label="Material You">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7.2 8.1h9.6l-.8-1.5 1.2-.7-.5-.8-1.2.7A5.7 5.7 0 0 0 12 4.7a5.7 5.7 0 0 0-3.5 1.1l-1.2-.7-.5.8 1.2.7-.8 1.5zm2.2-1.5a.6.6 0 1 1 0-1.2.6.6 0 0 1 0 1.2zm5.2 0a.6.6 0 1 1 0-1.2.6.6 0 0 1 0 1.2zM6.4 9v7.6c0 .8.6 1.4 1.4 1.4h.8v2.1c0 .7.5 1.2 1.2 1.2s1.2-.5 1.2-1.2V18h2v2.1c0 .7.5 1.2 1.2 1.2s1.2-.5 1.2-1.2V18h.8c.8 0 1.4-.6 1.4-1.4V9H6.4zM4.3 9.3c-.7 0-1.2.5-1.2 1.2v5.2c0 .7.5 1.2 1.2 1.2s1.2-.5 1.2-1.2v-5.2c0-.7-.5-1.2-1.2-1.2zm15.4 0c-.7 0-1.2.5-1.2 1.2v5.2c0 .7.5 1.2 1.2 1.2s1.2-.5 1.2-1.2v-5.2c0-.7-.5-1.2-1.2-1.2z"/>
+            </svg>
+          </label>
+        </div>
+        <div class="theme-switch-track">
+          <span class="theme-switch-knob"></span>
+          <label for="themeApple"></label>
+          <label for="themeAndroid"></label>
+        </div>
+        <div class="theme-switch-labels">
+          <label class="theme-apple-label" for="themeApple">Liquid Glass</label>
+          <label class="theme-android-label" for="themeAndroid">Material You</label>
+        </div>
       </div>
     </div>`;
   }

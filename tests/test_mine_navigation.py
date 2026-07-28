@@ -205,6 +205,10 @@ def test_miniapp_has_interface_themes() -> None:
     assert 'body[data-theme="glass"]' in MINI_APP_HTML
     assert "Material You" in MINI_APP_HTML
     assert "Liquid Glass" in MINI_APP_HTML
+    assert 'id="themeApple" value="glass"' in MINI_APP_HTML
+    assert 'id="themeAndroid" value="material"' in MINI_APP_HTML
+    assert "theme-switch-knob" in MINI_APP_HTML
+    assert "theme-platform-icon theme-android-icon" in MINI_APP_HTML
     assert "function setMiniTheme(theme)" in MINI_APP_HTML
     assert "themeSwitcherHtml()" in MINI_APP_HTML
     assert 'settings.theme' in MINI_APP_HTML
