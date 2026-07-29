@@ -3121,6 +3121,8 @@ def access_session(token: str) -> dict[str, Any] | None:
 def api_audit_action(method: str, path: str) -> str:
     if path == "/miniapp/mine/dig":
         return "Ручная раскопка завершена"
+    if path == "/miniapp/mine/interactive/exit":
+        return "Ручная вылазка завершена"
     if path == "/miniapp/super-game/start":
         return "Супер-игра 9×9 начата"
     if path == "/miniapp/super-game/pick":
@@ -3187,8 +3189,17 @@ def miniapp_shop_purchase_details(
             quantity = int(response.headers.get("X-Miniapp-Shop-Item-Quantity") or "1")
     except (TypeError, ValueError):
         pass
-    suffix = f" x{quantity}" if quantity > 1 else ""
-    return f"купил {item_name}{suffix}"
+    stock = f" · в сумке: {quantity}" if quantity > 1 else ""
+    return f"купил: {item_name} · +1{stock}"
+
+
+def should_skip_api_audit(path: str) -> bool:
+    return path in {
+        "/miniapp/mine/interactive/start",
+        "/miniapp/mine/interactive/cell",
+        "/miniapp/mine/interactive/tool",
+        "/miniapp/mine/interactive/event",
+    }
 
 
 async def miniapp_shop_buy_item_key(request: Request) -> str | None:
@@ -3270,6 +3281,8 @@ async def audit_api_request(request: Request, call_next):
             if label:
                 audit_details = f"{request.url.path} · ключ: {label}"
     if request.url.path == "/miniapp/mine/dig" and response.headers.get("X-Miniapp-Dig-Finished") != "1":
+        return response
+    if should_skip_api_audit(request.url.path):
         return response
     if request.url.path == "/miniapp/super-game/pick":
         return response

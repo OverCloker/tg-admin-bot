@@ -1,4 +1,4 @@
-from app.admin_api import api_audit_action, miniapp_shop_purchase_details
+from app.admin_api import api_audit_action, miniapp_shop_purchase_details, should_skip_api_audit
 from app.db import Database
 
 
@@ -15,6 +15,14 @@ def test_shop_buy_audit_details_include_item_name_and_quantity(tmp_path) -> None
         db.register_dig_player(0, 42, "miner", "Шахтёр")
         db.add_dig_item(0, 42, "tea", 3)
 
-        assert miniapp_shop_purchase_details(db, 42, "tea") == "купил Чай перед сменой x3"
+        details = miniapp_shop_purchase_details(db, 42, "tea")
+        assert details == "купил: Чай перед сменой · +1 · в сумке: 3"
     finally:
         db.close()
+
+
+def test_interactive_mine_clicks_are_not_audit_spam() -> None:
+    assert should_skip_api_audit("/miniapp/mine/interactive/start")
+    assert should_skip_api_audit("/miniapp/mine/interactive/cell")
+    assert should_skip_api_audit("/miniapp/mine/interactive/event")
+    assert not should_skip_api_audit("/miniapp/mine/interactive/exit")
