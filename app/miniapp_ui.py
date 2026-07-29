@@ -1586,7 +1586,6 @@ MINI_APP_HTML = r"""<!doctype html>
       </div>
       ${utilityActionsHtml()}
       ${shiftContractHtml()}
-      ${autoMineHtml(disabled, cooldown)}
       ${interactiveMineHtml(disabled, cooldown)}
       ${goldTicketHtml()}
       ${superGameHtml()}
@@ -1596,38 +1595,18 @@ MINI_APP_HTML = r"""<!doctype html>
       </section>`;
   }
 
-  function autoMineHtml(disabled, cooldown) {
-    const depth = state.autoMineActive ? (state.sessionDepth || 0) : 0;
-    const blockedByManual = !!state.interactiveMine;
-    const buttonDisabled = disabled || blockedByManual;
-    const buttonText = state.autoMineActive ? "⛏️ Копать следующий метр" : "⚡ Копать автоматически";
-    const hint = blockedByManual
-      ? "Сначала заверши ручную вылазку."
-      : "Быстрый режим: добыча ниже, нет ручных событий, руды и купца.";
-    return `<section class="panel">
-      <div class="muted">Автоматическая раскопка</div>
-      <div class="depth">${depth}/10 м</div>
-      <div class="meter"><div class="fill" style="width:${depth * 10}%"></div></div>
-      <button class="btn" ${buttonDisabled ? "disabled" : ""} onclick="autoDig(this)">${buttonText}</button>
-      <div class="muted" style="margin-top:10px">${escapeHtml(buttonDisabled && !blockedByManual ? cooldown : hint)}</div>
-    </section>`;
-  }
-
   function interactiveMineHtml(disabled, cooldown) {
     const dig = state.interactiveMine;
     if (!dig) {
-      const blockedByAuto = !!state.autoMineActive;
-      const buttonDisabled = disabled || blockedByAuto;
+      const buttonDisabled = disabled;
       const buttonText = buttonDisabled ? "⏳ Ручная вылазка недоступна" : "⛏️ Начать ручную вылазку";
-      const hint = blockedByAuto
-        ? "Сначала заверши автоматическую раскопку."
-        : "Ручной режим: клетки, события, руда, купец и больше выбора.";
       return `<section class="panel">
         <div class="muted">Ручная вылазка</div>
         <div class="depth">0/10 м</div>
         <div class="meter"><div class="fill" style="width:0%"></div></div>
         <button class="btn" ${buttonDisabled ? "disabled" : ""} onclick="startInteractiveDig(this)">${buttonText}</button>
-        <div class="muted" style="margin-top:10px">${escapeHtml(buttonDisabled && !blockedByAuto ? cooldown : hint)}</div>
+        <div class="muted" style="margin-top:10px">Условия: клетки, события, руда, купец и выборы по ходу вылазки.</div>
+        <div class="muted" style="margin-top:8px">${escapeHtml(cooldown)}</div>
       </section>`;
     }
     const stage = dig.stage || {};
@@ -1775,33 +1754,6 @@ MINI_APP_HTML = r"""<!doctype html>
     } finally {
       busy = false;
     }
-  }
-
-  async function autoDig(button) {
-    if (busy) return;
-    busy = true;
-    button.disabled = true;
-    button.textContent = "⚡ Копаем автоматически...";
-    const overlay = showDigAnimation();
-    try {
-      const [result] = await Promise.all([
-        api("/miniapp/mine/dig", { method: "POST" }),
-        sleep(1150)
-      ]);
-      state = result.state;
-      renderMine(false);
-      showNotice(result.message);
-    } catch (error) {
-      renderMine(false);
-      showNotice(error.message);
-    } finally {
-      overlay.remove();
-      busy = false;
-    }
-  }
-
-  async function digOneMeter(button) {
-    return autoDig(button);
   }
 
   async function startInteractiveDig(button) {

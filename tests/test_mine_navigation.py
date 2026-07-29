@@ -152,8 +152,11 @@ def test_miniapp_has_no_close_button() -> None:
 
 
 def test_mine_actions_refresh_without_scrolling_to_top() -> None:
-    dig_action = MINI_APP_HTML.split("async function digOneMeter", 1)[1].split(
-        "async function startGoldTicket", 1
+    dig_action = MINI_APP_HTML.split("async function startInteractiveDig", 1)[1].split(
+        "async function pickMineCell", 1
+    )[0]
+    cell_action = MINI_APP_HTML.split("async function pickMineCell", 1)[1].split(
+        "async function useMineTool", 1
     )[0]
     gold_start = MINI_APP_HTML.split("async function startGoldTicket", 1)[1].split(
         "const sleep", 1
@@ -164,9 +167,11 @@ def test_mine_actions_refresh_without_scrolling_to_top() -> None:
 
     assert "function renderMine(scroll = true)" in MINI_APP_HTML
     assert "renderMine(false)" in dig_action
+    assert "renderMine(false)" in cell_action
     assert "renderMine(false)" in gold_start
     assert "renderMine(false)" in super_start
     assert "scrollToTop()" not in dig_action
+    assert "scrollToTop()" not in cell_action
     assert "scrollToTop()" not in gold_start
     assert "scrollToTop()" not in super_start
 

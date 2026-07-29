@@ -435,7 +435,6 @@ def _state(db: Database, user_id: int) -> dict[str, Any]:
             "level": progress["level"], "xp": progress["xp"], "streak": progress["streak"],
             "sessionDepth": int(interactive_session["depth"]) if interactive_session else int(session["depth"]) if session else 0,
             "inSession": bool(session or interactive_session),
-            "autoMineActive": bool(session),
             "interactiveMine": interactive_session,
             "cooldownUntil": cooldown,
             "items": items,
@@ -603,7 +602,7 @@ def _begin_interactive_manual(db: Database, game: Any, user: dict[str, Any], now
     if not player:
         raise HTTPException(400, "Сначала зарегистрируйтесь в игре.")
     if db.get_dig_session(uid):
-        raise HTTPException(400, "У тебя уже идет автоматическая раскопка. Заверши ее перед ручной вылазкой.")
+        db.clear_dig_session(uid)
     active = db.get_active_interactive_dig_session(uid)
     if active:
         return active
