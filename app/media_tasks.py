@@ -52,7 +52,7 @@ class MediaTaskService:
     def __init__(self, db_path: str) -> None:
         self.path = Path(db_path)
         self.premium = PremiumService(db_path)
-        self._conn = sqlite3.connect(self.path, timeout=30)
+        self._conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
 
     def close(self) -> None:

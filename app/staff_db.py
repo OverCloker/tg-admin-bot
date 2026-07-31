@@ -10,7 +10,7 @@ def utc_now() -> str:
 class StaffDatabase:
     def __init__(self, path: str) -> None:
         self.path = Path(path)
-        self._conn = sqlite3.connect(self.path)
+        self._conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
 
     def close(self) -> None:

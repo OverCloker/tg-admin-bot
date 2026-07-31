@@ -364,7 +364,7 @@ class Database:
     def __init__(self, path: str) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path, timeout=30)
+        self._conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("pragma journal_mode=WAL")
         self._conn.execute("pragma busy_timeout=30000")
