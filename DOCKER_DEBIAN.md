@@ -25,7 +25,7 @@ That keeps old Android app settings working if they use either `:8000` or `:5000
 
 ```bash
 sudo apt update
-sudo apt install -y docker.io docker-compose-plugin
+sudo apt install -y docker.io docker-compose-plugin curl
 sudo systemctl enable --now docker
 ```
 
@@ -61,6 +61,18 @@ ADMIN_PUBLIC_URL=http://SERVER_IP:8000/
 FFMPEG_PATH=/usr/bin/ffmpeg
 WHISPER_MODEL=small
 ```
+
+Optional deploy notifications:
+
+```env
+DEPLOY_NOTIFY_CHAT_ID=-1001234567890
+DEPLOY_NOTIFY_THREAD_ID=
+```
+
+If `DEPLOY_NOTIFY_CHAT_ID` is set, `server-deploy.sh` sends a message before the
+Docker rebuild starts and another message after the bot/API are started again.
+Set `DEPLOY_NOTIFY_THREAD_ID` only when the notification must go into a specific
+Telegram forum topic.
 
 Optional values if used:
 
@@ -178,6 +190,17 @@ sh server-deploy.sh main
 `server-deploy.sh` pulls `origin/main`, rebuilds the Docker image and restarts the
 `bot` and `api` containers. If `CLOUDFLARE_TUNNEL_TOKEN` is present in `.env`, it
 also keeps the Cloudflare tunnel profile enabled.
+
+If `.env` contains `DEPLOY_NOTIFY_CHAT_ID`, the script writes into that Telegram
+chat before and after the update:
+
+```text
+🔄 Бот уходит на обновление
+Пожалуйста, пару минут не пишите команды — я пересобираюсь и перезапускаюсь.
+
+✅ Бот снова запущен
+Обновление завершено, команды можно использовать.
+```
 
 ## Automatic Git updates
 
