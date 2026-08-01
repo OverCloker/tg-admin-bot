@@ -578,6 +578,8 @@ class Database:
                 enabled integer not null default 0,
                 last_status text,
                 last_notified_status text,
+                last_alarm_message_id integer,
+                last_clear_message_id integer,
                 updated_by integer,
                 updated_at text not null,
                 foreign key (chat_id) references chats(chat_id) on delete cascade
@@ -1011,6 +1013,10 @@ class Database:
         }
         if "last_notified_status" not in columns:
             self._conn.execute("alter table alarm_api_settings add column last_notified_status text")
+        if "last_alarm_message_id" not in columns:
+            self._conn.execute("alter table alarm_api_settings add column last_alarm_message_id integer")
+        if "last_clear_message_id" not in columns:
+            self._conn.execute("alter table alarm_api_settings add column last_clear_message_id integer")
 
     def _migrate_advertisements(self) -> None:
         columns = {
@@ -2559,12 +2565,17 @@ class Database:
     def set_alarm_api_enabled(self, chat_id: int, enabled: bool, updated_by: int | None) -> None:
         self._conn.execute(
             """
-            insert into alarm_api_settings (chat_id, enabled, last_status, last_notified_status, updated_by, updated_at)
-            values (?, ?, null, null, ?, ?)
+            insert into alarm_api_settings (
+                chat_id, enabled, last_status, last_notified_status,
+                last_alarm_message_id, last_clear_message_id, updated_by, updated_at
+            )
+            values (?, ?, null, null, null, null, ?, ?)
             on conflict(chat_id) do update set
                 enabled = excluded.enabled,
                 last_status = null,
                 last_notified_status = null,
+                last_alarm_message_id = null,
+                last_clear_message_id = null,
                 updated_by = excluded.updated_by,
                 updated_at = excluded.updated_at
             """,
@@ -2603,6 +2614,22 @@ class Database:
         self._conn.execute(
             "update alarm_api_settings set last_notified_status = ?, updated_at = ? where chat_id = ? and enabled = 1",
             (status, utc_now(), chat_id),
+        )
+        self._conn.commit()
+
+    def alarm_api_status_message_id(self, chat_id: int, status: str) -> int | None:
+        column = "last_alarm_message_id" if status in {"A", "P"} else "last_clear_message_id"
+        row = self._conn.execute(
+            f"select {column} from alarm_api_settings where chat_id = ? and enabled = 1",
+            (chat_id,),
+        ).fetchone()
+        return int(row[column]) if row and row[column] is not None else None
+
+    def set_alarm_api_status_message_id(self, chat_id: int, status: str, message_id: int | None) -> None:
+        column = "last_alarm_message_id" if status in {"A", "P"} else "last_clear_message_id"
+        self._conn.execute(
+            f"update alarm_api_settings set {column} = ?, updated_at = ? where chat_id = ? and enabled = 1",
+            (message_id, utc_now(), chat_id),
         )
         self._conn.commit()
 

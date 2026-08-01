@@ -8511,14 +8511,13 @@ async def apply_alarm_restrictions(bot: Bot, chat_id: int) -> None:
             logging.warning("Could not disable alarm reactions in chat %s: %s", chat_id, exc)
 
 
-async def send_alarm_notification(bot: Bot, chat_id: int, text: str) -> bool:
+async def send_alarm_notification(bot: Bot, chat_id: int, text: str) -> Message | None:
     thread_id = db.get_alarm_settings(chat_id).alarm_thread_id
     try:
         kwargs = {"chat_id": chat_id, "text": text}
         if thread_id is not None:
             kwargs["message_thread_id"] = thread_id
-        await bot.send_message(**kwargs)
-        return True
+        return await bot.send_message(**kwargs)
     except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as exc:
         logging.warning(
             "Could not send alarm notification in chat %s, thread %s: %s",
@@ -8526,7 +8525,16 @@ async def send_alarm_notification(bot: Bot, chat_id: int, text: str) -> bool:
             thread_id,
             exc,
         )
-        return False
+        return None
+
+
+async def delete_previous_alarm_status_message(bot: Bot, chat_id: int, status: str) -> None:
+    message_id = db.alarm_api_status_message_id(chat_id, status)
+    if message_id is None:
+        return
+    with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
+        await bot.delete_message(chat_id, message_id)
+    db.set_alarm_api_status_message_id(chat_id, status, None)
 
 
 async def activate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
@@ -8535,16 +8543,19 @@ async def activate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
     if restrictions_enabled:
         await apply_alarm_restrictions(bot, chat_id)
 
-    alert_sent = await send_alarm_notification(
+    await delete_previous_alarm_status_message(bot, chat_id, "N")
+    alert_message = await send_alarm_notification(
         bot,
         chat_id,
         f"Alerts.in.ua сообщает: объявлена воздушная тревога — <b>{ALERTS_LOCATION_TITLE}</b>.",
     )
+    if alert_message is not None:
+        db.set_alarm_api_status_message_id(chat_id, "A", alert_message.message_id)
     if not restrictions_enabled:
-        return alert_sent
+        return alert_message is not None
     action_text = settings.alarm_text or "Режим тревоги применен: медиа, реакции и одиночные эмодзи отключены."
-    action_sent = await send_alarm_notification(bot, chat_id, action_text)
-    return alert_sent and action_sent
+    action_message = await send_alarm_notification(bot, chat_id, action_text)
+    return alert_message is not None and action_message is not None
 
 
 async def restore_alarm_restrictions(bot: Bot, chat_id: int) -> None:
@@ -8586,16 +8597,19 @@ async def deactivate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
     had_restrictions = bool(settings.permissions_json or settings.reactions_json is not None)
     await restore_alarm_restrictions(bot, chat_id)
 
-    clear_sent = await send_alarm_notification(
+    await delete_previous_alarm_status_message(bot, chat_id, "A")
+    clear_message = await send_alarm_notification(
         bot,
         chat_id,
         f"Alerts.in.ua сообщает: отбой воздушной тревоги — <b>{ALERTS_LOCATION_TITLE}</b>.",
     )
+    if clear_message is not None:
+        db.set_alarm_api_status_message_id(chat_id, "N", clear_message.message_id)
     if not had_restrictions:
-        return clear_sent
+        return clear_message is not None
     action_text = settings.clear_text or "Отбой применен: медиа, реакции и одиночные эмодзи снова включены."
-    action_sent = await send_alarm_notification(bot, chat_id, action_text)
-    return clear_sent and action_sent
+    action_message = await send_alarm_notification(bot, chat_id, action_text)
+    return clear_message is not None and action_message is not None
 
 
 async def alerts_monitor_loop(bot: Bot) -> None:
