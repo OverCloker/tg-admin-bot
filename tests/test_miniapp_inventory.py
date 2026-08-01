@@ -1,6 +1,8 @@
 from app.db import Database
 from app import miniapp
 from app.miniapp import _shop_catalog
+from app.premium import PremiumService
+from app.user_profile import build_user_profile
 
 
 def test_inventory_uses_display_names_and_only_best_upgrade(tmp_path) -> None:
@@ -68,6 +70,45 @@ def test_shop_catalog_has_star_mute_purchase(tmp_path) -> None:
     assert mute["starPrice"] == 3
     assert mute["quantity"] == 0
     assert "полчаса" in mute["description"]
+
+
+def test_shop_catalog_has_profile_gifts_and_relationship_sections(tmp_path) -> None:
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.register_dig_player(0, 42, "miner", "Шахтёр")
+
+    try:
+        catalog = _shop_catalog(db, 42)
+    finally:
+        db.close()
+
+    categories = {category["key"]: category for category in catalog["categories"]}
+    assert "profile" in categories
+    assert "gifts" in categories
+    assert "relationships" in categories
+    assert any(item["key"] == "profile_frame_copper" and item["price"] == 500 for item in categories["profile"]["items"])
+    assert any(item["key"] == "gift_tea_friend" and item["price"] == 50 for item in categories["gifts"]["items"])
+    assert any(item["key"] == "couple_frame" and item["price"] == 3500 for item in categories["relationships"]["items"])
+
+
+def test_profile_cosmetics_are_exposed_after_purchase(tmp_path) -> None:
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.register_dig_player(0, 42, "miner", "Шахтёр")
+    db.add_dig_item(0, 42, "profile_frame_crystal", 1)
+    db.add_dig_item(0, 42, "profile_bg_lava", 1)
+    db.add_dig_item(0, 42, "profile_badge_gem", 1)
+    premium = PremiumService(db)
+
+    try:
+        profile = build_user_profile(db, premium, 42, "miner", "Шахтёр")
+    finally:
+        db.close()
+
+    cosmetics = profile["mine"]["cosmetics"]
+    assert cosmetics["frame"]["key"] == "profile_frame_crystal"
+    assert cosmetics["background"]["key"] == "profile_bg_lava"
+    assert cosmetics["badges"][0]["key"] == "profile_badge_gem"
 
 
 def test_dig_player_tag_can_be_saved(tmp_path) -> None:

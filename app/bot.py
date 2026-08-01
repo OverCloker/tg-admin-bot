@@ -270,6 +270,21 @@ DIG_SHOP_ITEMS = {
     "star_dig": ("Дополнительная раскопка", 0, "Позволяет копать без ожидания между попытками."),
     "star_lucky_dig": ("Раскопка со 100 удачей", 0, "Позволяет копать без ожидания и защищает от обвала за счет 100 удачи."),
     "star_depth_10": ("Гарантированная раскопка 10 м", 0, "Следующая раскопка гарантированно пройдет 10 метров без ожидания."),
+    "profile_frame_copper": ("Рамка профиля: Медная", 500, "Постоянное оформление профиля. Показывает, что ты не просто копал, а уже вложился в стиль."),
+    "profile_frame_crystal": ("Рамка профиля: Кристальная", 2500, "Редкая рамка профиля с кристальным оттенком для витрины игрока."),
+    "profile_bg_old_mine": ("Фон профиля: Старая шахта", 700, "Постоянный фон карточки профиля в стиле старой шахты."),
+    "profile_bg_lava": ("Фон профиля: Лавовые тоннели", 3000, "Дорогой фон профиля для тех, кто дошёл до горячих глубин."),
+    "profile_badge_pickaxe": ("Значок профиля: ⛏️", 400, "Постоянный значок шахтёра рядом с оформлением профиля."),
+    "profile_badge_gem": ("Значок профиля: 💎", 1500, "Постоянный кристальный значок для профиля."),
+    "gift_tea_friend": ("Подарок: Чай другу", 50, "Маленький подарок для будущей отправки другу. Хороший способ потратить мелочь с теплом."),
+    "gift_yarn": ("Подарок: Клубок котику", 100, "Милый подарок другу в коллекцию подарков."),
+    "gift_crystal": ("Подарок: Маленький кристалл", 300, "Редкий сувенир, который можно будет подарить другу."),
+    "gift_anonymous": ("Анонимный подарок", 500, "Подарок без подписи. Для случаев, когда хочется быть загадочным котом."),
+    "gift_chest": ("Сундук другу", 750, "Подарочный сундук для будущей отправки другу."),
+    "couple_flower": ("Подарок паре: Цветок", 150, "Небольшой знак внимания для пары."),
+    "couple_crystal": ("Подарок паре: Парный кристалл", 1000, "Дорогой сувенир для отношений."),
+    "couple_frame": ("Парная рамка профиля", 3500, "Постоянная косметика для будущего оформления пары."),
+    "couple_date": ("Свидание в шахте", 800, "Расходник для будущего парного события."),
 }
 DIG_SHOP_ITEMS["golden_ticket"] = (
     "Золотой билет",
@@ -282,6 +297,9 @@ DIG_ITEM_ORDER = [
     "flashlight_1", "flashlight_2", "flashlight_3", "cart", "cart_2", "cart_3", "backpack_1", "backpack_2", "backpack_3",
     "cursed_pick",
     "rank_1", "rank_2", "rank_3", "rank_4",
+    "profile_frame_copper", "profile_frame_crystal", "profile_bg_old_mine", "profile_bg_lava", "profile_badge_pickaxe", "profile_badge_gem",
+    "gift_tea_friend", "gift_yarn", "gift_crystal", "gift_anonymous", "gift_chest",
+    "couple_flower", "couple_crystal", "couple_frame", "couple_date",
 ]
 DIG_SHOP_PAGE_SIZE = 6
 DIG_SHOP_CATEGORIES = {
@@ -311,8 +329,20 @@ DIG_SHOP_CATEGORIES = {
         "Игры",
         ["golden_ticket"],
     ),
+    "profile": (
+        "Профиль",
+        ["profile_frame_copper", "profile_frame_crystal", "profile_bg_old_mine", "profile_bg_lava", "profile_badge_pickaxe", "profile_badge_gem"],
+    ),
+    "gifts": (
+        "Подарки",
+        ["gift_tea_friend", "gift_yarn", "gift_crystal", "gift_anonymous", "gift_chest"],
+    ),
+    "relationships": (
+        "Отношения",
+        ["couple_flower", "couple_crystal", "couple_frame", "couple_date"],
+    ),
 }
-DIG_SHOP_CATEGORY_ORDER = ["consumables", "gear", "upgrades", "ranks", "games"]
+DIG_SHOP_CATEGORY_ORDER = ["consumables", "gear", "upgrades", "ranks", "games", "profile", "gifts", "relationships"]
 DIG_SHOP_UPGRADE_CHAINS = [
     ["shovel_1", "shovel_2", "shovel_3"],
     ["helmet_1", "helmet_2", "helmet_3"],
@@ -330,7 +360,15 @@ DIG_PERMANENT_ITEMS = {
     "shovel_1", "shovel_2", "shovel_3", "helmet_1", "helmet_2", "helmet_3",
     "flashlight_1", "flashlight_2", "flashlight_3", "cart", "cart_2", "cart_3",
     "backpack_1", "backpack_2", "backpack_3", "rank_1", "rank_2", "rank_3", "rank_4",
+    "profile_frame_copper", "profile_frame_crystal", "profile_bg_old_mine", "profile_bg_lava",
+    "profile_badge_pickaxe", "profile_badge_gem", "couple_frame",
 }
+DIG_PROFILE_ITEMS = {
+    "profile_frame_copper", "profile_frame_crystal", "profile_bg_old_mine", "profile_bg_lava",
+    "profile_badge_pickaxe", "profile_badge_gem",
+}
+DIG_GIFT_ITEMS = {"gift_tea_friend", "gift_yarn", "gift_crystal", "gift_anonymous", "gift_chest"}
+DIG_RELATIONSHIP_ITEMS = {"couple_flower", "couple_crystal", "couple_frame", "couple_date"}
 DIG_ITEM_REQUIREMENTS = {
     "shovel_2": "shovel_1",
     "shovel_3": "shovel_2",
@@ -1494,6 +1532,8 @@ def dig_effects_text(items: dict[str, int]) -> str:
         name = special_names.get(key, DIG_SHOP_ITEMS.get(key, (key, 0, ""))[0])
         if key in paid_keys:
             groups["Оплаченные"].append(f"{name} x{count}")
+        elif key in DIG_PROFILE_ITEMS or key in DIG_GIFT_ITEMS or key in DIG_RELATIONSHIP_ITEMS:
+            groups["Прочее"].append(name if key in DIG_PERMANENT_ITEMS and count == 1 else f"{name} x{count}")
         elif key in DIG_PERMANENT_ITEMS:
             groups["Постоянные"].append(name if count == 1 else f"{name} x{count}")
         elif key in DIG_SHOP_CATEGORIES["consumables"][1] or key in DIG_SHOP_CATEGORIES["gear"][1]:
@@ -2399,7 +2439,7 @@ def dig_shop_category_text(coins: int, category: str, page: int, total_pages: in
 
 def dig_purchase_error(items: dict[str, int], item_key: str) -> str | None:
     if item_key in DIG_PERMANENT_ITEMS and items.get(item_key, 0) > 0:
-        return "Это постоянное улучшение уже куплено."
+        return "Этот постоянный товар уже куплен."
     required = DIG_ITEM_REQUIREMENTS.get(item_key)
     if required and items.get(required, 0) <= 0:
         return f"Сначала купи: {DIG_SHOP_ITEMS[required][0]}."

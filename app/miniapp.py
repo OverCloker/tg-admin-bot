@@ -971,6 +971,7 @@ def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
     supply_keys = set(game.DIG_SHOP_CATEGORIES["consumables"][1]) | set(game.DIG_SHOP_CATEGORIES["gear"][1]) | {
         "golden_ticket"
     }
+    supply_keys |= game.DIG_GIFT_ITEMS | game.DIG_RELATIONSHIP_ITEMS
     grouped: dict[str, list[dict[str, Any]]] = {
         "Коллекция": [],
         "Постоянные улучшения": [],

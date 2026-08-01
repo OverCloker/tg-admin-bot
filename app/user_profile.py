@@ -118,6 +118,21 @@ ITEM_NAMES = {
     "artifact_gem": "Необработанный самоцвет",
     "artifact_badge": "Знак старой бригады",
     "artifact_set_reward": "Бонус полной коллекции",
+    "profile_frame_copper": "Рамка профиля: Медная",
+    "profile_frame_crystal": "Рамка профиля: Кристальная",
+    "profile_bg_old_mine": "Фон профиля: Старая шахта",
+    "profile_bg_lava": "Фон профиля: Лавовые тоннели",
+    "profile_badge_pickaxe": "Значок профиля: ⛏️",
+    "profile_badge_gem": "Значок профиля: 💎",
+    "gift_tea_friend": "Подарок: Чай другу",
+    "gift_yarn": "Подарок: Клубок котику",
+    "gift_crystal": "Подарок: Маленький кристалл",
+    "gift_anonymous": "Анонимный подарок",
+    "gift_chest": "Сундук другу",
+    "couple_flower": "Подарок паре: Цветок",
+    "couple_crystal": "Подарок паре: Парный кристалл",
+    "couple_frame": "Парная рамка профиля",
+    "couple_date": "Свидание в шахте",
 }
 
 ITEM_GROUPS = {
@@ -128,6 +143,21 @@ ITEM_GROUPS = {
     "artifact_gem": "collection",
     "artifact_badge": "collection",
     "artifact_set_reward": "collection",
+    "profile_frame_copper": "profile",
+    "profile_frame_crystal": "profile",
+    "profile_bg_old_mine": "profile",
+    "profile_bg_lava": "profile",
+    "profile_badge_pickaxe": "profile",
+    "profile_badge_gem": "profile",
+    "gift_tea_friend": "gifts",
+    "gift_yarn": "gifts",
+    "gift_crystal": "gifts",
+    "gift_anonymous": "gifts",
+    "gift_chest": "gifts",
+    "couple_flower": "relationships",
+    "couple_crystal": "relationships",
+    "couple_frame": "relationships",
+    "couple_date": "relationships",
     "shovel_1": "permanent",
     "shovel_2": "permanent",
     "shovel_3": "permanent",
@@ -156,6 +186,9 @@ ITEM_GROUPS = {
 ITEM_GROUP_TITLES = {
     "collection": "Коллекция",
     "permanent": "Улучшения",
+    "profile": "Оформление профиля",
+    "gifts": "Подарки",
+    "relationships": "Отношения",
     "paid": "Оплаченные",
     "tickets": "Билеты",
     "consumable": "Припасы",
@@ -181,6 +214,35 @@ def _rank_name(items: dict[str, int]) -> str:
         if items.get(key, 0) > 0:
             return name
     return "Новичок"
+
+
+def _profile_cosmetics(items: dict[str, int]) -> dict[str, Any]:
+    frames = [
+        ("profile_frame_crystal", "Кристальная рамка"),
+        ("profile_frame_copper", "Медная рамка"),
+        ("couple_frame", "Парная рамка"),
+    ]
+    backgrounds = [
+        ("profile_bg_lava", "Лавовые тоннели"),
+        ("profile_bg_old_mine", "Старая шахта"),
+    ]
+    badges = [
+        ("profile_badge_gem", "💎", "Кристальный значок"),
+        ("profile_badge_pickaxe", "⛏️", "Значок шахтёра"),
+    ]
+    owned_badges = [
+        {"key": key, "emoji": emoji, "title": title}
+        for key, emoji, title in badges
+        if items.get(key, 0) > 0
+    ]
+    frame = next(({"key": key, "title": title} for key, title in frames if items.get(key, 0) > 0), None)
+    background = next(({"key": key, "title": title} for key, title in backgrounds if items.get(key, 0) > 0), None)
+    return {
+        "frame": frame,
+        "background": background,
+        "badges": owned_badges,
+        "ownedCount": sum(1 for key in items if ITEM_GROUPS.get(key) == "profile" and items.get(key, 0) > 0),
+    }
 
 
 def _rank_luck_regen_bonus(items: dict[str, int]) -> int:
@@ -321,6 +383,7 @@ def build_user_profile(
             "lastDigText": _format_dt(player.last_dig_at if player else None),
             "activeItems": active_items[:24],
             "activeItemsTotal": len(active_items),
+            "cosmetics": _profile_cosmetics(items),
             "achievements": owned_achievements[-8:],
             "rareAchievements": rare_achievements[:6],
             "achievementsTotal": len(owned_achievements),

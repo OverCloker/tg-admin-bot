@@ -1458,6 +1458,7 @@ MINI_APP_HTML = r"""<!doctype html>
     const premium = profile.premium || {};
     const plan = premium.plan || {};
     const mine = profile.mine || {};
+    const cosmetics = mine.cosmetics || {};
     const premiumText = premium.active ? (plan.title || "Premium активен") : "не активен";
     const groupedItems = {};
     (mine.activeItems || []).slice(0, 18).forEach(item => {
@@ -1465,7 +1466,7 @@ MINI_APP_HTML = r"""<!doctype html>
       if (!groupedItems[key]) groupedItems[key] = { title: item.groupTitle || "Припасы", items: [] };
       groupedItems[key].items.push(item);
     });
-    const groupOrder = ["collection", "permanent", "paid", "tickets", "consumable"];
+    const groupOrder = ["collection", "permanent", "profile", "gifts", "relationships", "paid", "tickets", "consumable"];
     const itemGroupsHtml = groupOrder.filter(key => groupedItems[key]).map(key => {
       const group = groupedItems[key];
       const chips = group.items.map(item => `<span class="inventory-chip ${escapeHtml(item.group || "consumable")}">${escapeHtml(item.name)}${item.quantity > 1 ? ` <b>×${item.quantity}</b>` : ""}</span>`).join("");
@@ -1480,6 +1481,14 @@ MINI_APP_HTML = r"""<!doctype html>
         <div class="achievement-rarity">${escapeHtml(item.rarityTitle || "Обычное")}</div>
       </div>
     `).join("");
+    const cosmeticBadges = (cosmetics.badges || []).map(item => `${escapeHtml(item.emoji || "")} ${escapeHtml(item.title || "")}`).join(" · ");
+    const cosmeticsHtml = (cosmetics.frame || cosmetics.background || cosmeticBadges) ? `
+      <section class="panel">
+        <h2>Оформление</h2>
+        <p class="muted">Рамка: <b>${escapeHtml((cosmetics.frame && cosmetics.frame.title) || "не выбрана")}</b></p>
+        <p class="muted">Фон: <b>${escapeHtml((cosmetics.background && cosmetics.background.title) || "не выбран")}</b></p>
+        ${cosmeticBadges ? `<p class="muted">Значки: <b>${cosmeticBadges}</b></p>` : ""}
+      </section>` : "";
     content.innerHTML = `<section class="panel">
       <h2>${escapeHtml(user.fullName || "Профиль")}</h2>
       <div class="muted">${user.username ? `@${escapeHtml(user.username)}` : "username не указан"}</div>
@@ -1503,6 +1512,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <p class="muted">Достижения: <b>${mine.achievementsTotal || 0}/${mine.achievementsKnown || 0}</b></p>
     </section>
     ${itemGroupsHtml ? `<section class="panel"><h2>Инвентарь</h2><div class="inventory-groups">${itemGroupsHtml}</div>${(mine.activeItemsTotal || 0) > 18 ? `<p class="muted">И ещё ${mine.activeItemsTotal - 18} предметов в сумке.</p>` : ""}</section>` : ""}
+    ${cosmeticsHtml}
     ${rareAchievements ? `<section class="panel"><h2>Редчайшие достижения</h2><div class="achievement-showcase">${rareAchievements}</div></section>` : ""}
     <section class="panel"><button class="btn secondary" style="margin:0" onclick="renderMine()">Назад в шахту</button></section>`;
     scrollToTop();
@@ -2063,7 +2073,7 @@ MINI_APP_HTML = r"""<!doctype html>
         <div class="shop-hero-copy">
           <div class="shop-kicker">Лавка шахтёра</div>
           <h2>${escapeHtml(category.title)}</h2>
-          <p>Снаряжение и припасы для новых вылазок.</p>
+          <p>Шахта, профиль, подарки и отношения — выбирай, куда тратить котоины.</p>
         </div>
         <div class="shop-coins">🪙 ${shop.coins}</div>
       </div>
