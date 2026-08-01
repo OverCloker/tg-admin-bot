@@ -172,9 +172,47 @@ docker compose up -d
 ## Update
 
 ```bash
-docker compose down
-docker compose up -d --build
-docker compose logs -f --tail=100
+sh server-deploy.sh main
+```
+
+`server-deploy.sh` pulls `origin/main`, rebuilds the Docker image and restarts the
+`bot` and `api` containers. If `CLOUDFLARE_TUNNEL_TOKEN` is present in `.env`, it
+also keeps the Cloudflare tunnel profile enabled.
+
+## Automatic Git updates
+
+Install the auto-update timer once on Debian:
+
+```bash
+cd ~/tg-admin-bot
+git pull origin main
+sh server-install-autoupdate.sh main
+```
+
+By default Debian checks GitHub every 5 minutes. If `origin/main` has a newer
+fast-forward commit, the server runs:
+
+```bash
+sh server-deploy.sh main
+```
+
+That means it pulls the commit, rebuilds Docker and restarts the bot/API. If there
+are local tracked changes on the server, the update is skipped so the server does
+not overwrite manual edits.
+
+Useful commands:
+
+```bash
+systemctl list-timers otveto4ka-auto-update.timer
+sudo systemctl start otveto4ka-auto-update.service
+journalctl -u otveto4ka-auto-update.service -n 100 --no-pager
+sudo systemctl disable --now otveto4ka-auto-update.timer
+```
+
+To change the interval during installation:
+
+```bash
+AUTO_UPDATE_INTERVAL=1min sh server-install-autoupdate.sh main
 ```
 
 ## Preparing the server for a physical move

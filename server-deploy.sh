@@ -3,6 +3,7 @@ set -eu
 
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 BRANCH=${1:-}
+GIT_SAFE_DIR="$PROJECT_DIR"
 
 cd "$PROJECT_DIR"
 
@@ -21,14 +22,14 @@ if [ ! -f "$PROJECT_DIR/.env" ]; then
     exit 1
 fi
 
-if [ -n "$(git status --porcelain)" ]; then
-    echo "Working tree is not clean. Commit/stash local server changes first."
-    git status --short
+if [ -n "$(git -c safe.directory="$GIT_SAFE_DIR" status --porcelain --untracked-files=no)" ]; then
+    echo "Tracked working tree files are not clean. Commit/stash local server changes first."
+    git -c safe.directory="$GIT_SAFE_DIR" status --short --untracked-files=no
     exit 1
 fi
 
 if [ -z "$BRANCH" ]; then
-    BRANCH=$(git branch --show-current)
+    BRANCH=$(git -c safe.directory="$GIT_SAFE_DIR" branch --show-current)
 fi
 if [ -z "$BRANCH" ]; then
     echo "Cannot detect current git branch. Pass it explicitly: sh server-deploy.sh main"
@@ -36,8 +37,8 @@ if [ -z "$BRANCH" ]; then
 fi
 
 echo "== git =="
-git fetch origin "$BRANCH"
-git pull --ff-only origin "$BRANCH"
+git -c safe.directory="$GIT_SAFE_DIR" fetch origin "$BRANCH"
+git -c safe.directory="$GIT_SAFE_DIR" pull --ff-only origin "$BRANCH"
 
 COMPOSE_PROFILE_ARGS=""
 if grep -Eq '^CLOUDFLARE_TUNNEL_TOKEN=.' "$PROJECT_DIR/.env"; then
