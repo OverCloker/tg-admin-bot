@@ -57,6 +57,16 @@ class SeenUser:
 
 
 @dataclass(frozen=True)
+class SocialGiftRecipient:
+    user_id: int
+    username: str | None
+    full_name: str
+    relation: str
+    chat_count: int
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class ChatCouple:
     chat_id: int
     user1_id: int
@@ -1878,6 +1888,40 @@ class Database:
         ).fetchall()
         return [SeenUser(**dict(row)) for row in rows]
 
+    def list_registered_social_gift_friends(self, user_id: int, limit: int = 50) -> list[SocialGiftRecipient]:
+        rows = self._conn.execute(
+            """
+            select
+                u.user_id,
+                coalesce(max(nullif(u.username, '')), '') as username,
+                coalesce(max(nullif(u.full_name, '')), 'Игрок') as full_name,
+                'friend' as relation,
+                count(distinct f.chat_id) as chat_count,
+                max(u.updated_at) as updated_at
+            from chat_friendships f
+            join seen_users u
+              on u.chat_id = f.chat_id
+             and u.user_id = case when f.user1_id = ? then f.user2_id else f.user1_id end
+            join dig_players p on p.chat_id = ? and p.user_id = u.user_id
+            where (f.user1_id = ? or f.user2_id = ?) and u.user_id != ? and coalesce(u.is_bot, 0) = 0
+            group by u.user_id
+            order by lower(coalesce(max(nullif(u.full_name, '')), 'Игрок'))
+            limit ?
+            """,
+            (user_id, DIG_GLOBAL_CHAT_ID, user_id, user_id, user_id, max(1, limit)),
+        ).fetchall()
+        return [
+            SocialGiftRecipient(
+                user_id=int(row["user_id"]),
+                username=(row["username"] or None),
+                full_name=row["full_name"],
+                relation=row["relation"],
+                chat_count=int(row["chat_count"]),
+                updated_at=row["updated_at"],
+            )
+            for row in rows
+        ]
+
     def count_chat_friends(self, chat_id: int, user_id: int) -> int:
         row = self._conn.execute(
             """
@@ -1914,6 +1958,40 @@ class Database:
             (user_id, chat_id, user_id, user_id),
         ).fetchone()
         return SeenUser(**dict(row)) if row else None
+
+    def list_registered_social_gift_partners(self, user_id: int, limit: int = 20) -> list[SocialGiftRecipient]:
+        rows = self._conn.execute(
+            """
+            select
+                u.user_id,
+                coalesce(max(nullif(u.username, '')), '') as username,
+                coalesce(max(nullif(u.full_name, '')), 'Игрок') as full_name,
+                'partner' as relation,
+                count(distinct c.chat_id) as chat_count,
+                max(u.updated_at) as updated_at
+            from chat_couples c
+            join seen_users u
+              on u.chat_id = c.chat_id
+             and u.user_id = case when c.user1_id = ? then c.user2_id else c.user1_id end
+            join dig_players p on p.chat_id = ? and p.user_id = u.user_id
+            where (c.user1_id = ? or c.user2_id = ?) and u.user_id != ? and coalesce(u.is_bot, 0) = 0
+            group by u.user_id
+            order by lower(coalesce(max(nullif(u.full_name, '')), 'Игрок'))
+            limit ?
+            """,
+            (user_id, DIG_GLOBAL_CHAT_ID, user_id, user_id, user_id, max(1, limit)),
+        ).fetchall()
+        return [
+            SocialGiftRecipient(
+                user_id=int(row["user_id"]),
+                username=(row["username"] or None),
+                full_name=row["full_name"],
+                relation=row["relation"],
+                chat_count=int(row["chat_count"]),
+                updated_at=row["updated_at"],
+            )
+            for row in rows
+        ]
 
     def couple_state(self, chat_id: int, user_id: int, other_id: int) -> str:
         if user_id == other_id:

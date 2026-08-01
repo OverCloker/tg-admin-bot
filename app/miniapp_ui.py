@@ -1992,6 +1992,7 @@ MINI_APP_HTML = r"""<!doctype html>
               <div class="inventory-row-main">
                 <span>${escapeHtml(item.name)}</span>
                 ${item.key === "tea" ? `<button class="btn inventory-use" onclick="useShopItem('tea')">Использовать</button>` : ""}
+                ${item.giftable ? `<button class="btn inventory-use" onclick="showGiftTargets('${escapeHtml(item.key)}')">Подарить</button>` : ""}
                 ${item.key === "super_mute30" ? `<button class="btn inventory-use" onclick="alert('В чате ответь на сообщение: супермут причина\\nИли напиши: супермут @username причина')">Как выдать</button>` : ""}
                 ${item.key === "super_tag" ? `<button class="btn inventory-use" onclick="alert('В чате напиши: +кличка Твой тег\\nЛимит: 16 символов')">Как выбрать</button>` : ""}
               </div>
@@ -2136,6 +2137,52 @@ MINI_APP_HTML = r"""<!doctype html>
       state = result.state;
       await showBag();
       showNotice(result.message || "Предмет использован.");
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function showGiftTargets(itemKey) {
+    setScreenHeader("bag");
+    scrollToTop();
+    content.innerHTML = `<section class="panel muted">Ищу друзей и пару для подарка...</section>`;
+    try {
+      const data = await api(`/miniapp/shop/gift-targets?item_key=${encodeURIComponent(itemKey)}`);
+      const item = data.item || {};
+      const targets = data.targets || [];
+      const hint = data.targetKind === "partner"
+        ? "Этот подарок можно отправить только текущей паре."
+        : "Выбери друга, которому отправить подарок.";
+      const targetRows = targets.length ? targets.map(target => `
+        <button class="btn secondary" onclick="sendGift('${escapeHtml(itemKey)}', ${Number(target.id)})">
+          ${escapeHtml(target.fullName || "Игрок")}${target.username ? ` · @${escapeHtml(target.username)}` : ""}
+        </button>`).join("") : `<p class="muted">Подходящих получателей пока нет. Для подарков нужны друзья/пара, которые уже зарегистрированы в шахте.</p>`;
+      content.innerHTML = `<section class="panel">
+        <h2>Подарить</h2>
+        <p><b>${escapeHtml(item.name || itemKey)}</b> · в сумке: <b>${Number(item.quantity || 0)}</b></p>
+        <p class="muted">${hint}</p>
+        <div class="shift-options">${targetRows}</div>
+        <button class="btn secondary" onclick="showBag()">Назад в сумку</button>
+      </section>`;
+      scrollToTop();
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function sendGift(itemKey, targetUserId) {
+    if (busy || !confirm("Отправить этот подарок?")) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/shop/gift", {
+        method: "POST",
+        body: JSON.stringify({ item_key: itemKey, target_user_id: targetUserId })
+      });
+      state = result.state;
+      await showBag();
+      showNotice(result.message || "Подарок отправлен.");
     } catch (error) {
       alert(error.message);
     } finally {

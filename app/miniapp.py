@@ -14,7 +14,7 @@ from urllib.parse import parse_qsl
 import aiohttp
 from aiogram import Bot
 from aiogram.types import LabeledPrice
-from fastapi import APIRouter, Header, HTTPException, Response
+from fastapi import APIRouter, Header, HTTPException, Query, Response
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from .config import load_config
@@ -53,6 +53,11 @@ class SuperTicketPick(BaseModel):
 
 class ShopPurchase(BaseModel):
     item_key: str = Field(min_length=1, max_length=64)
+
+
+class ShopGiftSend(BaseModel):
+    item_key: str = Field(min_length=1, max_length=64)
+    target_user_id: int = Field(gt=0)
 
 
 class ShiftContractPick(BaseModel):
@@ -145,6 +150,34 @@ def _db() -> Database:
 
 def _items_map(db: Database, user_id: int, chat_id: int = 0) -> dict[str, int]:
     return {item.item_key: item.quantity for item in db.list_dig_items(chat_id, user_id)}
+
+
+def _gift_target_kind(game: Any, item_key: str) -> str | None:
+    if item_key in game.DIG_GIFT_ITEMS:
+        return "friends"
+    if item_key in (game.DIG_RELATIONSHIP_ITEMS - {"couple_frame"}):
+        return "partner"
+    return None
+
+
+def _gift_recipients(db: Database, game: Any, user_id: int, item_key: str) -> list[dict[str, Any]]:
+    target_kind = _gift_target_kind(game, item_key)
+    if target_kind == "friends":
+        recipients = db.list_registered_social_gift_friends(user_id, limit=50)
+    elif target_kind == "partner":
+        recipients = db.list_registered_social_gift_partners(user_id, limit=20)
+    else:
+        recipients = []
+    return [
+        {
+            "id": item.user_id,
+            "username": item.username or "",
+            "fullName": item.full_name,
+            "relation": item.relation,
+            "chatCount": item.chat_count,
+        }
+        for item in recipients
+    ]
 
 
 def _refreshed_luck(db: Database, game: Any, user_id: int, luck: int, last_luck_at: str, now: datetime) -> int:
@@ -985,7 +1018,13 @@ def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
             continue
         if key in chain_keys and key not in best_chain_keys:
             continue
-        entry = {"key": key, "name": names[key], "quantity": quantity}
+        entry = {
+            "key": key,
+            "name": names[key],
+            "quantity": quantity,
+            "giftable": _gift_target_kind(game, key) is not None,
+            "giftTargetKind": _gift_target_kind(game, key),
+        }
         if key in artifact_keys:
             grouped["Коллекция"].append(entry)
         elif key in game.DIG_PERMANENT_ITEMS:
@@ -1128,6 +1167,77 @@ def miniapp_shop_use(
                 "ok": True,
                 "item": payload.item_key,
                 "message": f"Чай использован. Удача: {restored_luck}/100.",
+                "state": _state(db, user["id"]),
+                "shop": _shop_catalog(db, user["id"]),
+            }
+        finally:
+            db.close()
+
+
+@router.get("/miniapp/shop/gift-targets")
+def miniapp_shop_gift_targets(
+    item_key: str = Query(min_length=1, max_length=64),
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    from . import bot as game
+
+    db = _db()
+    try:
+        if not db.get_dig_player(0, user["id"]):
+            raise HTTPException(400, "Сначала зарегистрируйтесь в шахте.")
+        item = game.DIG_SHOP_ITEMS.get(item_key)
+        target_kind = _gift_target_kind(game, item_key)
+        if not item or target_kind is None:
+            raise HTTPException(400, "Этот предмет нельзя подарить.")
+        return {
+            "item": {"key": item_key, "name": item[0], "quantity": db.get_dig_item_quantity(0, user["id"], item_key)},
+            "targetKind": target_kind,
+            "targets": _gift_recipients(db, game, user["id"], item_key),
+        }
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/shop/gift")
+def miniapp_shop_gift(
+    payload: ShopGiftSend,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    from . import bot as game
+
+    with DIG_LOCK:
+        db = _db()
+        try:
+            player = db.get_dig_player(0, user["id"])
+            if not player:
+                raise HTTPException(400, "Сначала зарегистрируйтесь в шахте.")
+            item = game.DIG_SHOP_ITEMS.get(payload.item_key)
+            target_kind = _gift_target_kind(game, payload.item_key)
+            if not item or target_kind is None:
+                raise HTTPException(400, "Этот предмет нельзя подарить.")
+            if payload.target_user_id == user["id"]:
+                raise HTTPException(400, "Себе подарки не отправляем. Даже если очень хочется.")
+            if not db.get_dig_player(0, payload.target_user_id):
+                raise HTTPException(400, "Получатель ещё не зарегистрирован в шахте.")
+
+            recipients = _gift_recipients(db, game, user["id"], payload.item_key)
+            target = next((item for item in recipients if int(item["id"]) == payload.target_user_id), None)
+            if target is None:
+                if target_kind == "partner":
+                    raise HTTPException(400, "Этот подарок можно отправить только текущей паре.")
+                raise HTTPException(400, "Этого пользователя нет в списке друзей для подарка.")
+
+            if not db.consume_dig_item(0, user["id"], payload.item_key):
+                raise HTTPException(400, "В сумке больше нет этого подарка.")
+            db.add_dig_item(0, payload.target_user_id, payload.item_key, 1)
+
+            return {
+                "ok": True,
+                "item": payload.item_key,
+                "message": f"Подарок «{item[0]}» отправлен пользователю {target['fullName']}.",
+                "target": target,
                 "state": _state(db, user["id"]),
                 "shop": _shop_catalog(db, user["id"]),
             }

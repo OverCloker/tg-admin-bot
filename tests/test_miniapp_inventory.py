@@ -1,6 +1,7 @@
 from app.db import Database
+from app import bot as game
 from app import miniapp
-from app.miniapp import _shop_catalog
+from app.miniapp import _gift_recipients, _gift_target_kind, _shop_catalog
 from app.premium import PremiumService
 from app.user_profile import build_user_profile
 
@@ -29,11 +30,10 @@ def test_inventory_uses_display_names_and_only_best_upgrade(tmp_path) -> None:
     assert inventory["Коллекция"]["artifact_set_reward"]["name"] == "Бонус полной коллекции"
     assert "shovel_1" not in inventory["Постоянные улучшения"]
     assert inventory["Постоянные улучшения"]["shovel_2"]["name"] == "Кирка II"
-    assert inventory["Припасы и билеты"]["golden_ticket"] == {
-        "key": "golden_ticket",
-        "name": "Золотой билет",
-        "quantity": 2,
-    }
+    assert inventory["Припасы и билеты"]["golden_ticket"]["key"] == "golden_ticket"
+    assert inventory["Припасы и билеты"]["golden_ticket"]["name"] == "Золотой билет"
+    assert inventory["Припасы и билеты"]["golden_ticket"]["quantity"] == 2
+    assert inventory["Припасы и билеты"]["golden_ticket"]["giftable"] is False
 
 
 def test_shop_requirement_is_human_readable(tmp_path) -> None:
@@ -109,6 +109,34 @@ def test_profile_cosmetics_are_exposed_after_purchase(tmp_path) -> None:
     assert cosmetics["frame"]["key"] == "profile_frame_crystal"
     assert cosmetics["background"]["key"] == "profile_bg_lava"
     assert cosmetics["badges"][0]["key"] == "profile_badge_gem"
+
+
+def test_gift_recipients_include_registered_friends_and_partner(tmp_path) -> None:
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.register_dig_player(0, 1, "sender", "Даритель")
+    db.register_dig_player(0, 2, "friend", "Друг")
+    db.register_dig_player(0, 3, "partner", "Пара")
+    db.register_dig_player(0, 4, "stranger", "Не друг")
+    db.upsert_seen_user(-100, 1, "sender", "Даритель", False)
+    db.upsert_seen_user(-100, 2, "friend", "Друг", False)
+    db.upsert_seen_user(-100, 3, "partner", "Пара", False)
+    db.upsert_seen_user(-100, 4, "stranger", "Не друг", False)
+    db.create_friend_request(-100, 1, 2)
+    db.accept_friend_request(-100, 1, 2)
+    db.create_couple_request(-100, 1, 3)
+    db.accept_couple_request(-100, 1, 3)
+
+    try:
+        friend_targets = _gift_recipients(db, game, 1, "gift_yarn")
+        partner_targets = _gift_recipients(db, game, 1, "couple_flower")
+    finally:
+        db.close()
+
+    assert _gift_target_kind(game, "gift_yarn") == "friends"
+    assert _gift_target_kind(game, "couple_flower") == "partner"
+    assert {item["id"] for item in friend_targets} == {2, 3}
+    assert {item["id"] for item in partner_targets} == {3}
 
 
 def test_dig_player_tag_can_be_saved(tmp_path) -> None:
