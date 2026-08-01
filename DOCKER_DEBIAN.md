@@ -229,8 +229,24 @@ Useful commands:
 systemctl list-timers otveto4ka-auto-update.timer
 sudo systemctl start otveto4ka-auto-update.service
 journalctl -u otveto4ka-auto-update.service -n 100 --no-pager
+sh server-autoupdate-status.sh main
 sudo systemctl disable --now otveto4ka-auto-update.timer
 ```
+
+If the server does not update by itself, run:
+
+```bash
+cd ~/tg-admin-bot
+git pull origin main
+sh server-install-autoupdate.sh main
+sh server-autoupdate-status.sh main
+sudo systemctl start otveto4ka-auto-update.service
+journalctl -u otveto4ka-auto-update.service -n 150 --no-pager
+```
+
+The status script prints the current local commit, `origin/main`, timer state,
+last service result and recent logs. Auto-update skips deployment when tracked
+server files are locally modified or when the local branch cannot fast-forward.
 
 To change the interval during installation:
 

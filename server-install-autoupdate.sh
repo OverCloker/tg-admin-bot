@@ -43,6 +43,7 @@ After=network-online.target docker.service
 Type=oneshot
 WorkingDirectory=$PROJECT_DIR
 ExecStart=/bin/sh $PROJECT_DIR/server-auto-update.sh $BRANCH
+SyslogIdentifier=otveto4ka-auto-update
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
@@ -57,6 +58,7 @@ Description=Check GitHub and auto-update OtvetO4ka
 OnBootSec=2min
 OnUnitActiveSec=$INTERVAL
 RandomizedDelaySec=30s
+AccuracySec=30s
 Persistent=true
 Unit=$SERVICE_NAME
 
@@ -67,6 +69,7 @@ EOF
 sudo install -m 0644 "$SERVICE_FILE" "$SERVICE_PATH"
 sudo install -m 0644 "$TIMER_FILE" "$TIMER_PATH"
 sudo systemctl daemon-reload
+sudo systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
 sudo systemctl enable --now "$TIMER_NAME"
 
 echo
@@ -78,3 +81,6 @@ echo "  sudo systemctl start $SERVICE_NAME"
 echo
 echo "Logs:"
 echo "  journalctl -u $SERVICE_NAME -n 100 --no-pager"
+echo
+echo "Full diagnostic:"
+echo "  sh $PROJECT_DIR/server-autoupdate-status.sh $BRANCH"
