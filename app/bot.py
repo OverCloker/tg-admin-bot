@@ -1151,6 +1151,37 @@ def is_deleted_or_empty_user(user: User) -> bool:
     return not username and not first_name and not last_name
 
 
+def active_mute_remaining_text(member, now: datetime | None = None) -> str | None:
+    if getattr(member, "can_send_messages", True) is not False:
+        return None
+    until_date = getattr(member, "until_date", None)
+    if not until_date:
+        return "бессрочно"
+    if isinstance(until_date, datetime):
+        until = until_date
+    else:
+        try:
+            until = datetime.fromtimestamp(int(until_date), timezone.utc)
+        except (TypeError, ValueError, OSError):
+            return None
+    if until.tzinfo is None:
+        until = until.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    if until <= now:
+        return None
+    minutes = max(1, math.ceil((until - now).total_seconds() / 60))
+    days, rem = divmod(minutes, 60 * 24)
+    hours, mins = divmod(rem, 60)
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days} д")
+    if hours:
+        parts.append(f"{hours} ч")
+    if mins or not parts:
+        parts.append(f"{mins} мин")
+    return " ".join(parts[:2])
+
+
 async def is_valid_giveaway_user(bot: Bot, chat_id: int, user_id: int) -> bool:
     member = await get_active_chat_member(bot, chat_id, user_id)
     if member is None:
@@ -3102,6 +3133,12 @@ async def temporary_reply(message: Message, text: str, delay_seconds: int = 60, 
     asyncio.create_task(delete_message_later(message.bot, sent.chat.id, sent.message_id, delay_seconds))
 
 
+def schedule_message_delete(message: Message | None, delay_seconds: int = 60) -> None:
+    if not message:
+        return
+    asyncio.create_task(delete_message_later(message.bot, message.chat.id, message.message_id, delay_seconds))
+
+
 async def temporary_chat_notice(message: Message, text: str, delay_seconds: int = 60, **kwargs) -> None:
     try:
         sent = await message.bot.send_message(message.chat.id, text, **kwargs)
@@ -4699,12 +4736,13 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
     reply_markup = user_mine_menu(chat_id, owner_id, show_back=False)
     if result.rich_message and callback.message:
         try:
-            await callback.bot.send_rich_message(
+            sent_result = await callback.bot.send_rich_message(
                 chat_id=callback.message.chat.id,
                 rich_message=result.rich_message,
                 message_thread_id=getattr(callback.message, "message_thread_id", None),
                 reply_markup=reply_markup,
             )
+            schedule_message_delete(sent_result, 30)
             deleted = False
             try:
                 await callback.message.delete()
@@ -4715,8 +4753,10 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
                 await safe_edit(callback, "Результат раскопки ниже.", reply_markup=None)
         except (TelegramBadRequest, TelegramForbiddenError):
             await safe_edit(callback, result.text, reply_markup=reply_markup)
+            schedule_message_delete(callback.message, 30)
     else:
         await safe_edit(callback, result.text, reply_markup=reply_markup)
+        schedule_message_delete(callback.message, 30)
     await callback.answer()
 
 
@@ -5346,6 +5386,7 @@ async def cb_dig_bag(callback: CallbackQuery) -> None:
         text,
         reply_markup=dig_bag_menu(callback.from_user.id),
     )
+    schedule_message_delete(callback.message, 30)
     await callback.answer()
 
 
@@ -8499,11 +8540,9 @@ async def activate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
         chat_id,
         f"Alerts.in.ua сообщает: объявлена воздушная тревога — <b>{ALERTS_LOCATION_TITLE}</b>.",
     )
-    action_text = settings.alarm_text or (
-        "Режим тревоги применен: медиа, реакции и одиночные эмодзи отключены."
-        if restrictions_enabled
-        else "Оповещение отправлено. Ограничения медиа и реакций для этой группы выключены."
-    )
+    if not restrictions_enabled:
+        return alert_sent
+    action_text = settings.alarm_text or "Режим тревоги применен: медиа, реакции и одиночные эмодзи отключены."
     action_sent = await send_alarm_notification(bot, chat_id, action_text)
     return alert_sent and action_sent
 
@@ -8552,11 +8591,9 @@ async def deactivate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
         chat_id,
         f"Alerts.in.ua сообщает: отбой воздушной тревоги — <b>{ALERTS_LOCATION_TITLE}</b>.",
     )
-    action_text = settings.clear_text or (
-        "Отбой применен: медиа, реакции и одиночные эмодзи снова включены."
-        if had_restrictions
-        else "Оповещение об отбое отправлено. Ограничения для этой группы не применялись."
-    )
+    if not had_restrictions:
+        return clear_sent
+    action_text = settings.clear_text or "Отбой применен: медиа, реакции и одиночные эмодзи снова включены."
     action_sent = await send_alarm_notification(bot, chat_id, action_text)
     return clear_sent and action_sent
 
@@ -9506,7 +9543,7 @@ async def dig_command(message: Message) -> None:
     if achievements:
         lines.append("\n<b>Новые достижения:</b>")
         lines.extend(escape(item) for item in achievements)
-    await temporary_reply(message, "\n".join(lines))
+    await temporary_reply(message, "\n".join(lines), delay_seconds=30)
 
 
 @router.message(F.text.casefold() == "сумка")
@@ -9522,17 +9559,24 @@ async def dig_bag(message: Message) -> None:
         await temporary_reply(
             message,
             "Ты еще не зарегистрирован в раскопках. Нажми кнопку регистрации, потом снова напиши <code>сумка</code>.",
+            delay_seconds=30,
             reply_markup=dig_register_menu(message.from_user.id),
         )
         return
 
     text = dig_bag_text(message.chat.id, message.from_user.id)
     if text is None:
-        await temporary_reply(message, "Сначала зарегистрируйся в шахте.", reply_markup=dig_register_menu(message.from_user.id))
+        await temporary_reply(
+            message,
+            "Сначала зарегистрируйся в шахте.",
+            delay_seconds=30,
+            reply_markup=dig_register_menu(message.from_user.id),
+        )
         return
     await temporary_reply(
         message,
         text,
+        delay_seconds=30,
         reply_markup=dig_bag_menu(message.from_user.id),
     )
 
@@ -9668,8 +9712,20 @@ async def super_mute_user(message: Message) -> None:
     if target_id == message.from_user.id:
         await safe_reply(message, "Себя супер-мутить нельзя. Даже ради науки.")
         return
-    if not await is_valid_roll_mute_target(message.bot, message.chat.id, target_id):
+    target_member = await get_active_chat_member(message.bot, message.chat.id, target_id)
+    if target_member is None or is_deleted_or_empty_user(target_member.user):
         await safe_reply(message, "Этого пользователя нельзя замутить: он не активен в чате, бот или администратор.")
+        return
+    target_status = member_status_text(target_member.status)
+    if target_member.status in ADMIN_STATUSES or target_status in ADMIN_STATUS_TEXTS:
+        await safe_reply(message, "Этого пользователя нельзя замутить: он не активен в чате, бот или администратор.")
+        return
+    mute_remaining = active_mute_remaining_text(target_member)
+    if mute_remaining:
+        await safe_reply(
+            message,
+            f"У данного пользователя уже есть мут. До окончания: <b>{escape(mute_remaining)}</b>.",
+        )
         return
 
     if not db.consume_dig_item(0, message.from_user.id, "super_mute30"):
