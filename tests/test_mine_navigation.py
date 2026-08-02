@@ -192,7 +192,7 @@ def test_shop_deep_link_opens_a_distinct_compact_screen() -> None:
 
 
 def test_miniapp_has_profile_weather_and_radio_screens() -> None:
-    assert 'api("/miniapp/profile")' in MINI_APP_HTML
+    assert '"/miniapp/profile"' in MINI_APP_HTML
     assert "MonkeyDin" not in MINI_APP_HTML
     assert "Загружаю профиль..." in MINI_APP_HTML
     assert 'topProfileButton.textContent = activeView === "profile" ? "Назад" : "Профиль"' in MINI_APP_HTML
@@ -202,6 +202,11 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function showWeather()' in MINI_APP_HTML
     assert 'function showRadio()' in MINI_APP_HTML
     assert 'function showFriendsInfo()' in MINI_APP_HTML
+    assert 'function profileAvatarHtml(user, cosmetics = {}, small = false)' in MINI_APP_HTML
+    assert 'function friendRowHtml(friend)' in MINI_APP_HTML
+    assert 'showProfile(${Number(friend.id)})' in MINI_APP_HTML
+    assert '`/miniapp/profile?user_id=${encodeURIComponent(userId)}`' in MINI_APP_HTML
+    assert 'class="panel profile-hero ${profileHeroClass(cosmetics)}"' in MINI_APP_HTML
     assert 'onclick="showFriendsInfo()">Друзья</button>' in MINI_APP_HTML
     assert 'content.querySelectorAll(".achievement-card.epic, .achievement-card.legendary").forEach(node => node.remove())' in MINI_APP_HTML
     assert 'function searchRadioStations()' in MINI_APP_HTML

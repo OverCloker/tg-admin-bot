@@ -1,7 +1,7 @@
 from app.db import Database
 from app import bot as game
 from app import miniapp
-from app.miniapp import _gift_recipients, _gift_target_kind, _shop_catalog
+from app.miniapp import _gift_recipients, _gift_target_kind, _miniapp_social_people, _miniapp_social_target, _shop_catalog
 from app.premium import PremiumService
 from app.user_profile import build_user_profile
 
@@ -137,6 +137,33 @@ def test_gift_recipients_include_registered_friends_and_partner(tmp_path) -> Non
     assert _gift_target_kind(game, "couple_flower") == "partner"
     assert {item["id"] for item in friend_targets} == {2, 3}
     assert {item["id"] for item in partner_targets} == {3}
+
+
+def test_miniapp_social_people_include_profile_links_for_friends_and_partner(tmp_path) -> None:
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.register_dig_player(0, 1, "sender", "Даритель")
+    db.register_dig_player(0, 2, "friend", "Друг")
+    db.register_dig_player(0, 3, "partner", "Пара")
+    db.upsert_seen_user(-100, 1, "sender", "Даритель", False)
+    db.upsert_seen_user(-100, 2, "friend", "Друг", False)
+    db.upsert_seen_user(-100, 3, "partner", "Пара", False)
+    db.create_friend_request(-100, 1, 2)
+    db.accept_friend_request(-100, 1, 2)
+    db.create_couple_request(-100, 1, 3)
+    db.accept_couple_request(-100, 1, 3)
+
+    try:
+        people = _miniapp_social_people(db, 1)
+        target = _miniapp_social_target(db, 1, 2)
+        stranger = _miniapp_social_target(db, 1, 999)
+    finally:
+        db.close()
+
+    assert {item["id"] for item in people} == {2, 3}
+    assert any(item["relation"] == "partner" and item["photoUrl"].startswith("/miniapp/avatar/3?sig=") for item in people)
+    assert target and target["relation"] == "friend"
+    assert stranger is None
 
 
 def test_dig_player_tag_can_be_saved(tmp_path) -> None:

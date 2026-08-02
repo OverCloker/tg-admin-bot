@@ -229,6 +229,80 @@ MINI_APP_HTML = r"""<!doctype html>
     .profile-card b { display: block; margin-top: 4px; font-size: 18px; overflow-wrap: anywhere; }
     .profile-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
     .profile-actions .btn { margin: 0; min-height: 44px; }
+    .profile-hero {
+      display: grid;
+      grid-template-columns: 88px minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+      min-height: 128px;
+      background:
+        radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--profile-glow, #9ed0ff) 36%, transparent), transparent 38%),
+        linear-gradient(135deg, color-mix(in srgb, var(--profile-glow, #9ed0ff) 18%, transparent), transparent 62%),
+        var(--panel);
+    }
+    .profile-hero.bg-lava { --profile-glow: #ff8b52; background:
+      radial-gradient(circle at 16% 4%, #ffd18a44, transparent 34%),
+      radial-gradient(circle at 88% 92%, #ff4b2c30, transparent 38%),
+      linear-gradient(135deg, #35180f, #142334 62%); }
+    .profile-hero.bg-old-mine { --profile-glow: #d3a55d; background:
+      radial-gradient(circle at 16% 4%, #d3a55d38, transparent 34%),
+      linear-gradient(135deg, #2b2217, #132436 62%); }
+    .profile-avatar {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 88px;
+      height: 88px;
+      overflow: hidden;
+      border: 3px solid color-mix(in srgb, var(--profile-glow, #9ed0ff) 72%, #fff);
+      border-radius: 28px;
+      background: linear-gradient(135deg, #294158, #102033);
+      color: #fff;
+      font-size: 32px;
+      font-weight: 950;
+      box-shadow: 0 0 0 1px #ffffff44 inset, 0 12px 28px #0005;
+    }
+    .profile-avatar.frame-crystal { border-color: #9fdcff; box-shadow: 0 0 24px #78d8ff44, 0 0 0 1px #ffffff66 inset; }
+    .profile-avatar.frame-copper { border-color: #d58d54; box-shadow: 0 0 20px #d58d5430, 0 0 0 1px #ffd8af55 inset; }
+    .profile-avatar.frame-couple { border-color: #ff8fd1; box-shadow: 0 0 22px #ff8fd144, 0 0 0 1px #ffffff66 inset; }
+    .profile-avatar > * { grid-area: 1 / 1; }
+    .profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .profile-avatar-fallback { letter-spacing: -.04em; }
+    .profile-title { min-width: 0; }
+    .profile-title h2 { margin: 0; overflow-wrap: anywhere; }
+    .profile-username { margin-top: 3px; color: var(--muted); overflow-wrap: anywhere; }
+    .profile-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .profile-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 6px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--profile-glow, #9ed0ff) 14%, var(--panel-color));
+      font-size: 12px;
+      font-weight: 850;
+    }
+    .friend-list { display: grid; gap: 8px; margin-top: 10px; }
+    .friend-row {
+      display: grid;
+      grid-template-columns: 46px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      width: 100%;
+      min-height: 62px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--panel-2);
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+    }
+    .friend-row .profile-avatar { width: 46px; height: 46px; border-radius: 16px; border-width: 2px; font-size: 18px; }
+    .friend-name { min-width: 0; font-weight: 850; overflow-wrap: anywhere; }
+    .friend-meta { margin-top: 2px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+    .friend-open { color: var(--muted); font-weight: 900; }
     .inventory-groups { display: grid; gap: 10px; margin-top: 10px; }
     .inventory-chip-group { display: grid; gap: 7px; }
     .inventory-chip-title { color: var(--muted); font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
@@ -936,6 +1010,7 @@ MINI_APP_HTML = r"""<!doctype html>
   let shopCategory = "";
   let activeView = "mine";
   let profileReturnView = "mine";
+  let currentProfile = null;
 
   radioPlayer.addEventListener("play", () => {
     radioPlayer.classList.add("active");
@@ -1452,13 +1527,67 @@ MINI_APP_HTML = r"""<!doctype html>
     renderRadioResults("В избранном пока нет станций.");
   }
 
-  function renderProfile(profile) {
+  function profileInitials(name) {
+    const parts = String(name || "Игрок").trim().split(/\s+/).filter(Boolean);
+    return (parts.length > 1 ? parts[0][0] + parts[1][0] : parts[0].slice(0, 2)).toUpperCase();
+  }
+
+  function profileAvatarHtml(user, cosmetics = {}, small = false) {
+    const frame = cosmetics.frame && cosmetics.frame.key ? cosmetics.frame.key : "";
+    const frameClass =
+      frame === "profile_frame_crystal" ? "frame-crystal" :
+      frame === "profile_frame_copper" ? "frame-copper" :
+      frame === "couple_frame" ? "frame-couple" : "";
+    const fallback = `<span class="profile-avatar-fallback">${escapeHtml(profileInitials(user.fullName))}</span>`;
+    const image = user.photoUrl
+      ? `<img src="${escapeHtml(user.photoUrl)}" alt="" loading="${small ? "lazy" : "eager"}" onerror="this.remove()">`
+      : "";
+    return `<div class="profile-avatar ${frameClass}">${image}${fallback}</div>`;
+  }
+
+  function profileHeroClass(cosmetics = {}) {
+    const bg = cosmetics.background && cosmetics.background.key ? cosmetics.background.key : "";
+    if (bg === "profile_bg_lava") return "bg-lava";
+    if (bg === "profile_bg_old_mine") return "bg-old-mine";
+    return "";
+  }
+
+  function profileBadgesHtml(profile) {
+    const mine = profile.mine || {};
+    const social = profile.social || {};
+    const cosmetics = mine.cosmetics || {};
+    const badges = [];
+    if (social.relationTitle) badges.push(social.relationTitle);
+    if (mine.rank) badges.push(mine.rank);
+    (cosmetics.badges || []).slice(0, 2).forEach(item => badges.push(`${item.emoji || ""} ${item.title || ""}`.trim()));
+    return badges.length
+      ? `<div class="profile-badges">${badges.map(item => `<span class="profile-badge">${escapeHtml(item)}</span>`).join("")}</div>`
+      : "";
+  }
+
+  function friendRowHtml(friend) {
+    const user = { fullName: friend.fullName, username: friend.username, photoUrl: friend.photoUrl };
+    return `<button class="friend-row" onclick="showProfile(${Number(friend.id)})">
+      ${profileAvatarHtml(user, {}, true)}
+      <span>
+        <span class="friend-name">${escapeHtml(friend.fullName || "Игрок")}</span>
+        <span class="friend-meta">${friend.username ? `@${escapeHtml(friend.username)} · ` : ""}${escapeHtml(friend.relationTitle || "Друг")}</span>
+      </span>
+      <span class="friend-open">›</span>
+    </button>`;
+  }
+
+  function renderLegacyProfile(profile) {
     setScreenHeader("profile");
     const user = profile.user || {};
     const premium = profile.premium || {};
     const plan = premium.plan || {};
     const mine = profile.mine || {};
     const cosmetics = mine.cosmetics || {};
+    const social = profile.social || {};
+    const viewer = profile.viewer || {};
+    const friends = social.friends || [];
+    const isSelf = viewer.isSelf !== false;
     const premiumText = premium.active ? (plan.title || "Premium активен") : "не активен";
     const groupedItems = {};
     (mine.activeItems || []).slice(0, 18).forEach(item => {
@@ -1518,7 +1647,7 @@ MINI_APP_HTML = r"""<!doctype html>
     scrollToTop();
   }
 
-  function showFriendsInfo() {
+  function showLegacyFriendsInfo() {
     setScreenHeader("profile");
     content.innerHTML = `<section class="panel">
       <h2>Друзья</h2>
@@ -1534,14 +1663,94 @@ MINI_APP_HTML = r"""<!doctype html>
     scrollToTop();
   }
 
-  async function showProfile() {
+  function renderProfile(profile) {
+    currentProfile = profile;
+    setScreenHeader("profile");
+    const user = profile.user || {};
+    const premium = profile.premium || {};
+    const plan = premium.plan || {};
+    const mine = profile.mine || {};
+    const cosmetics = mine.cosmetics || {};
+    const social = profile.social || {};
+    const viewer = profile.viewer || {};
+    const friends = social.friends || [];
+    const isSelf = viewer.isSelf !== false;
+    const premiumText = premium.active ? (plan.title || "Premium активен") : "не активен";
+    const rareAchievements = (mine.rareAchievements || []).slice(0, 5).map(item => `
+      <div class="achievement-card ${escapeHtml(item.rarity || "common")}">
+        <b>${escapeHtml(item.name)}</b>
+        <div class="achievement-rarity">${escapeHtml(item.rarityTitle || "Обычное")}</div>
+      </div>
+    `).join("");
+    const cosmeticsBadges = (cosmetics.badges || []).map(item => `${escapeHtml(item.emoji || "")} ${escapeHtml(item.title || "")}`).join(" · ");
+    const cosmeticsHtml = (cosmetics.frame || cosmetics.background || cosmeticsBadges) ? `
+      <section class="panel">
+        <h2>Оформление</h2>
+        <p class="muted">Рамка: <b>${escapeHtml((cosmetics.frame && cosmetics.frame.title) || "не выбрана")}</b></p>
+        <p class="muted">Фон: <b>${escapeHtml((cosmetics.background && cosmetics.background.title) || "не выбран")}</b></p>
+        ${cosmeticsBadges ? `<p class="muted">Значки: <b>${cosmeticsBadges}</b></p>` : ""}
+      </section>` : "";
+    const friendsPreview = friends.slice(0, 3).map(friendRowHtml).join("");
+    content.innerHTML = `<section class="panel profile-hero ${profileHeroClass(cosmetics)}">
+      ${profileAvatarHtml(user, cosmetics)}
+      <div class="profile-title">
+        <h2>${escapeHtml(user.fullName || "Профиль")}</h2>
+        <div class="profile-username">${user.username ? `@${escapeHtml(user.username)}` : "username не указан"}</div>
+        ${profileBadgesHtml(profile)}
+      </div>
+    </section>
+    <section class="panel">
+      <div class="profile-grid">
+        <div class="profile-card">Premium<b>${escapeHtml(premiumText)}</b></div>
+        <div class="profile-card">Ранг<b>${escapeHtml(mine.rank || "Новичок")}</b></div>
+        <div class="profile-card">Котоины<b>${mine.coins || 0}</b></div>
+        <div class="profile-card">Глубина<b>${mine.totalDepth || 0} м</b></div>
+        <div class="profile-card">Уровень<b>${mine.level || 0}</b></div>
+        <div class="profile-card">Удача<b>${mine.luck || 0}/100</b></div>
+      </div>
+      <div class="profile-actions">
+        <button class="btn secondary" onclick="showFriendsInfo()">${friends.length ? `Друзья: ${friends.length}` : "Друзья"}</button>
+        ${isSelf ? `<button class="btn secondary" onclick="showBag()">Сумка</button>` : `<button class="btn secondary" onclick="showProfile()">Мой профиль</button>`}
+      </div>
+      ${isSelf ? themeSwitcherHtml() : ""}
+    </section>
+    ${friendsPreview ? `<section class="panel"><h2>${isSelf ? "Друзья" : "Связи"}</h2><div class="friend-list">${friendsPreview}</div>${friends.length > 3 ? `<button class="btn secondary" onclick="showFriendsInfo()">Показать всех: ${friends.length}</button>` : ""}</section>` : ""}
+    <section class="panel">
+      <h2>Шахта</h2>
+      <p class="muted">Рекорд: <b>${mine.bestSessionDepth || 0} м</b> · Серия: <b>${mine.streak || 0}</b> · Маршрут: <b>${escapeHtml(mine.route || "не выбран")}</b></p>
+      <p class="muted">Достижения: <b>${mine.achievementsTotal || 0}/${mine.achievementsKnown || 0}</b></p>
+    </section>
+    ${cosmeticsHtml}
+    ${rareAchievements ? `<section class="panel"><h2>Редчайшие достижения</h2><div class="achievement-showcase">${rareAchievements}</div></section>` : ""}
+    <section class="panel"><button class="btn secondary" style="margin:0" onclick="${isSelf ? "renderMine()" : "showProfile()"}">${isSelf ? "Назад в шахту" : "Назад к моему профилю"}</button></section>`;
+    scrollToTop();
+  }
+
+  function showFriendsInfo() {
+    setScreenHeader("profile");
+    const profile = currentProfile || {};
+    const social = profile.social || {};
+    const friends = social.friends || [];
+    const viewer = profile.viewer || {};
+    const isSelf = viewer.isSelf !== false;
+    content.innerHTML = `<section class="panel">
+      <h2>${isSelf ? "Друзья" : "Связи профиля"}</h2>
+      <p class="muted">${friends.length ? "Нажми на человека, чтобы открыть его профиль." : "Пока нет друзей, которые зарегистрированы в шахте."}</p>
+      ${friends.length ? `<div class="friend-list">${friends.map(friendRowHtml).join("")}</div>` : ""}
+      <button class="btn secondary" onclick="${isSelf ? "showProfile()" : "showProfile()"}">Назад к профилю</button>
+    </section>`;
+    scrollToTop();
+  }
+
+  async function showProfile(userId = null) {
     if (activeView !== "profile") {
       profileReturnView = activeView || "mine";
     }
     setScreenHeader("profile");
     content.innerHTML = `<section class="panel muted">Загружаю профиль...</section>`;
     try {
-      renderProfile(await api("/miniapp/profile"));
+      const path = userId ? `/miniapp/profile?user_id=${encodeURIComponent(userId)}` : "/miniapp/profile";
+      renderProfile(await api(path));
     } catch (error) {
       showError(error);
     }

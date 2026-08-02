@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import base64
 import time
@@ -446,10 +447,103 @@ def _telegram_user(init_data: str | None) -> dict[str, Any]:
         if datetime.now(timezone.utc).timestamp() - int(values["auth_date"]) > 86400:
             raise ValueError
         tg_user = json.loads(values["user"])
-        return {"id": int(tg_user["id"]), "username": tg_user.get("username"),
-                "full_name": " ".join(filter(None, [tg_user.get("first_name"), tg_user.get("last_name")])) or str(tg_user["id"])}
+        return {
+            "id": int(tg_user["id"]),
+            "username": tg_user.get("username"),
+            "full_name": " ".join(filter(None, [tg_user.get("first_name"), tg_user.get("last_name")])) or str(tg_user["id"]),
+            "photo_url": tg_user.get("photo_url") or "",
+        }
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(401, "Данные пользователя Telegram устарели.") from exc
+
+
+def _miniapp_avatar_dir() -> str:
+    project_root = Path(__file__).resolve().parent.parent
+    return os.getenv("USER_AVATAR_DIR", str(project_root / "media_storage" / "user_avatars")).strip()
+
+
+def _miniapp_avatar_path(user_id: int) -> str:
+    return os.path.join(_miniapp_avatar_dir(), f"{user_id}.jpg")
+
+
+def _miniapp_avatar_signature(user_id: int) -> str:
+    return hmac.new(
+        load_config().bot_token.encode(),
+        f"miniapp-avatar:{user_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _miniapp_avatar_url(user_id: int) -> str:
+    return f"/miniapp/avatar/{user_id}?sig={_miniapp_avatar_signature(user_id)}"
+
+
+def _valid_miniapp_avatar_signature(user_id: int, signature: str) -> bool:
+    return bool(signature) and hmac.compare_digest(_miniapp_avatar_signature(user_id), signature)
+
+
+async def _ensure_miniapp_avatar(user_id: int) -> str | None:
+    path = _miniapp_avatar_path(user_id)
+    max_age_seconds = 24 * 60 * 60
+    if os.path.exists(path) and (datetime.now().timestamp() - os.path.getmtime(path)) < max_age_seconds:
+        return path
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    bot = Bot(token=load_config().bot_token)
+    tmp_path = f"{path}.tmp"
+    try:
+        photos = await bot.get_user_profile_photos(user_id=user_id, limit=1)
+        if not photos.photos:
+            return path if os.path.exists(path) else None
+        largest = max(photos.photos[0], key=lambda item: item.file_size or 0)
+        file = await bot.get_file(largest.file_id)
+        if not file.file_path:
+            return path if os.path.exists(path) else None
+        await bot.download_file(file.file_path, destination=tmp_path)
+        os.replace(tmp_path, path)
+        return path
+    except Exception:
+        return path if os.path.exists(path) else None
+    finally:
+        try:
+            os.remove(tmp_path)
+        except FileNotFoundError:
+            pass
+        await bot.session.close()
+
+
+def _miniapp_social_people(db: Database, viewer_id: int) -> list[dict[str, Any]]:
+    people: dict[int, dict[str, Any]] = {}
+    for item in db.list_registered_social_gift_friends(viewer_id, limit=80):
+        people[item.user_id] = {
+            "id": item.user_id,
+            "username": item.username or "",
+            "fullName": item.full_name,
+            "relation": "friend",
+            "relationTitle": "Друг",
+            "chatCount": item.chat_count,
+            "photoUrl": _miniapp_avatar_url(item.user_id),
+        }
+    for item in db.list_registered_social_gift_partners(viewer_id, limit=20):
+        people[item.user_id] = {
+            "id": item.user_id,
+            "username": item.username or "",
+            "fullName": item.full_name,
+            "relation": "partner",
+            "relationTitle": "Пара",
+            "chatCount": item.chat_count,
+            "photoUrl": _miniapp_avatar_url(item.user_id),
+        }
+    return sorted(people.values(), key=lambda item: (item["relation"] != "partner", item["fullName"].lower()))
+
+
+def _miniapp_social_target(db: Database, viewer_id: int, target_id: int) -> dict[str, Any] | None:
+    if target_id == viewer_id:
+        return {"relation": "self", "relationTitle": "Это вы"}
+    for item in _miniapp_social_people(db, viewer_id):
+        if int(item["id"]) == target_id:
+            return item
+    return None
 
 
 def _radio_stream_token(url: str) -> str:
@@ -1386,23 +1480,64 @@ def miniapp_mine(x_telegram_init_data: str | None = Header(default=None, alias="
 
 
 @router.get("/miniapp/profile")
-def miniapp_profile(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict[str, Any]:
+async def miniapp_profile(
+    user_id: int | None = Query(default=None, ge=1),
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
+    viewer_id = int(user["id"])
+    target_id = int(user_id or viewer_id)
     config = load_config()
     db = Database(config.db_path)
     premium = PremiumService(config.db_path)
     try:
         db.init()
-        return build_user_profile(
+        relation = _miniapp_social_target(db, viewer_id, target_id)
+        if relation is None:
+            raise HTTPException(403, "Этот профиль доступен только вам, друзьям или паре.")
+        target = db.get_dig_player(0, target_id)
+        if not target:
+            raise HTTPException(404, "Профиль ещё не создан: игрок не зарегистрирован в шахте.")
+        photo_url = str(user.get("photo_url") or "") if target_id == viewer_id else _miniapp_avatar_url(target_id)
+        if target_id == viewer_id and not photo_url:
+            photo_url = _miniapp_avatar_url(target_id)
+        profile = build_user_profile(
             db,
             premium,
-            user["id"],
-            user.get("username"),
-            user["full_name"],
+            target_id,
+            target.username,
+            target.full_name,
+            photo_url=photo_url,
         )
+        target_people = _miniapp_social_people(db, target_id)
+        if target_id == viewer_id:
+            people = target_people
+        else:
+            accessible_ids = {viewer_id, *(int(item["id"]) for item in _miniapp_social_people(db, viewer_id))}
+            people = [item for item in target_people if int(item["id"]) in accessible_ids]
+        partner = next((item for item in people if item["relation"] == "partner"), None)
+        profile["viewer"] = {"id": viewer_id, "isSelf": target_id == viewer_id}
+        profile["social"] = {
+            "relation": relation.get("relation", "friend"),
+            "relationTitle": relation.get("relationTitle", "Друг"),
+            "friendsCount": len([item for item in people if item["relation"] == "friend"]),
+            "friends": people[:40],
+            "partner": partner,
+        }
+        return profile
     finally:
         premium.close()
         db.close()
+
+
+@router.get("/miniapp/avatar/{user_id}")
+async def miniapp_avatar(user_id: int, sig: str = "") -> FileResponse:
+    if not _valid_miniapp_avatar_signature(user_id, sig):
+        raise HTTPException(403, "Avatar link is invalid")
+    path = await _ensure_miniapp_avatar(user_id)
+    if not path or not os.path.exists(path):
+        raise HTTPException(404, "Avatar not found")
+    return FileResponse(path, media_type="image/jpeg", filename=f"user_{user_id}.jpg")
 
 
 @router.get("/miniapp/weather")
