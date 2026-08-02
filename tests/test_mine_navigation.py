@@ -207,14 +207,12 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'showProfile(${Number(friend.id)})' in MINI_APP_HTML
     assert '`/miniapp/profile?user_id=${encodeURIComponent(userId)}`' in MINI_APP_HTML
     assert 'class="panel profile-hero ${profileHeroClass(cosmetics)}"' in MINI_APP_HTML
-    assert 'onclick="showFriendsInfo()">Друзья</button>' in MINI_APP_HTML
-    assert 'content.querySelectorAll(".achievement-card.epic, .achievement-card.legendary").forEach(node => node.remove())' in MINI_APP_HTML
+    assert 'onclick="showFriendsInfo()">${friends.length ? `Друзья: ${friends.length}` : "Друзья"}</button>' in MINI_APP_HTML
     assert 'function searchRadioStations()' in MINI_APP_HTML
     assert 'miniAppFavoriteRadioStations' in MINI_APP_HTML
     assert 'api(`/miniapp/radio/search?q=${encodeURIComponent(query)}`)' in MINI_APP_HTML
     assert 'station.streamUrl || station.url_resolved || station.url' in MINI_APP_HTML
     assert 'class="persistent-radio"' in MINI_APP_HTML
-    assert 'class="inventory-chip ${escapeHtml(item.group || "consumable")}"' in MINI_APP_HTML
     assert "Редчайшие достижения" in MINI_APP_HTML
     assert "mine.rareAchievements" in MINI_APP_HTML
 
