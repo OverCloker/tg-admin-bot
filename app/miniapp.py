@@ -150,6 +150,19 @@ def _remember_repair_candidate(snapshot: dict[str, Any], item_key: str) -> None:
     snapshot["repair_candidates"] = candidates
 
 
+def _repair_candidates_from_snapshot(snapshot: dict[str, Any]) -> list[str]:
+    candidates = [str(item) for item in (snapshot.get("repair_candidates") or []) if item and item != "repair_kit"]
+    if candidates:
+        return candidates
+    legacy = list(snapshot.get("used_tools") or [])
+    for key in ("bucket", "flashlight", "map", "compass", "scanner", "talisman", "mystery_chest", "helmet", "shovel"):
+        if snapshot.get(key) or snapshot.get(f"{key}_used"):
+            legacy.append(key)
+    if snapshot.get("chest") or snapshot.get("chest_used"):
+        legacy.append("mystery_chest")
+    return [str(item) for item in legacy if item and item != "repair_kit"]
+
+
 def _item_title(game: Any, item_key: str) -> str:
     item = getattr(game, "DIG_SHOP_ITEMS", {}).get(item_key)
     if item:
@@ -181,11 +194,11 @@ def _apply_interactive_repair_kit(
     snapshot: dict[str, Any],
     effects: list[str],
 ) -> bool:
-    candidates = [str(item) for item in (snapshot.get("repair_candidates") or []) if item and item != "repair_kit"]
+    candidates = _repair_candidates_from_snapshot(snapshot)
     if not candidates:
         return False
     restored = candidates[-1]
-    if not db.consume_dig_item(chat_id, user_id, "repair_kit"):
+    if not snapshot.pop("repair_used", False) and not db.consume_dig_item(chat_id, user_id, "repair_kit"):
         return False
     db.add_dig_item(chat_id, user_id, restored, 1)
     effects.append(f"Ремонтный набор восстановил: {_item_title(game, restored)}")
