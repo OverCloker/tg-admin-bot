@@ -101,8 +101,9 @@ def plan_public_dict(plan: PlanConfig) -> dict[str, Any]:
 
 
 class PremiumService:
-    def __init__(self, db_path: str) -> None:
-        self.path = Path(db_path)
+    def __init__(self, db_path: str | os.PathLike[str] | Any) -> None:
+        raw_path = getattr(db_path, "path", db_path)
+        self.path = Path(raw_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = RLock()
         self._conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
