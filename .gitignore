@@ -5,6 +5,7 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+.pytest-tmp/
 bot.lock
 downloads/
 media_storage/
