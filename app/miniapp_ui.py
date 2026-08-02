@@ -266,8 +266,8 @@ MINI_APP_HTML = r"""<!doctype html>
     .profile-avatar.frame-copper { border-color: #d58d54; box-shadow: 0 0 20px #d58d5430, 0 0 0 1px #ffd8af55 inset; }
     .profile-avatar.frame-couple { border-color: #ff8fd1; box-shadow: 0 0 22px #ff8fd144, 0 0 0 1px #ffffff66 inset; }
     .profile-avatar > * { grid-area: 1 / 1; }
-    .profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
-    .profile-avatar-fallback { letter-spacing: -.04em; }
+    .profile-avatar img { position: relative; z-index: 2; width: 100%; height: 100%; object-fit: cover; }
+    .profile-avatar-fallback { position: relative; z-index: 1; letter-spacing: -.04em; }
     .profile-title { min-width: 0; }
     .profile-title h2 { margin: 0; overflow-wrap: anywhere; }
     .profile-username { margin-top: 3px; color: var(--muted); overflow-wrap: anywhere; }
@@ -1557,7 +1557,7 @@ MINI_APP_HTML = r"""<!doctype html>
     const social = profile.social || {};
     const cosmetics = mine.cosmetics || {};
     const badges = [];
-    if (social.relationTitle) badges.push(social.relationTitle);
+    if (social.relation !== "self" && social.relationTitle) badges.push(social.relationTitle);
     if (mine.rank) badges.push(mine.rank);
     (cosmetics.badges || []).slice(0, 2).forEach(item => badges.push(`${item.emoji || ""} ${item.title || ""}`.trim()));
     return badges.length

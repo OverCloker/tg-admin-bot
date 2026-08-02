@@ -204,6 +204,8 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function showFriendsInfo()' in MINI_APP_HTML
     assert 'function profileAvatarHtml(user, cosmetics = {}, small = false)' in MINI_APP_HTML
     assert 'function friendRowHtml(friend)' in MINI_APP_HTML
+    assert ".profile-avatar img { position: relative; z-index: 2;" in MINI_APP_HTML
+    assert 'social.relation !== "self" && social.relationTitle' in MINI_APP_HTML
     assert 'showProfile(${Number(friend.id)})' in MINI_APP_HTML
     assert '`/miniapp/profile?user_id=${encodeURIComponent(userId)}`' in MINI_APP_HTML
     assert 'class="panel profile-hero ${profileHeroClass(cosmetics)}"' in MINI_APP_HTML

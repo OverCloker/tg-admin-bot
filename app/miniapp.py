@@ -539,7 +539,7 @@ def _miniapp_social_people(db: Database, viewer_id: int) -> list[dict[str, Any]]
 
 def _miniapp_social_target(db: Database, viewer_id: int, target_id: int) -> dict[str, Any] | None:
     if target_id == viewer_id:
-        return {"relation": "self", "relationTitle": "Это вы"}
+        return {"relation": "self", "relationTitle": ""}
     for item in _miniapp_social_people(db, viewer_id):
         if int(item["id"]) == target_id:
             return item

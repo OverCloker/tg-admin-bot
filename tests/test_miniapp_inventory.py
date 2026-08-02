@@ -163,6 +163,7 @@ def test_miniapp_social_people_include_profile_links_for_friends_and_partner(tmp
     assert {item["id"] for item in people} == {2, 3}
     assert any(item["relation"] == "partner" and item["photoUrl"].startswith("/miniapp/avatar/3?sig=") for item in people)
     assert target and target["relation"] == "friend"
+    assert _miniapp_social_target(db, 1, 1) == {"relation": "self", "relationTitle": ""}
     assert stranger is None
 
 
