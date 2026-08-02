@@ -335,6 +335,21 @@ def generate_dig_stage(depth: int, mine_key: str = "old_mine", rng: random.Rando
     return {"type": "cells", "cells": generate_dig_cells(depth, rng, mine_key)}
 
 
+def cell_row_is_exhausted(cells: list[Mapping[str, Any]], used_cells: list[int]) -> bool:
+    """Return True when a cell row has no clickable cells left."""
+    cell_count = len(cells)
+    if cell_count <= 0:
+        return False
+    used = {int(index) for index in used_cells if 0 <= int(index) < cell_count}
+    return len(used) >= cell_count
+
+
+def replacement_cell_stage(depth: int, mine_key: str = "old_mine", rng: random.Random | None = None) -> dict[str, Any]:
+    """Generate a fresh cell row for the same meter after all choices failed."""
+    depth = max(1, min(INTERACTIVE_DIG_MAX_DEPTH - 1, int(depth)))
+    return {"type": "cells", "cells": generate_dig_cells(depth, rng, mine_key)}
+
+
 def generate_event_stage(depth: int, mine_key: str = "old_mine", rng: random.Random | None = None, preferred: str | None = None) -> dict[str, Any]:
     rng = rng or random.SystemRandom()
     mine_key = mine_type_for_key(mine_key)["key"]

@@ -35,6 +35,7 @@ from .dig_game import (
     INTERACTIVE_DIG_DURABILITY,
     INTERACTIVE_DIG_MAX_DEPTH,
     cell_ore_units,
+    cell_row_is_exhausted,
     cell_reward,
     collapse_payout,
     event_choice,
@@ -45,6 +46,7 @@ from .dig_game import (
     generate_event_stage,
     merchant_ore_price,
     mine_type_for_total_depth,
+    replacement_cell_stage,
     resolve_cell,
     scale_interactive_reward,
 )
@@ -5033,10 +5035,15 @@ async def cb_interactive_dig_cell(callback: CallbackQuery) -> None:
             )
             return
 
+        replacement_stage = None
+        if cell_row_is_exhausted(cells, used_cells):
+            replacement_stage = replacement_cell_stage(next_depth, str(snapshot.get("mine_key") or "old_mine"))
+
         db.update_interactive_dig_session(
             session_id,
             durability=durability,
-            used_cells_json=json.dumps(used_cells),
+            cells_json=json.dumps(replacement_stage, ensure_ascii=False) if replacement_stage else None,
+            used_cells_json="[]" if replacement_stage else json.dumps(used_cells),
             equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
             processing=0,
         )
@@ -5047,6 +5054,8 @@ async def cb_interactive_dig_cell(callback: CallbackQuery) -> None:
             prefix += " Снаряжение спасло прочность."
         else:
             prefix += f" Прочность: <b>{durability}</b>/{INTERACTIVE_DIG_DURABILITY}."
+        if replacement_stage:
+            prefix += " Этот ряд исчерпан, кот нашёл соседний ход."
         view = interactive_dig_view(updated, prefix)
         await safe_edit(
             callback,

@@ -8,6 +8,7 @@ from app.dig_game import (
     INTERACTIVE_DIG_MIN_CELLS_PER_METER,
     INTERACTIVE_DIG_SUCCESS_CHANCES,
     cell_ore_units,
+    cell_row_is_exhausted,
     cell_reward,
     collapse_payout,
     final_cell_chance,
@@ -16,6 +17,7 @@ from app.dig_game import (
     generate_dig_stage,
     merchant_ore_price,
     mine_type_for_total_depth,
+    replacement_cell_stage,
     resolve_cell,
     scale_interactive_reward,
 )
@@ -151,6 +153,19 @@ def test_event_stage_can_replace_cell_row() -> None:
     if stage["type"] == "event":
         assert stage["choices"]
         assert "title" in stage
+
+
+def test_failed_row_can_be_replaced_when_all_cells_are_used() -> None:
+    cells = [{"kind": "normal"}, {"kind": "hard"}, {"kind": "ore"}]
+
+    assert not cell_row_is_exhausted(cells, [0, 2])
+    assert cell_row_is_exhausted(cells, [0, 1, 2])
+
+    stage = replacement_cell_stage(3, "crystal_mine", random.Random(3))
+
+    assert stage["type"] == "cells"
+    assert 3 <= len(stage["cells"]) <= 7
+    assert cell_row_is_exhausted(stage["cells"], []) is False
 
 
 def test_depth_ten_has_final_bonus() -> None:

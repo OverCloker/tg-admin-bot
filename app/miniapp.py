@@ -24,6 +24,7 @@ from .dig_game import (
     INTERACTIVE_DIG_DURABILITY,
     INTERACTIVE_DIG_MAX_DEPTH,
     cell_ore_units,
+    cell_row_is_exhausted,
     cell_reward,
     collapse_payout,
     event_choice,
@@ -33,6 +34,7 @@ from .dig_game import (
     generate_dig_stage,
     merchant_ore_price,
     mine_type_for_total_depth,
+    replacement_cell_stage,
     resolve_cell,
     scale_interactive_reward,
 )
@@ -1923,13 +1925,19 @@ def miniapp_interactive_cell(
                 finished = db.get_interactive_dig_session(session["id"])
                 message = _settle_interactive_manual(db, game, user, finished, datetime.now(timezone.utc), collapsed=True)
                 return {"ok": True, "finished": True, "message": message, "state": _state(db, user["id"])}
+            replacement_stage = None
+            if cell_row_is_exhausted(cells, used):
+                replacement_stage = replacement_cell_stage(next_depth, str(snapshot.get("mine_key") or "old_mine"))
             db.update_interactive_dig_session(
                 session["id"],
                 durability=durability,
-                used_cells_json=json.dumps(used),
+                cells_json=json.dumps(replacement_stage, ensure_ascii=False) if replacement_stage else None,
+                used_cells_json="[]" if replacement_stage else json.dumps(used),
                 equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
             )
             suffix = "Страховка/снаряжение спасли прочность." if saved else f"Прочность: {durability}/{INTERACTIVE_DIG_DURABILITY}."
+            if replacement_stage:
+                suffix += " Этот ряд исчерпан, кот нашёл соседний ход."
             return {"ok": True, "message": f"Слой не поддался: {cell_name}. {suffix}", "state": _state(db, user["id"])}
         finally:
             db.close()
