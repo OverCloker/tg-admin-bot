@@ -142,6 +142,56 @@ def _interactive_cells(stage: Any) -> list[dict[str, Any]]:
     return list(stage or [])
 
 
+def _remember_repair_candidate(snapshot: dict[str, Any], item_key: str) -> None:
+    if not item_key or item_key == "repair_kit":
+        return
+    candidates = list(snapshot.get("repair_candidates") or [])
+    candidates.append(item_key)
+    snapshot["repair_candidates"] = candidates
+
+
+def _item_title(game: Any, item_key: str) -> str:
+    item = getattr(game, "DIG_SHOP_ITEMS", {}).get(item_key)
+    if item:
+        return str(item[0])
+    return item_key
+
+
+def _use_interactive_medkit(
+    db: Database,
+    game: Any,
+    chat_id: int,
+    user_id: int,
+    snapshot: dict[str, Any],
+    effects: list[str],
+    text: str,
+) -> bool:
+    if not db.consume_dig_item(chat_id, user_id, "medkit"):
+        return False
+    _remember_repair_candidate(snapshot, "medkit")
+    effects.append(text)
+    return True
+
+
+def _apply_interactive_repair_kit(
+    db: Database,
+    game: Any,
+    chat_id: int,
+    user_id: int,
+    snapshot: dict[str, Any],
+    effects: list[str],
+) -> bool:
+    candidates = [str(item) for item in (snapshot.get("repair_candidates") or []) if item and item != "repair_kit"]
+    if not candidates:
+        return False
+    restored = candidates[-1]
+    if not db.consume_dig_item(chat_id, user_id, "repair_kit"):
+        return False
+    db.add_dig_item(chat_id, user_id, restored, 1)
+    effects.append(f"Ремонтный набор восстановил: {_item_title(game, restored)}")
+    return True
+
+
 def _db() -> Database:
     db = Database(load_config().db_path)
     db.init()
@@ -548,7 +598,7 @@ def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) 
     scanner = items.get("scanner", 0) > 0 and db.consume_dig_item(0, uid, "scanner")
     map_used = items.get("map", 0) > 0 and db.consume_dig_item(0, uid, "map")
     talisman = items.get("talisman", 0) > 0 and db.consume_dig_item(0, uid, "talisman")
-    repair = items.get("repair_kit", 0) > 0 and db.consume_dig_item(0, uid, "repair_kit")
+    repair = items.get("repair_kit", 0) > 0
     chest = items.get("mystery_chest", 0) > 0 and db.consume_dig_item(0, uid, "mystery_chest")
 
     if compass:
@@ -578,7 +628,6 @@ def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) 
         (scanner, "Сканер породы: риск обвала -30%"),
         (map_used, "Карта тоннелей: +15% к артефактам"),
         (talisman, "Талисман: котоины будут удвоены"),
-        (repair, "Ремонтный набор активирован"),
         (chest, "Таинственный сундук активирован"),
         (collection_bonus, "Коллекция артефактов: +5% котоинов"),
     ):
@@ -609,6 +658,7 @@ def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) 
         "shovel": shovel,
         "flashlight": flashlight,
         "bucket": bucket,
+        "compass": compass,
         "scanner": scanner,
         "map": map_used,
         "talisman": talisman,
@@ -670,6 +720,19 @@ def _begin_interactive_manual(db: Database, game: Any, user: dict[str, Any], now
     scanner = items.get("scanner", 0) > 0 and db.consume_dig_item(0, uid, "scanner")
     talisman = items.get("talisman", 0) > 0 and db.consume_dig_item(0, uid, "talisman")
     chest = items.get("mystery_chest", 0) > 0 and db.consume_dig_item(0, uid, "mystery_chest")
+    repair_candidates = [
+        key
+        for key, used in (
+            ("helmet", helmet),
+            ("shovel", shovel),
+            ("bucket", bucket),
+            ("compass", compass),
+            ("scanner", scanner),
+            ("talisman", talisman),
+            ("mystery_chest", chest),
+        )
+        if used
+    ]
 
     if compass:
         route_chance = round(route_chance * 1.25)
@@ -718,6 +781,7 @@ def _begin_interactive_manual(db: Database, game: Any, user: dict[str, Any], now
         "cat_companion_count": int(items.get("cat_companion", 0)),
         "ore_units": 0,
         "used_tools": [],
+        "repair_candidates": repair_candidates,
         "used_effects": effects,
     }
     db.set_dig_luck(0, uid, int(snapshot["luck_after"]), now.isoformat(timespec="seconds"))
@@ -852,15 +916,18 @@ def _finish_manual(db: Database, game: Any, user: dict[str, Any], session: dict[
         restored = (
             "bucket" if data.get("bucket") else
             "flashlight" if data.get("flashlight") else
+            "map" if data.get("map") else
+            "compass" if data.get("compass") else
+            "scanner" if data.get("scanner") else
+            "talisman" if data.get("talisman") else
+            "mystery_chest" if data.get("chest") else
             "helmet" if data.get("helmet") else
             "shovel" if data.get("shovel") else
             None
         )
-        if restored:
+        if restored and db.consume_dig_item(0, uid, "repair_kit"):
             db.add_dig_item(0, uid, restored, 1)
             effects.append(f"Ремонтный набор восстановил: {game.DIG_SHOP_ITEMS[restored][0]}")
-        else:
-            db.add_dig_item(0, uid, "repair_kit", 1)
 
     coins = game.apply_premium_coin_bonus(uid, coins, effects)
     text = now.isoformat(timespec="seconds")
@@ -1282,6 +1349,7 @@ def _settle_interactive_manual(
         coins, event = game.dig_random_event(depth, coins)
         if coins < before_event and items.get("medkit", 0) > 0 and db.consume_dig_item(0, uid, "medkit"):
             coins = before_event
+            _remember_repair_candidate(snapshot, "medkit")
             effects.append("Аптечка: потеря котоинов отменена")
         artifact_bonus = max(0, int((float(snapshot.get("route_artifacts", 1.0)) - 1) * 10))
         artifact_coins, artifact = _find_artifact(
@@ -1300,6 +1368,8 @@ def _settle_interactive_manual(
         final_bonus, final_text = final_depth_bonus(depth, str(snapshot.get("mine_key") or "old_mine"))
         coins += final_bonus
         effects.append(final_text)
+
+    _apply_interactive_repair_kit(db, game, 0, uid, snapshot, effects)
 
     text = now.isoformat(timespec="seconds")
     db.update_dig_player_after_dig(
@@ -1746,12 +1816,26 @@ def miniapp_interactive_cell(
                 if db.consume_dig_item(0, user["id"], "insurance"):
                     snapshot["insurance_used"] = True
                     snapshot["insurance_count"] = max(0, int(snapshot.get("insurance_count", 0)) - 1)
+                    _remember_repair_candidate(snapshot, "insurance")
                     saved = True
             protection = min(45, int(snapshot.get("loss_protection", 0)))
             if not saved and protection and secrets.randbelow(100) < protection:
                 saved = True
             if not saved:
-                durability -= 1
+                effects = list(snapshot.get("used_effects") or [])
+                if _use_interactive_medkit(
+                    db,
+                    game,
+                    0,
+                    user["id"],
+                    snapshot,
+                    effects,
+                    "Аптечка: потеря прочности отменена",
+                ):
+                    snapshot["used_effects"] = effects
+                    saved = True
+                else:
+                    durability -= 1
             if durability <= 0:
                 db.update_interactive_dig_session(
                     session["id"],
@@ -1799,7 +1883,7 @@ def miniapp_interactive_tool(
             used_tools = set(snapshot.get("used_tools") or [])
             if tool in used_tools or int(snapshot.get(f"{tool}_count", 0)) <= 0:
                 raise HTTPException(400, "Этот предмет уже использован.")
-            if tool in {"flashlight", "map", "dynamite"} and not db.consume_dig_item(0, user["id"], tool):
+            if not db.consume_dig_item(0, user["id"], tool):
                 raise HTTPException(400, "Предмета уже нет в сумке.")
             available = list(range(len(cells)))
             message = "Предмет использован."
@@ -1822,6 +1906,7 @@ def miniapp_interactive_tool(
                 message = "Динамит ослабил несколько клеток."
             used_tools.add(tool)
             snapshot["used_tools"] = sorted(used_tools)
+            _remember_repair_candidate(snapshot, tool)
             snapshot[f"{tool}_count"] = max(0, int(snapshot.get(f"{tool}_count", 0)) - 1)
             db.update_interactive_dig_session(
                 session["id"],
@@ -1857,9 +1942,25 @@ def miniapp_interactive_event(
             choice_coins = int(choice.get("coins", 0))
             if choice_coins > 0:
                 choice_coins = scale_interactive_reward(choice_coins)
+            effects = list(snapshot.get("used_effects") or [])
+            medkit_message = ""
+            if choice_coins < 0 and _use_interactive_medkit(
+                db,
+                game,
+                0,
+                user["id"],
+                snapshot,
+                effects,
+                "Аптечка: потеря котоинов в событии отменена",
+            ):
+                choice_coins = 0
+                medkit_message = " Аптечка отменила потерю котоинов."
             coins = max(0, int(session["temporary_coins"]) + choice_coins)
             durability = int(session["durability"])
             merchant_message = ""
+            durability_delta = int(choice.get("durability", 0))
+            if durability_delta:
+                durability = max(0, min(INTERACTIVE_DIG_DURABILITY, durability + durability_delta))
             if choice.get("merchant"):
                 ore_units = int(snapshot.get("ore_units", 0))
                 price = merchant_ore_price()
@@ -1873,8 +1974,20 @@ def miniapp_interactive_event(
                 )
             collapsed = False
             if int(choice.get("risk", 0)) and secrets.randbelow(100) < int(choice.get("risk", 0)):
-                durability -= 1
+                if _use_interactive_medkit(
+                    db,
+                    game,
+                    0,
+                    user["id"],
+                    snapshot,
+                    effects,
+                    "Аптечка: повреждение от риска отменено",
+                ):
+                    medkit_message = " Аптечка спасла прочность."
+                else:
+                    durability -= 1
                 collapsed = durability <= 0
+            snapshot["used_effects"] = effects
             if choice.get("settle") or stage.get("type") == "final" or collapsed:
                 db.update_interactive_dig_session(
                     session["id"],
@@ -1898,7 +2011,7 @@ def miniapp_interactive_event(
                 used_cells_json="[]",
                 equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
             )
-            return {"ok": True, "message": f"Выбор принят: {choice.get('label', 'действие')}.{merchant_message}", "state": _state(db, user["id"])}
+            return {"ok": True, "message": f"Выбор принят: {choice.get('label', 'действие')}.{merchant_message}{medkit_message}", "state": _state(db, user["id"])}
         finally:
             db.close()
 

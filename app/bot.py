@@ -1243,6 +1243,40 @@ def dig_items_map(chat_id: int, user_id: int) -> dict[str, int]:
     return {item.item_key: item.quantity for item in db.list_dig_items(chat_id, user_id)}
 
 
+def remember_repair_candidate(snapshot: dict, item_key: str) -> None:
+    if not item_key or item_key == "repair_kit":
+        return
+    candidates = list(snapshot.get("repair_candidates") or [])
+    candidates.append(item_key)
+    snapshot["repair_candidates"] = candidates
+
+
+def apply_interactive_repair_kit(chat_id: int, user_id: int, snapshot: dict, used_effects: list[str]) -> bool:
+    candidates = [str(item) for item in (snapshot.get("repair_candidates") or []) if item and item != "repair_kit"]
+    if not candidates:
+        return False
+    restored = candidates[-1]
+    if not db.consume_dig_item(chat_id, user_id, "repair_kit"):
+        return False
+    db.add_dig_item(chat_id, user_id, restored, 1)
+    used_effects.append(f"Ремонтный набор восстановил: {DIG_SHOP_ITEMS.get(restored, (restored,))[0]}")
+    return True
+
+
+def use_interactive_medkit(
+    chat_id: int,
+    user_id: int,
+    snapshot: dict,
+    used_effects: list[str],
+    text: str,
+) -> bool:
+    if not db.consume_dig_item(chat_id, user_id, "medkit"):
+        return False
+    remember_repair_candidate(snapshot, "medkit")
+    used_effects.append(text)
+    return True
+
+
 def dig_rank_name(items: dict[str, int]) -> str:
     for key, name in DIG_RANKS:
         if items.get(key, 0) > 0:
@@ -1781,7 +1815,7 @@ def run_private_dig(chat_id: int, user: User) -> DigReply:
     map_used = items.get("map", 0) > 0 and db.consume_dig_item(chat_id, user.id, "map")
     talisman_used = items.get("talisman", 0) > 0 and db.consume_dig_item(chat_id, user.id, "talisman")
     medkit_available = items.get("medkit", 0) > 0
-    repair_used = items.get("repair_kit", 0) > 0 and db.consume_dig_item(chat_id, user.id, "repair_kit")
+    repair_available = items.get("repair_kit", 0) > 0
     chest_used = items.get("mystery_chest", 0) > 0 and db.consume_dig_item(chat_id, user.id, "mystery_chest")
     shovel_bonus = dig_permanent_shovel_bonus(items)
     cart_bonus = dig_cart_bonus(items)
@@ -1885,13 +1919,22 @@ def run_private_dig(chat_id: int, user: User) -> DigReply:
             db.add_dig_item(chat_id, user.id, "insurance", 1)
             used_effects.append("Таинственный сундук: найдена страховка")
     coins = apply_dig_rank_coin_bonus(items, coins, used_effects)
-    if repair_used:
-        restored = "bucket" if bucket_used else "flashlight" if flashlight_used else "helmet" if helmet_used else "shovel" if shovel_used else None
-        if restored:
+    if repair_available:
+        restored = (
+            "bucket" if bucket_used else
+            "flashlight" if flashlight_used else
+            "map" if map_used else
+            "compass" if compass_used else
+            "scanner" if scanner_used else
+            "talisman" if talisman_used else
+            "mystery_chest" if chest_used else
+            "helmet" if helmet_used else
+            "shovel" if shovel_used else
+            None
+        )
+        if restored and db.consume_dig_item(chat_id, user.id, "repair_kit"):
             db.add_dig_item(chat_id, user.id, restored, 1)
             used_effects.append(f"Ремонтный набор восстановил: {DIG_SHOP_ITEMS[restored][0]}")
-        else:
-            db.add_dig_item(chat_id, user.id, "repair_kit", 1)
     coins = apply_premium_coin_bonus(user.id, coins, used_effects)
     golden_ticket_found = find_golden_ticket(dug)
     if golden_ticket_found:
@@ -2130,7 +2173,19 @@ def start_interactive_dig(chat_id: int, user: User) -> InteractiveDigReply:
     map_used = False
     talisman_used = items.get("talisman", 0) > 0 and db.consume_dig_item(chat_id, user.id, "talisman")
     chest_used = items.get("mystery_chest", 0) > 0 and db.consume_dig_item(chat_id, user.id, "mystery_chest")
-    repair_used = items.get("repair_kit", 0) > 0 and db.consume_dig_item(chat_id, user.id, "repair_kit")
+    repair_candidates = [
+        key
+        for key, used in (
+            ("helmet", helmet_used),
+            ("shovel", shovel_used),
+            ("bucket", bucket_used),
+            ("compass", compass_used),
+            ("scanner", scanner_used),
+            ("talisman", talisman_used),
+            ("mystery_chest", chest_used),
+        )
+        if used
+    ]
 
     if compass_used:
         route_chance = round(route_chance * 1.25)
@@ -2198,7 +2253,7 @@ def start_interactive_dig(chat_id: int, user: User) -> InteractiveDigReply:
         "used_tools": [],
         "talisman_used": talisman_used,
         "chest_used": chest_used,
-        "repair_used": repair_used,
+        "repair_candidates": repair_candidates,
         "used_effects": used_effects,
         "ore_units": 0,
     }
@@ -2249,6 +2304,7 @@ def settle_interactive_dig(session: dict, user: User, *, collapsed: bool) -> Dig
         payout, event_text = dig_random_event(depth, payout)
         if payout < before_event and items.get("medkit", 0) > 0 and db.consume_dig_item(chat_id, user.id, "medkit"):
             payout = before_event
+            remember_repair_candidate(snapshot, "medkit")
             used_effects.append("Аптечка: потеря котоинов отменена")
         artifact_bonus, artifact_text = find_dig_artifact(
             chat_id,
@@ -2277,6 +2333,8 @@ def settle_interactive_dig(session: dict, user: User, *, collapsed: bool) -> Dig
     if depth >= INTERACTIVE_DIG_MAX_DEPTH and not collapsed:
         final_bonus, final_bonus_text = final_depth_bonus(depth, str(snapshot.get("mine_key") or "old_mine"))
         payout += final_bonus
+
+    apply_interactive_repair_kit(chat_id, user.id, snapshot, used_effects)
 
     db.update_dig_player_after_dig(
         chat_id=chat_id,
@@ -4925,12 +4983,24 @@ async def cb_interactive_dig_cell(callback: CallbackQuery) -> None:
             if db.consume_dig_item(int(session["chat_id"]), callback.from_user.id, "insurance"):
                 snapshot["insurance_used"] = True
                 snapshot["insurance_count"] = max(0, int(snapshot.get("insurance_count", 0)) - 1)
+                remember_repair_candidate(snapshot, "insurance")
                 saved_by_gear = True
         protection = min(45, int(snapshot.get("loss_protection", 0)))
         if not saved_by_gear and protection and secrets.randbelow(100) < protection:
             saved_by_gear = True
         if not saved_by_gear:
-            durability -= 1
+            used_effects = list(snapshot.get("used_effects") or [])
+            if use_interactive_medkit(
+                int(session["chat_id"]),
+                callback.from_user.id,
+                snapshot,
+                used_effects,
+                "Аптечка: потеря прочности отменена",
+            ):
+                snapshot["used_effects"] = used_effects
+                saved_by_gear = True
+            else:
+                durability -= 1
 
         if durability <= 0:
             updated = dict(session)
@@ -5021,7 +5091,7 @@ async def cb_interactive_dig_tool(callback: CallbackQuery) -> None:
             db.update_interactive_dig_session(session_id, processing=0)
             await callback.answer("Этот предмет уже использован.", show_alert=True)
             return
-        if tool_key in {"flashlight", "map", "dynamite"} and not db.consume_dig_item(int(session["chat_id"]), callback.from_user.id, tool_key):
+        if not db.consume_dig_item(int(session["chat_id"]), callback.from_user.id, tool_key):
             db.update_interactive_dig_session(session_id, processing=0)
             await callback.answer("Предмета уже нет в сумке.", show_alert=True)
             return
@@ -5071,6 +5141,7 @@ async def cb_interactive_dig_tool(callback: CallbackQuery) -> None:
         snapshot[f"{tool_key}_count"] = max(0, int(snapshot.get(f"{tool_key}_count", 0)) - 1)
         used_tools.add(tool_key)
         snapshot["used_tools"] = sorted(used_tools)
+        remember_repair_candidate(snapshot, tool_key)
         db.update_interactive_dig_session(
             session_id,
             cells_json=json.dumps(stage, ensure_ascii=False),
@@ -5126,18 +5197,39 @@ async def cb_interactive_dig_event(callback: CallbackQuery) -> None:
             choice_coins = int(choice.get("coins", 0))
             if choice_coins > 0:
                 choice_coins = scale_interactive_reward(choice_coins)
+            used_effects = list(snapshot.get("used_effects") or [])
+            if choice_coins < 0 and use_interactive_medkit(
+                int(session["chat_id"]),
+                callback.from_user.id,
+                snapshot,
+                used_effects,
+                "Аптечка: потеря котоинов в событии отменена",
+            ):
+                choice_coins = 0
+                snapshot["used_effects"] = used_effects
             final_coins = max(0, int(session["temporary_coins"]) + choice_coins)
             final_durability = int(session["durability"])
             risk = int(choice.get("risk", 0))
             collapsed = False
             if risk and secrets.randbelow(100) < risk:
-                final_durability -= 1
+                used_effects = list(snapshot.get("used_effects") or [])
+                if use_interactive_medkit(
+                    int(session["chat_id"]),
+                    callback.from_user.id,
+                    snapshot,
+                    used_effects,
+                    "Аптечка: повреждение от риска отменено",
+                ):
+                    snapshot["used_effects"] = used_effects
+                else:
+                    final_durability -= 1
                 collapsed = final_durability <= 0
             db.update_interactive_dig_session(
                 session_id,
                 depth=final_depth,
                 durability=max(0, final_durability),
                 temporary_coins=final_coins,
+                equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
                 processing=0,
             )
             session.update(
@@ -5145,6 +5237,7 @@ async def cb_interactive_dig_event(callback: CallbackQuery) -> None:
                     "depth": final_depth,
                     "durability": max(0, final_durability),
                     "temporary_coins": final_coins,
+                    "equipment_snapshot": json.dumps(snapshot, ensure_ascii=False),
                     "processing": 0,
                 }
             )
@@ -5167,6 +5260,16 @@ async def cb_interactive_dig_event(callback: CallbackQuery) -> None:
         choice_coins = int(choice.get("coins", 0))
         if choice_coins > 0:
             choice_coins = scale_interactive_reward(choice_coins)
+        used_effects = list(snapshot.get("used_effects") or [])
+        if choice_coins < 0 and use_interactive_medkit(
+            int(session["chat_id"]),
+            callback.from_user.id,
+            snapshot,
+            used_effects,
+            "Аптечка: потеря котоинов в событии отменена",
+        ):
+            choice_coins = 0
+            snapshot["used_effects"] = used_effects
         temporary_coins = max(0, int(session["temporary_coins"]) + choice_coins)
         durability = min(
             INTERACTIVE_DIG_DURABILITY,
@@ -5199,8 +5302,19 @@ async def cb_interactive_dig_event(callback: CallbackQuery) -> None:
         risk = int(choice.get("risk", 0))
         if risk and secrets.randbelow(100) < risk:
             failed = True
-            durability -= 1
-            messages.append(f"Риск сыграл против кота. Прочность: <b>{durability}</b>/{INTERACTIVE_DIG_DURABILITY}.")
+            used_effects = list(snapshot.get("used_effects") or [])
+            if use_interactive_medkit(
+                int(session["chat_id"]),
+                callback.from_user.id,
+                snapshot,
+                used_effects,
+                "Аптечка: повреждение от риска отменено",
+            ):
+                snapshot["used_effects"] = used_effects
+                messages.append("Риск сыграл против кота, но аптечка спасла прочность.")
+            else:
+                durability -= 1
+                messages.append(f"Риск сыграл против кота. Прочность: <b>{durability}</b>/{INTERACTIVE_DIG_DURABILITY}.")
 
         if durability <= 0:
             updated = dict(session)
@@ -9355,7 +9469,7 @@ async def dig_command(message: Message) -> None:
     map_used = items.get("map", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "map")
     talisman_used = items.get("talisman", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "talisman")
     medkit_available = items.get("medkit", 0) > 0
-    repair_used = items.get("repair_kit", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "repair_kit")
+    repair_available = items.get("repair_kit", 0) > 0
     chest_used = items.get("mystery_chest", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "mystery_chest")
     shovel_bonus = dig_permanent_shovel_bonus(items)
     cart_bonus = dig_cart_bonus(items)
@@ -9469,13 +9583,22 @@ async def dig_command(message: Message) -> None:
             db.add_dig_item(message.chat.id, message.from_user.id, "dynamite", 1)
             used_effects.append("Таинственный сундук: найден динамит")
     coins = apply_dig_rank_coin_bonus(items, coins, used_effects)
-    if repair_used:
-        restored = "bucket" if bucket_used else "flashlight" if flashlight_used else "helmet" if helmet_used else "shovel" if shovel_used else None
-        if restored:
+    if repair_available:
+        restored = (
+            "bucket" if bucket_used else
+            "flashlight" if flashlight_used else
+            "map" if map_used else
+            "compass" if compass_used else
+            "scanner" if scanner_used else
+            "talisman" if talisman_used else
+            "mystery_chest" if chest_used else
+            "helmet" if helmet_used else
+            "shovel" if shovel_used else
+            None
+        )
+        if restored and db.consume_dig_item(message.chat.id, message.from_user.id, "repair_kit"):
             db.add_dig_item(message.chat.id, message.from_user.id, restored, 1)
             used_effects.append(f"Ремонтный набор восстановил: {DIG_SHOP_ITEMS[restored][0]}")
-        else:
-            db.add_dig_item(message.chat.id, message.from_user.id, "repair_kit", 1)
     coins = apply_premium_coin_bonus(message.from_user.id, coins, used_effects)
     db.update_dig_player_after_dig(
         chat_id=message.chat.id,
