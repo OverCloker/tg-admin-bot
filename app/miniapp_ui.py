@@ -1649,7 +1649,7 @@ MINI_APP_HTML = r"""<!doctype html>
     const isSelf = viewer.isSelf !== false;
     content.innerHTML = `<section class="panel">
       <h2>${isSelf ? "Друзья" : "Связи профиля"}</h2>
-      <p class="muted">${friends.length ? "Нажми на человека, чтобы открыть его профиль." : "Пока нет друзей, которые зарегистрированы в шахте."}</p>
+      <p class="muted">${friends.length ? "Нажми на человека, чтобы открыть его профиль." : "Пока нет друзей из общих чатов."}</p>
       ${friends.length ? `<div class="friend-list">${friends.map(friendRowHtml).join("")}</div>` : ""}
       <button class="btn secondary" onclick="${isSelf ? "showProfile()" : "showProfile()"}">Назад к профилю</button>
     </section>`;

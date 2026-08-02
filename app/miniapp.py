@@ -514,7 +514,7 @@ async def _ensure_miniapp_avatar(user_id: int) -> str | None:
 
 def _miniapp_social_people(db: Database, viewer_id: int) -> list[dict[str, Any]]:
     people: dict[int, dict[str, Any]] = {}
-    for item in db.list_registered_social_gift_friends(viewer_id, limit=80):
+    for item in db.list_social_friends(viewer_id, limit=80):
         people[item.user_id] = {
             "id": item.user_id,
             "username": item.username or "",
@@ -524,7 +524,7 @@ def _miniapp_social_people(db: Database, viewer_id: int) -> list[dict[str, Any]]
             "chatCount": item.chat_count,
             "photoUrl": _miniapp_avatar_url(item.user_id),
         }
-    for item in db.list_registered_social_gift_partners(viewer_id, limit=20):
+    for item in db.list_social_partners(viewer_id, limit=20):
         people[item.user_id] = {
             "id": item.user_id,
             "username": item.username or "",
@@ -1496,8 +1496,9 @@ async def miniapp_profile(
         if relation is None:
             raise HTTPException(403, "Этот профиль доступен только вам, друзьям или паре.")
         target = db.get_dig_player(0, target_id)
-        if not target:
-            raise HTTPException(404, "Профиль ещё не создан: игрок не зарегистрирован в шахте.")
+        known_target = db.get_known_user(target_id)
+        if not target and target_id != viewer_id and not known_target:
+            raise HTTPException(404, "Профиль не найден.")
         photo_url = str(user.get("photo_url") or "") if target_id == viewer_id else _miniapp_avatar_url(target_id)
         if target_id == viewer_id and not photo_url:
             photo_url = _miniapp_avatar_url(target_id)
@@ -1505,8 +1506,8 @@ async def miniapp_profile(
             db,
             premium,
             target_id,
-            target.username,
-            target.full_name,
+            target.username if target else (known_target.username if known_target else user.get("username")),
+            target.full_name if target else (known_target.full_name if known_target else user["full_name"]),
             photo_url=photo_url,
         )
         target_people = _miniapp_social_people(db, target_id)

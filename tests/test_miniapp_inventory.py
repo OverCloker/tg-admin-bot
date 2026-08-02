@@ -143,13 +143,16 @@ def test_miniapp_social_people_include_profile_links_for_friends_and_partner(tmp
     db = Database(str(tmp_path / "bot.sqlite3"))
     db.init()
     db.register_dig_player(0, 1, "sender", "Даритель")
-    db.register_dig_player(0, 2, "friend", "Друг")
     db.register_dig_player(0, 3, "partner", "Пара")
+    db.register_dig_player(0, 4, "miner", "Шахтёр")
     db.upsert_seen_user(-100, 1, "sender", "Даритель", False)
-    db.upsert_seen_user(-100, 2, "friend", "Друг", False)
+    db.upsert_seen_user(-100, 2, "friend", "Друг без шахты", False)
     db.upsert_seen_user(-100, 3, "partner", "Пара", False)
+    db.upsert_seen_user(-100, 4, "miner", "Шахтёр", False)
     db.create_friend_request(-100, 1, 2)
     db.accept_friend_request(-100, 1, 2)
+    db.create_friend_request(-100, 1, 4)
+    db.accept_friend_request(-100, 1, 4)
     db.create_couple_request(-100, 1, 3)
     db.accept_couple_request(-100, 1, 3)
 
@@ -160,7 +163,8 @@ def test_miniapp_social_people_include_profile_links_for_friends_and_partner(tmp
     finally:
         db.close()
 
-    assert {item["id"] for item in people} == {2, 3}
+    assert {item["id"] for item in people} == {2, 3, 4}
+    assert any(item["id"] == 2 and item["fullName"] == "Друг без шахты" for item in people)
     assert any(item["relation"] == "partner" and item["photoUrl"].startswith("/miniapp/avatar/3?sig=") for item in people)
     assert target and target["relation"] == "friend"
     assert _miniapp_social_target(db, 1, 1) == {"relation": "self", "relationTitle": ""}
