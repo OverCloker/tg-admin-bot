@@ -546,34 +546,6 @@ def _state(db: Database, user_id: int) -> dict[str, Any]:
             }}
 
 
-def _begin(db: Database, game: Any, user: dict[str, Any], now: datetime) -> None:
-    uid = user["id"]
-    player = db.get_dig_player(0, uid)
-    if not player:
-        raise HTTPException(400, "Сначала зарегистрируйтесь в игре.")
-    if player.last_dig_at:
-        next_dig = datetime.fromisoformat(player.last_dig_at) + game.user_dig_cooldown(uid)
-        if now < next_dig:
-            left = max(1, int((next_dig - now).total_seconds()))
-            raise HTTPException(429, f"Кирка отдыхает еще {left // 3600} ч {(left % 3600) // 60} мин.")
-    route_key, route = _dig_route(db, game, uid)
-    luck = _refreshed_luck(db, game, uid, player.luck, player.last_luck_at, now)
-    if luck < game.DIG_LUCK_COST:
-        raise HTTPException(400, f"Недостаточно удачи: нужно {game.DIG_LUCK_COST}, сейчас {luck}.")
-    items = _items_map(db, uid)
-    helmet = items.get("helmet", 0) > 0 and db.consume_dig_item(0, uid, "helmet")
-    shovel = items.get("shovel", 0) > 0 and db.consume_dig_item(0, uid, "shovel")
-    flashlight = items.get("flashlight", 0) > 0 and db.consume_dig_item(0, uid, "flashlight")
-    route_name, route_chance, route_coins, route_artifacts, route_collapse, _ = route
-    data = {"routeName": route_name, "routeChance": route_chance, "routeCoins": route_coins,
-            "routeArtifacts": route_artifacts, "routeCollapse": route_collapse,
-            "luckForChance": min(100, luck + (5 if helmet else 0)), "luckAfter": luck - game.DIG_LUCK_COST,
-            "helmet": helmet, "shovel": shovel, "flashlight": flashlight}
-    text = now.isoformat(timespec="seconds")
-    db.set_dig_luck(0, uid, data["luckAfter"], text)
-    db.save_dig_session(uid, 0, luck, route_key, json.dumps(data), json.dumps([]), text)
-
-
 def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) -> None:
     uid = user["id"]
     player = db.get_dig_player(0, uid)
@@ -812,50 +784,6 @@ def _begin_interactive_manual(db: Database, game: Any, user: dict[str, Any], now
         equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
         cells_json=json.dumps(initial_stage, ensure_ascii=False),
     )
-
-
-def _finish(db: Database, game: Any, user: dict[str, Any], session: dict[str, Any], depth: int, now: datetime) -> str:
-    uid = user["id"]
-    data = json.loads(session["route_data"])
-    effects = json.loads(session["used_effects"] or "[]")
-    collapse = max(0, int(max(0, 100 - data["luckForChance"]) * data["routeCollapse"]))
-    if data["shovel"]:
-        collapse //= 2
-    lost = 0
-    if depth and collapse and secrets.randbelow(100) < collapse:
-        if db.consume_dig_item(0, uid, "safe"):
-            effects.append("Сейф: обвал остановлен")
-        else:
-            lost = 1 + secrets.randbelow(depth)
-            depth = max(0, depth - lost)
-    coins = max(1, int(game.dig_coin_reward(depth) * data["routeCoins"] + 0.9999))
-    coins = game.scale_auto_dig_reward(coins)
-    event = None
-    effects.append("Автоматический режим: добыча снижена, ручных событий и руды нет")
-    artifact_coins, artifact = _find_artifact(db, game, uid, depth, _items_map(db, uid), max(0, int((data["routeArtifacts"] - 1) * 10)))
-    coins = game.apply_premium_coin_bonus(uid, coins + artifact_coins, effects)
-    text = now.isoformat(timespec="seconds")
-    db.update_dig_player_after_dig(0, uid, user.get("username"), user["full_name"], coins, depth, depth, data["luckAfter"], text, text)
-    db.add_dig_weekly_depth(uid, game.dig_week_start(now), depth)
-    progress = db.update_dig_progress(uid, 5 + depth * 10, depth > 0, session["route_key"])
-    _update_contracts(db, game, uid, depth, coins, artifact is not None)
-    expedition = db.add_dig_expedition_progress(0, uid, now.date().isoformat(), depth, game.DIG_EXPEDITION_TARGET)
-    if expedition["completed"]:
-        db.reward_dig_expedition(0, now.date().isoformat(), game.DIG_EXPEDITION_REWARD)
-    ticket_found = game.find_golden_ticket(depth)
-    if ticket_found:
-        db.add_dig_item(0, uid, "golden_ticket", 1)
-    db.clear_dig_session(uid)
-    lines = [f"Вылазка завершена: {depth} м", f"+{coins} котоинов", f"Уровень {progress['level']}, XP {progress['xp']}"]
-    if lost:
-        lines.append(f"Обвал забрал {lost} м")
-    if event:
-        lines.append(event)
-    if artifact:
-        lines.append(artifact)
-    if ticket_found:
-        lines.append("Золотой билет найден! Откройте его в игре Mini App.")
-    return "\n".join(lines)
 
 
 def _finish_manual(db: Database, game: Any, user: dict[str, Any], session: dict[str, Any], depth: int, now: datetime) -> str:
@@ -2117,32 +2045,3 @@ def miniapp_dig_manual(
             return {"ok": True, "finished": True, "meter": max(0, depth), "chance": chance, "message": message, "state": _state(db, user["id"])}
         finally:
             db.close()
-
-
-@router.post("/miniapp/mine/dig")
-def miniapp_dig(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict[str, Any]:
-    user = _telegram_user(x_telegram_init_data)
-    with DIG_LOCK:
-        db = _db()
-        try:
-            from . import bot as game
-            now = datetime.now(timezone.utc)
-            session = db.get_dig_session(user["id"])
-            if not session:
-                _begin(db, game, user, now)
-                session = db.get_dig_session(user["id"])
-            meter = int(session["depth"]) + 1
-            data = json.loads(session["route_data"])
-            chance = min(95.0, float(game.DIG_SUCCESS_CHANCES[meter - 1]) + float(data["routeChance"]) + (10 if data["flashlight"] else 0) + game.dig_permanent_shovel_bonus(_items_map(db, user["id"])))
-            success = secrets.randbelow(10000) < int(chance * 100)
-            if success and meter < 10:
-                db.save_dig_session(user["id"], meter, int(session["luck_before"]), session["route_key"], session["route_data"], session["used_effects"], session["started_at"])
-                return {"ok": True, "finished": False, "meter": meter, "chance": chance, "message": f"Метр {meter} пройден. Копайте дальше.", "state": _state(db, user["id"])}
-            depth = meter if success else meter - 1
-            message = _finish(db, game, user, session, max(0, depth), now)
-            return {"ok": True, "finished": True, "meter": max(0, depth), "chance": chance, "message": message, "state": _state(db, user["id"])}
-        finally:
-            db.close()
-
-
-MINI_APP_HTML = """<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Шахта</title><script src="https://telegram.org/js/telegram-web-app.js"></script><style>body{font-family:system-ui;background:#0b111b;color:#f4f7fb;padding:16px}main{max-width:520px;margin:auto}.panel,.stat{background:#172434;border:1px solid #26394d;border-radius:14px;padding:14px;margin-top:12px}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.stat b{display:block;font-size:19px;margin-top:4px}.muted{color:#9ba8b8}.depth{text-align:center;font-size:44px;font-weight:800;padding:18px}.meter{height:10px;background:#0e1722;border-radius:9px;overflow:hidden}.fill{height:100%;background:#45b9ef}.btn{width:100%;border:0;border-radius:12px;padding:15px;margin-top:12px;background:#268bd2;color:white;font-size:18px;font-weight:700}.notice{white-space:pre-line}</style></head><body><main><h1>⛏️ Шахта</h1><div class="muted" id="name">Загрузка...</div><div id="content"></div></main><script>const tg=window.Telegram&&window.Telegram.WebApp;if(tg){tg.ready();tg.expand()}const H=()=>({'X-Telegram-Init-Data':tg?tg.initData:''});let s=null,busy=false;async function api(p,o={}){let r=await fetch(p,Object.assign({},o,{headers:Object.assign({},H(),o.headers||{}, {'Content-Type':'application/json'})}));let d=await r.json().catch(()=>({detail:'Ошибка сервера'}));if(!r.ok)throw Error(d.detail||'Ошибка запроса');return d}function render(){let c=document.getElementById('content');if(!s)return;if(!s.registered){c.innerHTML='<section class="panel"><div class="depth">⛏️</div><div>Зарегистрируйтесь, чтобы начать общую шахту. Прогресс и котоины сохраняются и в боте.</div><button class="btn" onclick="reg()">Начать игру</button></section>';return}document.getElementById('name').textContent=s.name;let d=s.sessionDepth||0;let disabled=s.cooldownUntil&&!s.inSession;c.innerHTML='<div class="stats"><div class="stat">🪙<b>'+s.coins+'</b></div><div class="stat">🍀<b>'+s.luck+'/100</b></div><div class="stat">🏆<b>'+s.record+' м</b></div></div><section class="panel"><div class="muted">Текущая вылазка</div><div class="depth">'+d+'/10 м</div><div class="meter"><div class="fill" style="width:'+(d*10)+'%"></div></div><button class="btn" '+(disabled?'disabled':'')+' onclick="dig()">⛏️ Копать следующий метр</button><div class="muted">'+(disabled?'Кулдаун: '+new Date(s.cooldownUntil).toLocaleString():'Каждое нажатие проверяет один метр. Шансы те же, что в боте.')+'</div></section><section class="panel">Уровень '+s.level+' · XP '+s.xp+' · серия '+s.streak+'</section>'}async function load(){try{s=await api('/miniapp/mine');render()}catch(e){content.innerHTML='<section class="panel">'+e.message+'</section>'}}async function reg(){try{s=await api('/miniapp/mine/register',{method:'POST'});render()}catch(e){alert(e.message)}}async function dig(){if(busy)return;busy=true;try{let d=await api('/miniapp/mine/dig',{method:'POST'});s=d.state;render();let n=document.createElement('section');n.className='panel notice';n.textContent=d.message;content.prepend(n)}catch(e){alert(e.message);load()}finally{busy=false}}load();</script></body></html>"""

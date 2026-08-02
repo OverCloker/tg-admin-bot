@@ -81,50 +81,60 @@ def test_ore_and_merchant_price_are_predictable_for_current_bucket() -> None:
 def test_interactive_session_blocks_same_cell_and_foreign_user(tmp_path) -> None:
     db = Database(str(tmp_path / "bot.sqlite3"))
     db.init()
-    session = db.create_interactive_dig_session(
-        session_id="session1",
-        user_id=10,
-        chat_id=-100,
-        route_key="old_mine",
-        depth=0,
-        durability=3,
-        temporary_coins=0,
-        luck_snapshot=100,
-        equipment_snapshot=json.dumps({}),
-        cells_json=json.dumps(generate_dig_cells(1, random.Random(1))),
-    )
+    try:
+        session = db.create_interactive_dig_session(
+            session_id="session1",
+            user_id=10,
+            chat_id=-100,
+            route_key="old_mine",
+            depth=0,
+            durability=3,
+            temporary_coins=0,
+            luck_snapshot=100,
+            equipment_snapshot=json.dumps({}),
+            cells_json=json.dumps(generate_dig_cells(1, random.Random(1))),
+        )
 
-    assert db.lock_interactive_dig_cell(session["id"], 11, 0, 0) is None
-    locked = db.lock_interactive_dig_cell(session["id"], 10, 0, 0)
-    assert locked is not None
-    assert db.lock_interactive_dig_cell(session["id"], 10, 0, 0) is None
-    db.update_interactive_dig_session(session["id"], used_cells_json=json.dumps([0]), processing=0)
-    assert db.lock_interactive_dig_cell(session["id"], 10, 0, 0) is None
+        assert db.lock_interactive_dig_cell(session["id"], 11, 0, 0) is None
+        locked = db.lock_interactive_dig_cell(session["id"], 10, 0, 0)
+        assert locked is not None
+        assert db.lock_interactive_dig_cell(session["id"], 10, 0, 0) is None
+        db.update_interactive_dig_session(session["id"], used_cells_json=json.dumps([0]), processing=0)
+        assert db.lock_interactive_dig_cell(session["id"], 10, 0, 0) is None
+    finally:
+        db.close()
 
 
 def test_interactive_session_restores_after_restart(tmp_path) -> None:
     db_path = tmp_path / "bot.sqlite3"
     db = Database(str(db_path))
     db.init()
-    db.create_interactive_dig_session(
-        session_id="session2",
-        user_id=10,
-        chat_id=-100,
-        route_key="deep_zone",
-        depth=4,
-        durability=2,
-        temporary_coins=77,
-        luck_snapshot=66,
-        equipment_snapshot=json.dumps({"route_name": "Глубинная зона"}, ensure_ascii=False),
-        cells_json=json.dumps(generate_dig_cells(5, random.Random(5))),
-    )
+    try:
+        db.create_interactive_dig_session(
+            session_id="session2",
+            user_id=10,
+            chat_id=-100,
+            route_key="deep_zone",
+            depth=4,
+            durability=2,
+            temporary_coins=77,
+            luck_snapshot=66,
+            equipment_snapshot=json.dumps({"route_name": "Глубинная зона"}, ensure_ascii=False),
+            cells_json=json.dumps(generate_dig_cells(5, random.Random(5))),
+        )
 
-    restored = Database(str(db_path)).get_active_interactive_dig_session(10)
+        reopened = Database(str(db_path))
+        try:
+            restored = reopened.get_active_interactive_dig_session(10)
+        finally:
+            reopened.close()
 
-    assert restored is not None
-    assert restored["route_key"] == "deep_zone"
-    assert restored["depth"] == 4
-    assert restored["temporary_coins"] == 77
+        assert restored is not None
+        assert restored["route_key"] == "deep_zone"
+        assert restored["depth"] == 4
+        assert restored["temporary_coins"] == 77
+    finally:
+        db.close()
 
 
 def test_mine_type_progression_unlocks_every_ten_total_meters() -> None:

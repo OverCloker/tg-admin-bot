@@ -290,17 +290,6 @@ def instagram_download_menu() -> InlineKeyboardMarkup:
     )
 
 
-def _legacy_user_mine_menu(chat_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Копать", callback_data=f"user:dig:{chat_id}")],
-            [InlineKeyboardButton(text="Сумка", callback_data=f"user:bag:{chat_id}")],
-            [InlineKeyboardButton(text="Донат", callback_data=f"user:donate:{chat_id}")],
-            [InlineKeyboardButton(text="Назад", callback_data=f"user:chat:{chat_id}")],
-        ]
-    )
-
-
 def user_dig_mode_menu(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import logging
 import math
@@ -40,7 +40,6 @@ from .dig_game import (
     event_choice,
     final_cell_chance,
     final_depth_bonus,
-    final_room_stage,
     generate_dig_cells,
     generate_dig_stage,
     generate_event_stage,
@@ -49,19 +48,17 @@ from .dig_game import (
     resolve_cell,
     scale_interactive_reward,
 )
-from .premium import PLANS, PREMIUM_PERIOD_DAYS, PremiumLimitError, PremiumRequiredError, PremiumService, plan_public_dict
+from .premium import PLANS, PREMIUM_PERIOD_DAYS, PremiumLimitError, PremiumRequiredError, PremiumService
 from .media_processor import TASK_TITLES, ffmpeg_available, probe_media_duration, process_media, whisper_available
 from .media_tasks import MediaTaskService
 from .youtube_media import (
     DOWNLOAD_TYPES,
     SUPPORTED_MEDIA_URL_RE,
-    YOUTUBE_URL_RE,
     YoutubeMediaError,
     cleanup_youtube_file,
     download_youtube,
     extract_instagram_url,
     extract_supported_media_url,
-    extract_youtube_url,
     inspect_youtube,
     media_output_filename,
 )
@@ -88,7 +85,6 @@ from .keyboards import (
     dig_shift_contract_menu,
     dig_shop_categories_menu,
     dig_shop_items_menu,
-    dig_shop_menu,
     birthday_menu,
     feedback_reply_menu,
     giveaway_menu,
@@ -122,7 +118,6 @@ from .keyboards import (
     user_routes_menu,
     user_shop_categories_menu,
     user_shop_items_menu,
-    user_shop_menu,
     youtube_download_menu,
 )
 
@@ -1827,7 +1822,6 @@ def run_private_dig(chat_id: int, user: User) -> DigReply:
     drill_used = items.get("drill", 0) > 0
     map_used = items.get("map", 0) > 0 and db.consume_dig_item(chat_id, user.id, "map")
     talisman_used = items.get("talisman", 0) > 0 and db.consume_dig_item(chat_id, user.id, "talisman")
-    medkit_available = items.get("medkit", 0) > 0
     repair_available = items.get("repair_kit", 0) > 0
     chest_used = items.get("mystery_chest", 0) > 0 and db.consume_dig_item(chat_id, user.id, "mystery_chest")
     shovel_bonus = dig_permanent_shovel_bonus(items)
@@ -5221,7 +5215,10 @@ async def cb_interactive_dig_event(callback: CallbackQuery) -> None:
                 choice_coins = 0
                 snapshot["used_effects"] = used_effects
             final_coins = max(0, int(session["temporary_coins"]) + choice_coins)
-            final_durability = int(session["durability"])
+            final_durability = min(
+                INTERACTIVE_DIG_DURABILITY,
+                int(session["durability"]) + int(choice.get("durability", 0)),
+            )
             risk = int(choice.get("risk", 0))
             collapsed = False
             if risk and secrets.randbelow(100) < risk:
@@ -9481,7 +9478,6 @@ async def dig_command(message: Message) -> None:
     drill_used = items.get("drill", 0) > 0
     map_used = items.get("map", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "map")
     talisman_used = items.get("talisman", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "talisman")
-    medkit_available = items.get("medkit", 0) > 0
     repair_available = items.get("repair_kit", 0) > 0
     chest_used = items.get("mystery_chest", 0) > 0 and db.consume_dig_item(message.chat.id, message.from_user.id, "mystery_chest")
     shovel_bonus = dig_permanent_shovel_bonus(items)

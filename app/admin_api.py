@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import base64
 import hashlib
 import json
@@ -16,7 +16,7 @@ import aiohttp
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import asdict, is_dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from html import escape, unescape
 from urllib.parse import parse_qsl, quote, urlparse
 from typing import Annotated, Any
@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 
 from .config import load_config
 from .db import Database, normalize_trigger, normalize_username, utc_now
-from .media_tasks import MediaTaskService, SUPPORTED_TASK_TYPES
+from .media_tasks import MediaTaskService
 from .media_processor import find_ffmpeg
 from .premium import PLANS, PREMIUM_PERIOD_DAYS, PremiumError, PremiumLimitError, PremiumRequiredError, PremiumService, plan_public_dict
 from .staff import StaffService
