@@ -163,7 +163,7 @@ SINGLE_EMOJI_RE = re.compile(
 )
 DEFAULT_AVAILABLE_REACTIONS = [
     {"type": "emoji", "emoji": emoji}
-    for emoji in ["рџ‘Ќ", "рџ‘Ћ", "вќ¤", "рџ”Ґ", "рџҐ°", "рџ‘Џ", "рџЃ", "рџ¤”", "рџ¤Ї", "рџ±", "рџ¤¬", "рџў", "рџЋ‰", "рџ¤©", "рџ¤®", "рџ’©"]
+    for emoji in ['👍', '👎', '❤', '🔥', '🥰', '👏', '😁', '🤔', '🤯', '😱', '🤬', '😢', '🎉', '🤩', '🤮', '💩']
 ]
 DIG_COOLDOWN = timedelta(hours=3)
 DIG_LUCK_COST = 35
@@ -3487,9 +3487,9 @@ def access_permissions_menu(chat_id: int, user_id: int, page: int = 0) -> Inline
     for feature_id, title, is_child in permissions[start : start + page_size]:
         view_allowed = bot_admin_feature_allowed(chat_id, user_id, feature_id, mode="view", default=False)
         write_allowed = bot_admin_feature_allowed(chat_id, user_id, feature_id, mode="write", default=False)
-        view_mark = "вњ…" if view_allowed else "вќЊ"
-        write_mark = "вњ…" if write_allowed else "вќЊ"
-        title_prefix = "в†і " if is_child else ""
+        view_mark = "✅" if view_allowed else "❌"
+        write_mark = "✅" if write_allowed else "❌"
+        title_prefix = "↳ " if is_child else ""
         write_title = "нажимать" if is_child else "менять"
         rows.append(
             [
