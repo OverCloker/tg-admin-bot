@@ -8702,12 +8702,13 @@ async def send_alarm_notification(bot: Bot, chat_id: int, text: str) -> Message 
 
 
 async def delete_previous_alarm_status_message(bot: Bot, chat_id: int, status: str) -> None:
-    message_id = db.alarm_api_status_message_id(chat_id, status)
-    if message_id is None:
+    message_ids = db.alarm_api_status_message_ids(chat_id, status)
+    if not message_ids:
         return
-    with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
-        await bot.delete_message(chat_id, message_id)
-    db.set_alarm_api_status_message_id(chat_id, status, None)
+    for message_id in message_ids:
+        with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
+            await bot.delete_message(chat_id, message_id)
+    db.clear_alarm_api_status_message_ids(chat_id, status)
 
 
 async def activate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
@@ -8728,6 +8729,8 @@ async def activate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
         return alert_message is not None
     action_text = settings.alarm_text or "Режим тревоги применен: медиа, реакции и одиночные эмодзи отключены."
     action_message = await send_alarm_notification(bot, chat_id, action_text)
+    if action_message is not None:
+        db.set_alarm_api_action_message_id(chat_id, "A", action_message.message_id)
     return alert_message is not None and action_message is not None
 
 
@@ -8782,6 +8785,8 @@ async def deactivate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
         return clear_message is not None
     action_text = settings.clear_text or "Отбой применен: медиа, реакции и одиночные эмодзи снова включены."
     action_message = await send_alarm_notification(bot, chat_id, action_text)
+    if action_message is not None:
+        db.set_alarm_api_action_message_id(chat_id, "N", action_message.message_id)
     return clear_message is not None and action_message is not None
 
 
