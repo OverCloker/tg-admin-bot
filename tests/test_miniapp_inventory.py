@@ -91,6 +91,30 @@ def test_shop_catalog_has_profile_gifts_and_relationship_sections(tmp_path) -> N
     assert any(item["key"] == "couple_frame" and item["price"] == 3500 for item in categories["relationships"]["items"])
 
 
+def test_shop_catalog_exposes_mined_resources_and_merchant(tmp_path) -> None:
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.register_dig_player(0, 42, "miner", "Шахтёр")
+    db.add_dig_item(0, 42, "res_iron", 3)
+    db.add_dig_item(0, 42, "res_crystal", 1)
+
+    try:
+        catalog = _shop_catalog(db, 42)
+    finally:
+        db.close()
+
+    inventory = {
+        group["title"]: {item["key"]: item for item in group["items"]}
+        for group in catalog["inventory"]
+    }
+    assert inventory["Добыча"]["res_iron"]["name"] == "Железная руда"
+    assert inventory["Добыча"]["res_iron"]["quantity"] == 3
+    merchant = {item["key"]: item for item in catalog["merchant"]["items"]}
+    assert merchant["res_iron"]["quantity"] == 3
+    assert merchant["res_iron"]["total"] == merchant["res_iron"]["price"] * 3
+    assert catalog["merchant"]["total"] >= merchant["res_iron"]["total"]
+
+
 def test_profile_cosmetics_are_exposed_after_purchase(tmp_path) -> None:
     db = Database(str(tmp_path / "bot.sqlite3"))
     db.init()

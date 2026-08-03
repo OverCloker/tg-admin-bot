@@ -34,7 +34,8 @@ from .db import Database, RegisteredChat, normalize_trigger, normalize_username
 from .dig_game import (
     INTERACTIVE_DIG_DURABILITY,
     INTERACTIVE_DIG_MAX_DEPTH,
-    cell_ore_units,
+    MINE_RESOURCE_CATALOG,
+    MINE_RESOURCE_ORDER,
     cell_row_is_exhausted,
     cell_reward,
     collapse_payout,
@@ -44,10 +45,11 @@ from .dig_game import (
     generate_dig_cells,
     generate_dig_stage,
     generate_event_stage,
-    merchant_ore_price,
+    mined_resource_drops,
     mine_type_for_total_depth,
     replacement_cell_stage,
     resolve_cell,
+    resource_stack_text,
     scale_interactive_reward,
 )
 from .premium import PLANS, PREMIUM_PERIOD_DAYS, PremiumLimitError, PremiumRequiredError, PremiumService
@@ -1503,6 +1505,43 @@ def dig_artifact_text(items: dict[str, int]) -> str:
     return ", ".join(found) if found else "пока нет"
 
 
+def dig_resource_names() -> dict[str, str]:
+    return {key: str(value["title"]) for key, value in MINE_RESOURCE_CATALOG.items()}
+
+
+def snapshot_resources(snapshot: dict) -> dict[str, int]:
+    resources = snapshot.get("resources")
+    if isinstance(resources, dict):
+        return {
+            str(key): int(value)
+            for key, value in resources.items()
+            if key in MINE_RESOURCE_CATALOG and int(value) > 0
+        }
+    ore_units = int(snapshot.get("ore_units", 0) or 0)
+    return {"res_iron": ore_units} if ore_units > 0 else {}
+
+
+def add_snapshot_resources(snapshot: dict, drops: dict[str, int]) -> None:
+    resources = snapshot_resources(snapshot)
+    for key, quantity in drops.items():
+        if key in MINE_RESOURCE_CATALOG and int(quantity) > 0:
+            resources[key] = resources.get(key, 0) + int(quantity)
+    snapshot["resources"] = resources
+    snapshot["ore_units"] = sum(resources.values())
+
+
+def grant_snapshot_resources(chat_id: int, user_id: int, snapshot: dict, used_effects: list[str]) -> dict[str, int]:
+    resources = snapshot_resources(snapshot)
+    if not resources:
+        return {}
+    for key, quantity in resources.items():
+        db.add_dig_item(chat_id, user_id, key, quantity)
+    used_effects.append(f"Добыча сложена в сумку: {resource_stack_text(resources)}")
+    snapshot["resources"] = {}
+    snapshot["ore_units"] = 0
+    return resources
+
+
 def find_dig_artifact(
     chat_id: int,
     user_id: int,
@@ -1555,6 +1594,7 @@ def dig_effects_text(items: dict[str, int]) -> str:
     groups = {
         "Постоянные": [],
         "Расходники": [],
+        "Добыча": [],
         "Оплаченные": [],
         "Прочее": [],
     }
@@ -1564,8 +1604,9 @@ def dig_effects_text(items: dict[str, int]) -> str:
         "super_mute30": "Право на мут 30 минут",
         "super_tag": "Право выбрать тег",
     }
+    special_names.update(dig_resource_names())
 
-    ordered_keys = list(dict.fromkeys(DIG_ITEM_ORDER + sorted(paid_keys) + list(special_names)))
+    ordered_keys = list(dict.fromkeys(DIG_ITEM_ORDER + MINE_RESOURCE_ORDER + sorted(paid_keys) + list(special_names)))
     for key in ordered_keys:
         count = items.get(key, 0)
         if count <= 0 or key in hidden_keys:
@@ -1576,6 +1617,8 @@ def dig_effects_text(items: dict[str, int]) -> str:
         name = special_names.get(key, DIG_SHOP_ITEMS.get(key, (key, 0, ""))[0])
         if key in paid_keys:
             groups["Оплаченные"].append(f"{name} x{count}")
+        elif key in MINE_RESOURCE_CATALOG:
+            groups["Добыча"].append(f"{name} x{count}")
         elif key in DIG_PROFILE_ITEMS or key in DIG_GIFT_ITEMS or key in DIG_RELATIONSHIP_ITEMS:
             groups["Прочее"].append(name if key in DIG_PERMANENT_ITEMS and count == 1 else f"{name} x{count}")
         elif key in DIG_PERMANENT_ITEMS:
@@ -2092,8 +2135,8 @@ def interactive_dig_view(session: dict, prefix: str | None = None) -> Interactiv
     mine_title = str(snapshot.get("mine_title") or route_name)
     mine_emoji = str(snapshot.get("mine_emoji") or "⛏")
     luck = int(session["luck_snapshot"])
-    ore_units = int(snapshot.get("ore_units", 0))
-    merchant_price = merchant_ore_price()
+    resources = snapshot_resources(snapshot)
+    resource_total = sum(resources.values())
     lines = []
     if prefix:
         lines.append(prefix)
@@ -2104,7 +2147,7 @@ def interactive_dig_view(session: dict, prefix: str | None = None) -> Interactiv
             f"Глубина: <b>{depth}/{INTERACTIVE_DIG_MAX_DEPTH}</b> м",
             f"Маршрут: <b>{escape(route_name)}</b>",
             f"Удача: <b>{luck}</b>/100 | Прочность: <b>{durability}</b>/{INTERACTIVE_DIG_DURABILITY}",
-            f"Временная добыча: <b>{temporary_coins}</b> котоинов | Руда: <b>{ore_units}</b> ед.",
+            f"Временная добыча: <b>{temporary_coins}</b> котоинов | Ресурсы: <b>{resource_total}</b> ед.",
         ]
     )
     if isinstance(cells, dict) and cells.get("type") in {"event", "final"}:
@@ -2116,8 +2159,8 @@ def interactive_dig_view(session: dict, prefix: str | None = None) -> Interactiv
                 escape(str(cells.get("text") or "Выбери действие.")),
             ]
         )
-        if cells.get("event") == "merchant":
-            lines.append(f"Текущая цена руды: <b>{merchant_price}</b> котоинов за ед. Цена меняется каждые 4 часа.")
+        if resources:
+            lines.append(f"В сумке вылазки: {escape(resource_stack_text(resources))}.")
     else:
         lines.extend(
             [
@@ -2265,6 +2308,7 @@ def start_interactive_dig(chat_id: int, user: User) -> InteractiveDigReply:
         "repair_candidates": repair_candidates,
         "used_effects": used_effects,
         "ore_units": 0,
+        "resources": {},
     }
     session = db.create_interactive_dig_session(
         session_id=uuid4().hex[:16],
@@ -2303,12 +2347,6 @@ def settle_interactive_dig(session: dict, user: User, *, collapsed: bool) -> Dig
     items = dig_items_map(chat_id, user.id)
     now = datetime.now(timezone.utc)
     if depth > 0 and not collapsed:
-        ore_units = int(snapshot.get("ore_units", 0))
-        if ore_units:
-            price = merchant_ore_price(now)
-            payout += ore_units * price
-            used_effects.append(f"Оставшаяся руда продана при выходе: {ore_units} × {price}")
-            snapshot["ore_units"] = 0
         before_event = payout
         payout, event_text = dig_random_event(depth, payout)
         if payout < before_event and items.get("medkit", 0) > 0 and db.consume_dig_item(chat_id, user.id, "medkit"):
@@ -2342,6 +2380,9 @@ def settle_interactive_dig(session: dict, user: User, *, collapsed: bool) -> Dig
     if depth >= INTERACTIVE_DIG_MAX_DEPTH and not collapsed:
         final_bonus, final_bonus_text = final_depth_bonus(depth, str(snapshot.get("mine_key") or "old_mine"))
         payout += final_bonus
+
+    if depth > 0:
+        grant_snapshot_resources(chat_id, user.id, snapshot, used_effects)
 
     apply_interactive_repair_kit(chat_id, user.id, snapshot, used_effects)
 
@@ -4801,8 +4842,8 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
             await safe_edit(
                 callback,
                 "Выбери способ раскопки:\n\n"
-                "• <b>Автоматически</b> — быстрый результат, добыча ниже, без ручных событий, руды и купца.\n"
-                "• <b>Вручную</b> — Mini App: клетки, события, руда, купец и выборы по ходу вылазки.",
+                "• <b>Автоматически</b> — быстрый результат, добыча ниже, без ручных событий и ресурсов.\n"
+                "• <b>Вручную</b> — Mini App: клетки, события, ресурсы и выборы по ходу вылазки. Торговец ждёт снаружи в сумке.",
                 reply_markup=user_dig_mode_menu(chat_id, owner_id),
             )
             await callback.answer()
@@ -4815,7 +4856,7 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
                 await callback.bot.send_message(
                     callback.from_user.id,
                     "Ручная шахта открывается в Mini App.\n\n"
-                    "Там есть клетки, события, руда и купец. Автоматический режим быстрее, но добыча ниже и без этих ручных находок.",
+                    "Там есть клетки, события и ресурсы. Автоматический режим быстрее, но добыча ниже и без этих ручных находок.",
                     reply_markup=miniapp_private_menu(),
                 )
             except (TelegramBadRequest, TelegramForbiddenError):
@@ -4931,9 +4972,9 @@ async def cb_interactive_dig_cell(callback: CallbackQuery) -> None:
             if int(cells[cell_index].get("reward_bonus", 0)):
                 gained = (gained * (100 + int(cells[cell_index].get("reward_bonus", 0))) + 99) // 100
             gained = scale_interactive_reward(gained)
-            ore_gained = cell_ore_units(resolved)
-            if ore_gained:
-                snapshot["ore_units"] = int(snapshot.get("ore_units", 0)) + ore_gained
+            resource_drops = mined_resource_drops(resolved, str(snapshot.get("mine_key") or "old_mine"), next_depth)
+            if resource_drops:
+                add_snapshot_resources(snapshot, resource_drops)
             new_depth = next_depth
             new_temp = int(session["temporary_coins"]) + gained
             if new_depth >= INTERACTIVE_DIG_MAX_DEPTH:
@@ -4956,7 +4997,7 @@ async def cb_interactive_dig_cell(callback: CallbackQuery) -> None:
                     callback,
                     f"✨ Слой пройден: <b>{escape(cell_title)}</b>.\n"
                     f"+<b>{gained}</b> котоинов во временную добычу."
-                    f"{f' Руда: +{ore_gained} ед.' if ore_gained else ''}\n\n"
+                    f"{f' Добыча: {escape(resource_stack_text(resource_drops))}.' if resource_drops else ''}\n\n"
                     f"{result.text}",
                     reply_markup=user_mine_menu(int(session["chat_id"]), callback.from_user.id, show_back=False),
                 )
@@ -4976,7 +5017,7 @@ async def cb_interactive_dig_cell(callback: CallbackQuery) -> None:
             view = interactive_dig_view(
                 updated,
                 f"✨ Слой пройден: <b>{escape(cell_title)}</b>. +<b>{gained}</b> котоинов."
-                f"{f' Руда: +{ore_gained} ед.' if ore_gained else ''}",
+                f"{f' Добыча: {escape(resource_stack_text(resource_drops))}.' if resource_drops else ''}",
             )
             await safe_edit(
                 callback,
@@ -5299,15 +5340,7 @@ async def cb_interactive_dig_event(callback: CallbackQuery) -> None:
             f"Выбор: <b>{escape(str(choice.get('label') or 'действие'))}</b>.",
         ]
         if choice.get("merchant"):
-            ore_units = int(snapshot.get("ore_units", 0))
-            price = merchant_ore_price()
-            sold = ore_units * price
-            temporary_coins += sold
-            snapshot["ore_units"] = 0
-            if ore_units:
-                messages.append(f"Купец купил руду: <b>{ore_units}</b> × <b>{price}</b> = <b>{sold}</b> котоинов.")
-            else:
-                messages.append("Купец развёл лапами: руды в сумке пока нет.")
+            messages.append("Купец теперь ждёт снаружи, в сумке.")
         if choice_coins:
             sign = "+" if choice_coins > 0 else ""
             messages.append(f"Добыча: <b>{sign}{choice_coins}</b> котоинов.")
@@ -9421,8 +9454,8 @@ async def dig_command(message: Message) -> None:
         await message.answer(
             registered_text
             + "Выбери способ раскопки:\n\n"
-            "• <b>Автоматически</b> — быстрый результат, добыча ниже, без ручных событий, руды и купца.\n"
-            "• <b>Вручную</b> — Mini App: клетки, события, руда, купец и выборы по ходу вылазки.",
+            "• <b>Автоматически</b> — быстрый результат, добыча ниже, без ручных событий и ресурсов.\n"
+            "• <b>Вручную</b> — Mini App: клетки, события, ресурсы и выборы по ходу вылазки. Торговец ждёт снаружи в сумке.",
             reply_markup=user_dig_mode_menu(0, message.from_user.id),
         )
         return
@@ -9442,8 +9475,8 @@ async def dig_command(message: Message) -> None:
     await temporary_reply(
         message,
         "Выбери способ раскопки:\n\n"
-        "• <b>Автоматически</b> — быстрый результат, добыча ниже, без ручных событий, руды и купца.\n"
-        "• <b>Вручную</b> — Mini App: клетки, события, руда, купец и выборы по ходу вылазки.",
+        "• <b>Автоматически</b> — быстрый результат, добыча ниже, без ручных событий и ресурсов.\n"
+        "• <b>Вручную</b> — Mini App: клетки, события, ресурсы и выборы по ходу вылазки. Торговец ждёт снаружи в сумке.",
         reply_markup=user_dig_mode_menu(message.chat.id, message.from_user.id),
     )
     return

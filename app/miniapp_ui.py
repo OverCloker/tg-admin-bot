@@ -1738,7 +1738,7 @@ MINI_APP_HTML = r"""<!doctype html>
         <div class="depth">0/10 м</div>
         <div class="meter"><div class="fill" style="width:0%"></div></div>
         <button class="btn" ${buttonDisabled ? "disabled" : ""} onclick="startInteractiveDig(this)">${buttonText}</button>
-        <div class="muted" style="margin-top:10px">Условия: клетки, события, руда, купец и выборы по ходу вылазки.</div>
+        <div class="muted" style="margin-top:10px">Условия: клетки, события, ресурсы и выборы по ходу вылазки. Торговец ждёт снаружи в сумке.</div>
         <div class="muted" style="margin-top:8px">${escapeHtml(cooldown)}</div>
       </section>`;
     }
@@ -1746,16 +1746,14 @@ MINI_APP_HTML = r"""<!doctype html>
     const progress = Math.max(0, Math.min(10, Number(dig.depth || 0)));
     const header = `<div class="section-title"><h2>${escapeHtml(dig.mineEmoji || "⛏")} ${escapeHtml(dig.mineTitle || "Шахта")}</h2><span class="counter">${progress}/10 м</span></div>
       <div class="meter"><div class="fill" style="width:${progress * 10}%"></div></div>
-      <p class="muted">Прочность: <b>${dig.durability}/${dig.maxDurability}</b> · Временная добыча: <b>${dig.temporaryCoins}</b> 🪙 · Руда: <b>${dig.oreUnits || 0}</b> · Удача: <b>${dig.luck}/100</b></p>`;
+      <p class="muted">Прочность: <b>${dig.durability}/${dig.maxDurability}</b> · Временная добыча: <b>${dig.temporaryCoins}</b> 🪙 · Ресурсы: <b>${dig.oreUnits || 0}</b> · Удача: <b>${dig.luck}/100</b></p>`;
     if (stage.type === "event" || stage.type === "final") {
       const choices = (stage.choices || []).map(choice => `
         <button class="btn secondary" onclick="chooseMineEvent('${escapeJs(choice.key)}')">${escapeHtml(choice.label || "Выбрать")}</button>
       `).join("");
-      const merchantPrice = stage.event === "merchant" ? `<p class="muted">Цена руды сейчас: <b>${dig.merchantPrice}</b> котоинов за ед. Меняется каждые 4 часа.</p>` : "";
       return `<section class="panel">${header}
         <h3>${escapeHtml(stage.emoji || "❔")} ${escapeHtml(stage.title || "Событие")}</h3>
         <p>${escapeHtml(stage.text || "Выбери действие.")}</p>
-        ${merchantPrice}
         ${choices}
         <button class="btn danger" onclick="exitInteractiveDig()">💰 Забрать добычу и выйти</button>
       </section>`;
@@ -2130,6 +2128,23 @@ MINI_APP_HTML = r"""<!doctype html>
           </details>`;
         }).join("")
         : `<div class="muted">Сумка пока пустая.</div>`;
+      const merchantItems = ((shop.merchant && shop.merchant.items) || []).filter(item => Number(item.quantity || 0) > 0);
+      const merchantRows = merchantItems.length
+        ? merchantItems.map(item => `
+            <div class="inventory-row">
+              <div class="inventory-row-main">
+                <span>${escapeHtml(item.emoji || "▪️")} ${escapeHtml(item.name)} × ${item.quantity}</span>
+                <button class="btn inventory-use" onclick="sellMerchantResource('${escapeJs(item.key)}')">Продать</button>
+              </div>
+              <b>${item.price} 🪙/шт · ${item.total} 🪙</b>
+            </div>`).join("")
+        : `<div class="muted">Нет добычи для продажи. Ресурсы падают в ручной вылазке.</div>`;
+      const merchant = `<section class="panel">
+        <div class="section-title"><h2>🧑‍🌾 Торговец</h2><span class="counter">${shop.merchant ? shop.merchant.total : 0} 🪙</span></div>
+        <p class="muted">${escapeHtml((shop.merchant && shop.merchant.nextPriceChangeText) || "Цены меняются каждый час.")}</p>
+        <div class="inventory-list">${merchantRows}</div>
+        <button class="btn" ${(shop.merchant && shop.merchant.total > 0) ? "" : "disabled"} onclick="sellMerchantResource()">Продать всю добычу</button>
+      </section>`;
       content.innerHTML = `<section class="bag-screen">
         <div class="bag-summary">
           <h2>Снаряжение</h2>
@@ -2141,11 +2156,32 @@ MINI_APP_HTML = r"""<!doctype html>
           <button class="btn" onclick="showShop()">Открыть магазин</button>
           <button class="btn secondary" onclick="renderMine()">Вернуться в шахту</button>
         </div>
+        ${merchant}
         <div class="inventory">${inventory}</div>
       </section>`;
       scrollToTop();
     } catch (error) {
       showError(error);
+    }
+  }
+
+  async function sellMerchantResource(itemKey = null) {
+    if (busy) return;
+    const question = itemKey ? "Продать этот ресурс по текущей цене?" : "Продать всю добычу по текущим ценам?";
+    if (!confirm(question)) return;
+    busy = true;
+    try {
+      const body = itemKey ? { item_key: itemKey } : {};
+      const result = await api("/miniapp/merchant/sell", {
+        method: "POST", body: JSON.stringify(body)
+      });
+      state = result.state;
+      await showBag();
+      showNotice(result.message || "Добыча продана.");
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      busy = false;
     }
   }
 

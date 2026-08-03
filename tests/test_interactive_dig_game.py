@@ -16,6 +16,9 @@ from app.dig_game import (
     generate_dig_cells,
     generate_dig_stage,
     merchant_ore_price,
+    mined_resource_drops,
+    mine_resource_price,
+    mine_resource_prices,
     mine_type_for_total_depth,
     replacement_cell_stage,
     resolve_cell,
@@ -70,7 +73,7 @@ def test_temp_reward_and_collapse_payout() -> None:
     assert collapse_payout(100, protected_loss_percent=10) == (80, 20)
 
 
-def test_ore_and_merchant_price_are_predictable_for_current_bucket() -> None:
+def test_ore_and_merchant_price_are_predictable_for_current_hour() -> None:
     moment = datetime.fromisoformat("2026-07-28T08:15:00+00:00")
 
     assert cell_ore_units({"resolved_kind": "ore"}) == 1
@@ -78,6 +81,19 @@ def test_ore_and_merchant_price_are_predictable_for_current_bucket() -> None:
     assert cell_ore_units({"resolved_kind": "normal"}) == 0
     assert merchant_ore_price(moment) == merchant_ore_price(moment.replace(minute=59))
     assert 10 <= merchant_ore_price(moment) <= 40
+    assert mine_resource_price("res_iron", moment) == mine_resource_price("res_iron", moment.replace(minute=59))
+    assert mine_resource_prices(moment)["res_crystal"] >= 45
+
+
+def test_manual_mine_cells_drop_sellable_resources() -> None:
+    ore_drops = mined_resource_drops({"resolved_kind": "ore"}, "crystal_mine", 8, random.Random(4))
+    hard_drops = mined_resource_drops({"resolved_kind": "hard"}, "old_mine", 6, random.Random(1))
+    roots_drops = mined_resource_drops({"resolved_kind": "roots"}, "mushroom_cave", 4, random.Random(1))
+
+    assert ore_drops
+    assert set(ore_drops) <= {"res_coal", "res_iron", "res_silver", "res_crystal"}
+    assert hard_drops["res_stone"] == 2
+    assert roots_drops
 
 
 def test_interactive_session_blocks_same_cell_and_foreign_user(tmp_path) -> None:

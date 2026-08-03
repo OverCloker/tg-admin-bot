@@ -14,6 +14,28 @@ INTERACTIVE_DIG_CELLS_PER_METER = 5
 INTERACTIVE_DIG_DURABILITY = 3
 INTERACTIVE_DIG_REWARD_SCALE_PERCENT = 42
 
+MINE_RESOURCE_CATALOG: dict[str, dict[str, Any]] = {
+    "res_stone": {"title": "Каменная крошка", "emoji": "🪨", "base": 8, "min": 4, "max": 14, "rarity": "common"},
+    "res_coal": {"title": "Уголь", "emoji": "⚫", "base": 14, "min": 8, "max": 22, "rarity": "common"},
+    "res_iron": {"title": "Железная руда", "emoji": "⛓", "base": 24, "min": 14, "max": 38, "rarity": "uncommon"},
+    "res_silver": {"title": "Серебряная жила", "emoji": "🥈", "base": 42, "min": 26, "max": 64, "rarity": "rare"},
+    "res_crystal": {"title": "Осколок кристалла", "emoji": "💎", "base": 70, "min": 45, "max": 105, "rarity": "epic"},
+    "res_fossil": {"title": "Древний отпечаток", "emoji": "🦴", "base": 55, "min": 34, "max": 82, "rarity": "rare"},
+    "res_ember": {"title": "Пламенная руда", "emoji": "🔥", "base": 80, "min": 50, "max": 120, "rarity": "epic"},
+    "res_glow_moss": {"title": "Светящийся мох", "emoji": "🌿", "base": 30, "min": 16, "max": 48, "rarity": "uncommon"},
+}
+
+MINE_RESOURCE_ORDER = [
+    "res_stone",
+    "res_coal",
+    "res_iron",
+    "res_silver",
+    "res_crystal",
+    "res_fossil",
+    "res_ember",
+    "res_glow_moss",
+]
+
 MINE_TYPES = [
     {
         "key": "old_mine",
@@ -354,12 +376,12 @@ def generate_event_stage(depth: int, mine_key: str = "old_mine", rng: random.Ran
     rng = rng or random.SystemRandom()
     mine_key = mine_type_for_key(mine_key)["key"]
     weighted = {
-        "old_mine": ["merchant", "lost_cat", "cart", "fork", "ore_vein"],
+        "old_mine": ["lost_cat", "cart", "fork", "ore_vein"],
         "ice_cave": ["lake", "lost_cat", "gas", "fork", "unstable"],
         "volcanic_tunnels": ["gas", "unstable", "ore_vein", "nest", "door"],
         "mushroom_cave": ["lost_cat", "nest", "lake", "ore_vein", "fork"],
-        "ancient_ruins": ["door", "merchant", "fork", "nest", "unstable"],
-        "crystal_mine": ["ore_vein", "door", "unstable", "merchant", "gas"],
+        "ancient_ruins": ["door", "fork", "nest", "unstable", "ore_vein"],
+        "crystal_mine": ["ore_vein", "door", "unstable", "gas"],
     }
     key = preferred if preferred in EVENT_ROOMS else rng.choice(weighted.get(mine_key, list(EVENT_ROOMS)))
     room = EVENT_ROOMS[key]
@@ -432,9 +454,94 @@ def cell_ore_units(cell: Mapping[str, Any]) -> int:
     return 0
 
 
+def mine_resource_market_bucket(now: datetime | None = None) -> int:
+    current = now or datetime.now(timezone.utc)
+    return int(current.timestamp()) // (60 * 60)
+
+
+def mine_resource_price(resource_key: str, now: datetime | None = None) -> int:
+    resource = MINE_RESOURCE_CATALOG[resource_key]
+    rng = random.Random(f"mine-resource-price:{resource_key}:{mine_resource_market_bucket(now)}")
+    base = int(resource["base"])
+    low = int(resource["min"])
+    high = int(resource["max"])
+    drift = rng.randint(-base // 3, base // 2)
+    return max(low, min(high, base + drift))
+
+
+def mine_resource_prices(now: datetime | None = None) -> dict[str, int]:
+    return {key: mine_resource_price(key, now) for key in MINE_RESOURCE_ORDER}
+
+
+def mined_resource_drops(
+    cell: Mapping[str, Any],
+    mine_key: str = "old_mine",
+    depth: int = 1,
+    rng: random.Random | None = None,
+) -> dict[str, int]:
+    rng = rng or random.SystemRandom()
+    kind = str(cell.get("resolved_kind") or cell.get("kind") or "")
+    mine_key = mine_type_for_key(mine_key)["key"]
+    depth = max(1, min(INTERACTIVE_DIG_MAX_DEPTH, int(depth)))
+    drops: dict[str, int] = {}
+
+    def add(key: str, quantity: int = 1) -> None:
+        drops[key] = drops.get(key, 0) + max(1, int(quantity))
+
+    if kind == "hard":
+        add("res_stone", 1 + (1 if depth >= 6 else 0))
+        if rng.randrange(100) < 35:
+            add("res_iron")
+    elif kind == "ore":
+        if depth <= 3:
+            pool = ["res_coal", "res_iron"]
+            weights = [58, 42]
+        elif depth <= 6:
+            pool = ["res_iron", "res_silver", "res_coal"]
+            weights = [58, 25, 17]
+        else:
+            pool = ["res_iron", "res_silver", "res_crystal"]
+            weights = [42, 35, 23]
+        if mine_key == "volcanic_tunnels":
+            pool.append("res_ember")
+            weights.append(28)
+        elif mine_key == "crystal_mine":
+            pool.append("res_crystal")
+            weights.append(38)
+        elif mine_key == "ancient_ruins":
+            pool.append("res_fossil")
+            weights.append(24)
+        add(rng.choices(pool, weights=weights, k=1)[0], 1)
+        if depth >= 8 and rng.randrange(100) < 25:
+            add(rng.choice(["res_silver", "res_crystal"]))
+    elif kind == "roots":
+        if rng.randrange(100) < 55:
+            add("res_glow_moss")
+        if mine_key in {"mushroom_cave", "ancient_ruins"} and rng.randrange(100) < 18:
+            add("res_fossil")
+    return drops
+
+
+def resource_title(resource_key: str) -> str:
+    return str(MINE_RESOURCE_CATALOG.get(resource_key, {}).get("title") or resource_key)
+
+
+def resource_emoji(resource_key: str) -> str:
+    return str(MINE_RESOURCE_CATALOG.get(resource_key, {}).get("emoji") or "▪️")
+
+
+def resource_stack_text(resources: Mapping[str, int]) -> str:
+    parts = []
+    for key in MINE_RESOURCE_ORDER:
+        quantity = int(resources.get(key, 0))
+        if quantity > 0:
+            parts.append(f"{resource_emoji(key)} {resource_title(key)} ×{quantity}")
+    return ", ".join(parts)
+
+
 def merchant_ore_price(now: datetime | None = None) -> int:
     current = now or datetime.now(timezone.utc)
-    bucket = int(current.timestamp()) // (4 * 60 * 60)
+    bucket = mine_resource_market_bucket(current)
     rng = random.Random(f"mine-merchant-price:{bucket}")
     return rng.randint(10, 40)
 

@@ -23,7 +23,8 @@ from .db import Database
 from .dig_game import (
     INTERACTIVE_DIG_DURABILITY,
     INTERACTIVE_DIG_MAX_DEPTH,
-    cell_ore_units,
+    MINE_RESOURCE_CATALOG,
+    MINE_RESOURCE_ORDER,
     cell_row_is_exhausted,
     cell_reward,
     collapse_payout,
@@ -32,10 +33,12 @@ from .dig_game import (
     final_depth_bonus,
     generate_dig_cells,
     generate_dig_stage,
-    merchant_ore_price,
+    mined_resource_drops,
+    mine_resource_prices,
     mine_type_for_total_depth,
     replacement_cell_stage,
     resolve_cell,
+    resource_stack_text,
     scale_interactive_reward,
 )
 from .miniapp_ui import MINI_APP_HTML as MINI_APP_UI_HTML
@@ -61,6 +64,10 @@ class ShopPurchase(BaseModel):
 class ShopGiftSend(BaseModel):
     item_key: str = Field(min_length=1, max_length=64)
     target_user_id: int = Field(gt=0)
+
+
+class MerchantSale(BaseModel):
+    item_key: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class ShiftContractPick(BaseModel):
@@ -109,14 +116,16 @@ def _interactive_dig_public(db: Database, user_id: int) -> dict[str, Any] | None
     used = [int(item) for item in json.loads(session["used_cells_json"] or "[]")]
     snapshot = json.loads(session["equipment_snapshot"] or "{}")
     tools = _interactive_dig_tools(snapshot, stage)
+    resources = _snapshot_resources(snapshot)
     return {
         "id": session["id"],
         "depth": int(session["depth"]),
         "durability": int(session["durability"]),
         "maxDurability": INTERACTIVE_DIG_DURABILITY,
         "temporaryCoins": int(session["temporary_coins"]),
-        "oreUnits": int(snapshot.get("ore_units", 0)),
-        "merchantPrice": merchant_ore_price(),
+        "oreUnits": sum(resources.values()),
+        "resources": resources,
+        "merchantPrices": mine_resource_prices(),
         "luck": int(session["luck_snapshot"]),
         "mineTitle": snapshot.get("mine_title") or "Старая шахта",
         "mineEmoji": snapshot.get("mine_emoji") or "⛏",
@@ -216,6 +225,39 @@ def _db() -> Database:
 
 def _items_map(db: Database, user_id: int, chat_id: int = 0) -> dict[str, int]:
     return {item.item_key: item.quantity for item in db.list_dig_items(chat_id, user_id)}
+
+
+def _snapshot_resources(snapshot: dict[str, Any]) -> dict[str, int]:
+    resources = snapshot.get("resources")
+    if isinstance(resources, dict):
+        return {
+            str(key): int(value)
+            for key, value in resources.items()
+            if key in MINE_RESOURCE_CATALOG and int(value) > 0
+        }
+    ore_units = int(snapshot.get("ore_units", 0) or 0)
+    return {"res_iron": ore_units} if ore_units > 0 else {}
+
+
+def _add_snapshot_resources(snapshot: dict[str, Any], drops: dict[str, int]) -> None:
+    resources = _snapshot_resources(snapshot)
+    for key, quantity in drops.items():
+        if key in MINE_RESOURCE_CATALOG and int(quantity) > 0:
+            resources[key] = resources.get(key, 0) + int(quantity)
+    snapshot["resources"] = resources
+    snapshot["ore_units"] = sum(resources.values())
+
+
+def _grant_snapshot_resources(db: Database, user_id: int, snapshot: dict[str, Any], effects: list[str]) -> dict[str, int]:
+    resources = _snapshot_resources(snapshot)
+    if not resources:
+        return {}
+    for key, quantity in resources.items():
+        db.add_dig_item(0, user_id, key, quantity)
+    effects.append(f"Добыча сложена в сумку: {resource_stack_text(resources)}")
+    snapshot["resources"] = {}
+    snapshot["ore_units"] = 0
+    return resources
 
 
 def _gift_target_kind(game: Any, item_key: str) -> str | None:
@@ -861,6 +903,7 @@ def _begin_interactive_manual(db: Database, game: Any, user: dict[str, Any], now
         "magnet_count": int(items.get("magnet", 0)),
         "cat_companion_count": int(items.get("cat_companion", 0)),
         "ore_units": 0,
+        "resources": {},
         "used_tools": [],
         "repair_candidates": repair_candidates,
         "used_effects": effects,
@@ -1088,6 +1131,7 @@ def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
 
     names = {key: value[0] for key, value in game.DIG_SHOP_ITEMS.items()}
     names.update(game.DIG_ARTIFACTS)
+    names.update({key: str(value["title"]) for key, value in MINE_RESOURCE_CATALOG.items()})
     names.update(
         {
             "artifact_set_reward": "Бонус полной коллекции",
@@ -1111,6 +1155,7 @@ def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
     supply_keys |= game.DIG_GIFT_ITEMS | game.DIG_RELATIONSHIP_ITEMS
     grouped: dict[str, list[dict[str, Any]]] = {
         "Коллекция": [],
+        "Добыча": [],
         "Постоянные улучшения": [],
         "Припасы и билеты": [],
         "Особые награды": [],
@@ -1131,6 +1176,8 @@ def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
         }
         if key in artifact_keys:
             grouped["Коллекция"].append(entry)
+        elif key in MINE_RESOURCE_CATALOG:
+            grouped["Добыча"].append(entry)
         elif key in game.DIG_PERMANENT_ITEMS:
             grouped["Постоянные улучшения"].append(entry)
         elif key in supply_keys:
@@ -1140,10 +1187,25 @@ def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
 
     icons = {
         "Коллекция": "💎",
+        "Добыча": "⛏️",
         "Постоянные улучшения": "⚙️",
         "Припасы и билеты": "🎟️",
         "Особые награды": "🏆",
     }
+    prices = mine_resource_prices()
+    merchant_items = [
+        {
+            "key": key,
+            "name": str(MINE_RESOURCE_CATALOG[key]["title"]),
+            "emoji": str(MINE_RESOURCE_CATALOG[key]["emoji"]),
+            "quantity": int(items.get(key, 0)),
+            "price": int(prices[key]),
+            "total": int(items.get(key, 0)) * int(prices[key]),
+            "rarity": str(MINE_RESOURCE_CATALOG[key]["rarity"]),
+        }
+        for key in MINE_RESOURCE_ORDER
+    ]
+    merchant_total = sum(item["total"] for item in merchant_items)
     inventory = [
         {"title": title, "icon": icons[title], "items": values}
         for title, values in grouped.items()
@@ -1153,6 +1215,11 @@ def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
         "coins": db.get_dig_player(0, user_id).coins,
         "categories": categories,
         "inventory": inventory,
+        "merchant": {
+            "items": merchant_items,
+            "total": merchant_total,
+            "nextPriceChangeText": "Цены меняются каждый час.",
+        },
     }
 
 
@@ -1278,6 +1345,56 @@ def miniapp_shop_use(
             db.close()
 
 
+@router.post("/miniapp/merchant/sell")
+def miniapp_merchant_sell(
+    payload: MerchantSale,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    with DIG_LOCK:
+        db = _db()
+        try:
+            if not db.get_dig_player(0, user["id"]):
+                raise HTTPException(400, "Сначала зарегистрируйтесь в шахте.")
+            prices = mine_resource_prices()
+            item_keys = [payload.item_key] if payload.item_key else list(MINE_RESOURCE_ORDER)
+            sold: list[dict[str, Any]] = []
+            total = 0
+            for key in item_keys:
+                if key not in MINE_RESOURCE_CATALOG:
+                    raise HTTPException(400, "Этот ресурс торговец не покупает.")
+                quantity = db.get_dig_item_quantity(0, user["id"], key)
+                if quantity <= 0:
+                    continue
+                if not db.consume_dig_items(0, user["id"], key, quantity):
+                    continue
+                price = int(prices[key])
+                amount = quantity * price
+                total += amount
+                sold.append(
+                    {
+                        "key": key,
+                        "name": str(MINE_RESOURCE_CATALOG[key]["title"]),
+                        "quantity": quantity,
+                        "price": price,
+                        "total": amount,
+                    }
+                )
+            if total <= 0:
+                raise HTTPException(400, "Продавать пока нечего.")
+            db.add_dig_coins(0, user["id"], total)
+            return {
+                "ok": True,
+                "sold": sold,
+                "total": total,
+                "message": f"Торговец купил добычу за {total} котоинов.",
+                "state": _state(db, user["id"]),
+                "shop": _shop_catalog(db, user["id"]),
+            }
+        finally:
+            db.close()
+
+
 @router.get("/miniapp/shop/gift-targets")
 def miniapp_shop_gift_targets(
     item_key: str = Query(min_length=1, max_length=64),
@@ -1375,13 +1492,6 @@ def _settle_interactive_manual(
     event = None
     artifact = None
     if depth > 0 and not collapsed:
-        ore_units = int(snapshot.get("ore_units", 0))
-        if ore_units:
-            price = merchant_ore_price(now)
-            coins += ore_units * price
-            snapshot["ore_units"] = 0
-            effects.append(f"Оставшаяся руда продана при выходе: {ore_units} × {price}")
-    if depth > 0 and not collapsed:
         before_event = coins
         coins, event = game.dig_random_event(depth, coins)
         if coins < before_event and items.get("medkit", 0) > 0 and db.consume_dig_item(0, uid, "medkit"):
@@ -1405,6 +1515,9 @@ def _settle_interactive_manual(
         final_bonus, final_text = final_depth_bonus(depth, str(snapshot.get("mine_key") or "old_mine"))
         coins += final_bonus
         effects.append(final_text)
+
+    if depth > 0:
+        _grant_snapshot_resources(db, uid, snapshot, effects)
 
     _apply_interactive_repair_kit(db, game, 0, uid, snapshot, effects)
 
@@ -1862,10 +1975,10 @@ def miniapp_interactive_cell(
                 if int(cells[payload.cell].get("reward_bonus", 0)):
                     gained = (gained * (100 + int(cells[payload.cell].get("reward_bonus", 0))) + 99) // 100
                 gained = scale_interactive_reward(gained)
-                ore_gained = cell_ore_units(resolved)
-                if ore_gained:
-                    snapshot["ore_units"] = int(snapshot.get("ore_units", 0)) + ore_gained
-                ore_text = f" Руда: +{ore_gained} ед." if ore_gained else ""
+                resource_drops = mined_resource_drops(resolved, str(snapshot.get("mine_key") or "old_mine"), next_depth)
+                if resource_drops:
+                    _add_snapshot_resources(snapshot, resource_drops)
+                ore_text = f" Добыча: {resource_stack_text(resource_drops)}." if resource_drops else ""
                 if next_depth >= INTERACTIVE_DIG_MAX_DEPTH:
                     next_stage = generate_dig_stage(INTERACTIVE_DIG_MAX_DEPTH, str(snapshot.get("mine_key") or "old_mine"))
                     db.update_interactive_dig_session(
@@ -2047,16 +2160,7 @@ def miniapp_interactive_event(
             if durability_delta:
                 durability = max(0, min(INTERACTIVE_DIG_DURABILITY, durability + durability_delta))
             if choice.get("merchant"):
-                ore_units = int(snapshot.get("ore_units", 0))
-                price = merchant_ore_price()
-                sold = ore_units * price
-                coins += sold
-                snapshot["ore_units"] = 0
-                merchant_message = (
-                    f" Купец купил руду: {ore_units} × {price} = {sold} котоинов."
-                    if ore_units
-                    else " Руды для продажи пока нет."
-                )
+                merchant_message = " Купец теперь ждёт снаружи, в сумке."
             collapsed = False
             if int(choice.get("risk", 0)) and secrets.randbelow(100) < int(choice.get("risk", 0)):
                 if _use_interactive_medkit(
