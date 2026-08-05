@@ -838,6 +838,63 @@ class Database:
                 foreign key (chat_id) references chats(chat_id) on delete cascade
             );
 
+            create table if not exists chat_moderator_roles (
+                chat_id integer not null,
+                user_id integer not null,
+                role text not null,
+                granted_by integer,
+                granted_at text not null,
+                expires_at text,
+                active integer not null default 1,
+                primary key (chat_id, user_id),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create index if not exists idx_chat_moderator_roles_active
+                on chat_moderator_roles(chat_id, active, expires_at);
+
+            create table if not exists chat_moderation_warnings (
+                id integer primary key autoincrement,
+                chat_id integer not null,
+                user_id integer not null,
+                moderator_id integer not null,
+                reason text not null default '',
+                created_at text not null,
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create index if not exists idx_chat_moderation_warnings_target
+                on chat_moderation_warnings(chat_id, user_id, created_at);
+
+            create table if not exists chat_moderator_actions (
+                id integer primary key autoincrement,
+                chat_id integer not null,
+                moderator_id integer not null,
+                target_user_id integer not null,
+                action text not null,
+                duration_minutes integer,
+                reason text not null default '',
+                created_at text not null,
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create index if not exists idx_chat_moderator_actions_target
+                on chat_moderator_actions(chat_id, target_user_id, action, created_at);
+
+            create table if not exists chat_moderator_votes (
+                chat_id integer not null,
+                voter_id integer not null,
+                moderator_id integer not null,
+                vote_date text not null,
+                created_at text not null,
+                updated_at text not null,
+                primary key (chat_id, voter_id),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create index if not exists idx_chat_moderator_votes_moderator
+                on chat_moderator_votes(chat_id, moderator_id);
+
             create table if not exists dig_players (
                 chat_id integer not null,
                 user_id integer not null,
@@ -1777,6 +1834,152 @@ class Database:
             (chat_id, normalize_username(username)),
         ).fetchone()
         return SeenUser(**dict(row)) if row else None
+
+    def set_chat_moderator_role(
+        self,
+        chat_id: int,
+        user_id: int,
+        role: str,
+        granted_by: int | None,
+        expires_at: str | None = None,
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into chat_moderator_roles (chat_id, user_id, role, granted_by, granted_at, expires_at, active)
+            values (?, ?, ?, ?, ?, ?, 1)
+            on conflict(chat_id, user_id) do update set
+                role = excluded.role,
+                granted_by = excluded.granted_by,
+                granted_at = excluded.granted_at,
+                expires_at = excluded.expires_at,
+                active = 1
+            """,
+            (chat_id, user_id, role, granted_by, utc_now(), expires_at),
+        )
+        self._conn.commit()
+
+    def clear_chat_moderator_role(self, chat_id: int, user_id: int) -> bool:
+        cur = self._conn.execute(
+            """
+            update chat_moderator_roles
+            set active = 0
+            where chat_id = ? and user_id = ? and active = 1
+            """,
+            (chat_id, user_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def get_chat_moderator_role(self, chat_id: int, user_id: int, now: str | None = None) -> dict | None:
+        check_at = now or utc_now()
+        row = self._conn.execute(
+            """
+            select chat_id, user_id, role, granted_by, granted_at, expires_at, active
+            from chat_moderator_roles
+            where chat_id = ? and user_id = ? and active = 1
+              and (expires_at is null or expires_at > ?)
+            """,
+            (chat_id, user_id, check_at),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_chat_moderators(self, chat_id: int, now: str | None = None) -> list[dict]:
+        check_at = now or utc_now()
+        rows = self._conn.execute(
+            """
+            select
+                r.chat_id,
+                r.user_id,
+                r.role,
+                r.granted_by,
+                r.granted_at,
+                r.expires_at,
+                coalesce(u.username, '') as username,
+                coalesce(u.full_name, cast(r.user_id as text)) as full_name,
+                coalesce(v.votes_count, 0) as votes_count
+            from chat_moderator_roles r
+            left join seen_users u on u.chat_id = r.chat_id and u.user_id = r.user_id
+            left join (
+                select chat_id, moderator_id, count(*) as votes_count
+                from chat_moderator_votes
+                where chat_id = ?
+                group by chat_id, moderator_id
+            ) v on v.chat_id = r.chat_id and v.moderator_id = r.user_id
+            where r.chat_id = ? and r.active = 1
+              and (r.expires_at is null or r.expires_at > ?)
+            """,
+            (chat_id, chat_id, check_at),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_moderation_warning(self, chat_id: int, user_id: int, moderator_id: int, reason: str) -> int:
+        cur = self._conn.execute(
+            """
+            insert into chat_moderation_warnings (chat_id, user_id, moderator_id, reason, created_at)
+            values (?, ?, ?, ?, ?)
+            """,
+            (chat_id, user_id, moderator_id, reason.strip()[:500], utc_now()),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def add_moderator_action(
+        self,
+        chat_id: int,
+        moderator_id: int,
+        target_user_id: int,
+        action: str,
+        duration_minutes: int | None = None,
+        reason: str = "",
+    ) -> int:
+        cur = self._conn.execute(
+            """
+            insert into chat_moderator_actions
+                (chat_id, moderator_id, target_user_id, action, duration_minutes, reason, created_at)
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (chat_id, moderator_id, target_user_id, action, duration_minutes, reason.strip()[:500], utc_now()),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def count_moderator_mutes_for_target(self, chat_id: int, target_user_id: int, since_at: str | None = None) -> int:
+        params: list[object] = [chat_id, target_user_id, "mute"]
+        where = "where chat_id = ? and target_user_id = ? and action = ?"
+        if since_at is not None:
+            where += " and created_at >= ?"
+            params.append(since_at)
+        row = self._conn.execute(
+            f"select count(*) as total from chat_moderator_actions {where}",
+            tuple(params),
+        ).fetchone()
+        return int(row["total"]) if row else 0
+
+    def save_moderator_vote(self, chat_id: int, voter_id: int, moderator_id: int, vote_date: str) -> None:
+        now = utc_now()
+        self._conn.execute(
+            """
+            insert into chat_moderator_votes (chat_id, voter_id, moderator_id, vote_date, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?)
+            on conflict(chat_id, voter_id) do update set
+                moderator_id = excluded.moderator_id,
+                vote_date = excluded.vote_date,
+                updated_at = excluded.updated_at
+            """,
+            (chat_id, voter_id, moderator_id, vote_date, now, now),
+        )
+        self._conn.commit()
+
+    def moderator_vote_for_user(self, chat_id: int, voter_id: int) -> dict | None:
+        row = self._conn.execute(
+            """
+            select chat_id, voter_id, moderator_id, vote_date, created_at, updated_at
+            from chat_moderator_votes
+            where chat_id = ? and voter_id = ?
+            """,
+            (chat_id, voter_id),
+        ).fetchone()
+        return dict(row) if row else None
 
     @staticmethod
     def _social_pair(user1_id: int, user2_id: int) -> tuple[int, int]:

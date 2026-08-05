@@ -1,0 +1,74 @@
+from datetime import datetime, timedelta, timezone
+
+from app.bot import (
+    MODERATOR_ASSIGN_COMMANDS,
+    moderator_max_mute_minutes,
+    parse_moderator_duration,
+    parse_moderator_role_payload,
+)
+from app.db import Database
+from app.staff import STAFF_TOPIC_KEYS
+
+
+def _db(tmp_path):
+    service = Database(str(tmp_path / "bot.sqlite3"))
+    service.init()
+    service.upsert_chat(-100, "Test chat", "supergroup", None)
+    service.upsert_seen_user(-100, 1, "admin", "Admin", False)
+    service.upsert_seen_user(-100, 2, "helper", "Helper", False)
+    service.upsert_seen_user(-100, 3, "mod", "Moderator", False)
+    service.upsert_seen_user(-100, 4, "target", "Target", False)
+    return service
+
+
+def test_moderation_topic_is_known() -> None:
+    assert "moderation" in STAFF_TOPIC_KEYS
+
+
+def test_moderator_role_expires(tmp_path) -> None:
+    db = _db(tmp_path)
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(timespec="seconds")
+    past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(timespec="seconds")
+
+    db.set_chat_moderator_role(-100, 2, "assistant", 1, future)
+    assert db.get_chat_moderator_role(-100, 2)["role"] == "assistant"
+
+    db.set_chat_moderator_role(-100, 2, "assistant", 1, past)
+    assert db.get_chat_moderator_role(-100, 2) is None
+
+
+def test_moderator_vote_replaces_previous_choice(tmp_path) -> None:
+    db = _db(tmp_path)
+    db.set_chat_moderator_role(-100, 2, "assistant", 1)
+    db.set_chat_moderator_role(-100, 3, "moderator", 1)
+
+    db.save_moderator_vote(-100, 4, 2, "2026-08-05")
+    db.save_moderator_vote(-100, 4, 3, "2026-08-06")
+
+    vote = db.moderator_vote_for_user(-100, 4)
+    assert vote["moderator_id"] == 3
+    rating = {row["user_id"]: row["votes_count"] for row in db.list_chat_moderators(-100)}
+    assert rating[2] == 0
+    assert rating[3] == 1
+
+
+def test_moderator_mute_count_uses_window(tmp_path) -> None:
+    db = _db(tmp_path)
+    db.add_moderator_action(-100, 2, 4, "mute", 10, "one")
+    db.add_moderator_action(-100, 3, 4, "mute", 20, "two")
+
+    assert db.count_moderator_mutes_for_target(-100, 4) == 2
+    assert db.count_moderator_mutes_for_target(-100, 4, "2999-01-01T00:00:00+00:00") == 0
+
+
+def test_moderator_payloads_and_limits() -> None:
+    role, username, payload = parse_moderator_role_payload("+стМодератор @target неделя", MODERATOR_ASSIGN_COMMANDS)
+    name, expires_at = parse_moderator_duration(payload)
+
+    assert role == "senior"
+    assert username == "target"
+    assert name == ""
+    assert expires_at is not None
+    assert moderator_max_mute_minutes("assistant") == 10
+    assert moderator_max_mute_minutes("moderator") == 30
+    assert moderator_max_mute_minutes("senior") == 60

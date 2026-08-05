@@ -65,7 +65,7 @@ async def bind_staff(message: Message) -> None:
     requested_topic = payload(message).casefold()
     if requested_topic:
         if requested_topic not in STAFF_TOPIC_KEYS:
-            await message.reply("Неизвестная тема. Используй: general, status, logs, bugs, tasks, ideas или releases.")
+            await message.reply("Неизвестная тема. Используй: general, status, logs, bugs, tasks, ideas, releases или moderation.")
             return
         if service.chat_id != message.chat.id:
             await message.reply("Сначала привяжи эту staff-группу командой <code>/bind_staff</code>.")

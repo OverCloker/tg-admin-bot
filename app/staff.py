@@ -15,6 +15,7 @@ STAFF_TOPICS = {
     "задачи": "tasks",
     "идеи": "ideas",
     "релизы": "releases",
+    "модерация": "moderation",
 }
 STAFF_TOPIC_KEYS = set(STAFF_TOPICS.values())
 

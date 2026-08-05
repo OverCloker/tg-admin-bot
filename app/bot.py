@@ -131,6 +131,23 @@ ADMIN_STATUSES = {ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR}
 ADMIN_STATUS_TEXTS = {"creator", "administrator"}
 ACTIVE_MEMBER_STATUS_TEXTS = {"creator", "administrator", "member", "restricted"}
 SUPPORTED_CHAT_TYPES = {"group", "supergroup"}
+MODERATOR_ROLE_SPECS = {
+    "assistant": {"title": "Помощник модератора", "short": "Помощник", "max_mute_minutes": 10, "rank": 1},
+    "moderator": {"title": "Модератор", "short": "Модератор", "max_mute_minutes": 30, "rank": 2},
+    "senior": {"title": "Старший модератор", "short": "Старший", "max_mute_minutes": 60, "rank": 3},
+}
+MODERATOR_ASSIGN_COMMANDS = {
+    "+помощник": "assistant",
+    "+модератор": "moderator",
+    "+стмодератор": "senior",
+}
+MODERATOR_REMOVE_COMMANDS = {
+    "-помощник": "assistant",
+    "-модератор": "moderator",
+    "-стмодератор": "senior",
+}
+MODERATOR_MUTE_ALERT_THRESHOLD = 3
+MODERATOR_MUTE_ALERT_WINDOW_HOURS = 24
 DAY_PICK_KEY = "day_pick"
 DAY_QUERY_TEXT = "кто пидор"
 DAY_REPLY_TEMPLATE = "Пидор дня: {user}"
@@ -558,6 +575,14 @@ BIRTHDAY_CHECK_CACHE: dict[tuple[int, str], float] = {}
 async def notify_staff_autoreply_change(bot: Bot, description: str) -> None:
     if staff_service:
         await staff_service.auto_reply_changed(bot, description)
+
+
+async def notify_staff_moderation(bot: Bot, text: str) -> None:
+    if not staff_service:
+        return
+    sent = await staff_service.send(bot, "moderation", text)
+    if not sent:
+        await staff_service.send(bot, "logs", text)
 
 
 def invalidate_chat_runtime_cache(chat_id: int) -> None:
@@ -1063,6 +1088,104 @@ def parse_quiet_admin_payload(text: str | None) -> tuple[str | None, int, str] |
     minutes = int(match.group(2)) if match.group(2) else 60
     reason = (match.group(3) or "").strip()
     return username, max(1, min(10080, minutes)), reason
+
+
+def moderator_role_title(role: str | None, *, short: bool = False) -> str:
+    spec = MODERATOR_ROLE_SPECS.get(role or "")
+    if not spec:
+        return "Без должности"
+    key = "short" if short else "title"
+    return str(spec[key])
+
+
+def moderator_role_rank(role: str | None) -> int:
+    spec = MODERATOR_ROLE_SPECS.get(role or "")
+    return int(spec["rank"]) if spec else 0
+
+
+def moderator_max_mute_minutes(role: str | None) -> int:
+    spec = MODERATOR_ROLE_SPECS.get(role or "")
+    return int(spec["max_mute_minutes"]) if spec else 0
+
+
+def parse_moderator_duration(payload: str) -> tuple[str, str | None]:
+    text = payload.strip()
+    if not text:
+        return "", None
+
+    parts = text.split()
+    if len(parts) >= 1:
+        compact_unit = parts[-1].casefold().rstrip(".")
+        unit_days = {
+            "день": 1,
+            "сутки": 1,
+            "неделя": 7,
+            "месяц": 30,
+        }
+        if compact_unit in unit_days:
+            name = " ".join(parts[:-1]).strip()
+            expires_at = datetime.now(timezone.utc) + timedelta(days=unit_days[compact_unit])
+            return name, expires_at.isoformat(timespec="seconds")
+    if len(parts) < 2:
+        return text, None
+
+    amount_text = parts[-2]
+    unit = parts[-1].casefold().rstrip(".")
+    if not amount_text.isdigit():
+        compact = parts[-1].casefold()
+        match = re.fullmatch(r"(\d+)([дd]|дн|день|дня|дней|н|нед|неделя|недели|мес|месяц|месяца|месяцев)", compact)
+        if not match:
+            return text, None
+        amount = int(match.group(1))
+        unit = match.group(2)
+        name = " ".join(parts[:-1]).strip()
+    else:
+        amount = int(amount_text)
+        name = " ".join(parts[:-2]).strip()
+
+    if amount < 1:
+        return text, None
+    if unit in {"д", "d", "дн", "день", "дня", "дней"}:
+        expires_at = datetime.now(timezone.utc) + timedelta(days=amount)
+    elif unit in {"н", "нед", "неделя", "недели"}:
+        expires_at = datetime.now(timezone.utc) + timedelta(weeks=amount)
+    elif unit in {"мес", "месяц", "месяца", "месяцев"}:
+        expires_at = datetime.now(timezone.utc) + timedelta(days=30 * amount)
+    else:
+        return text, None
+    return name.strip(), expires_at.isoformat(timespec="seconds")
+
+
+def parse_moderator_role_payload(text: str | None, commands: dict[str, str]) -> tuple[str | None, str | None, str]:
+    command, payload = split_text_command(text)
+    role = commands.get(command)
+    if not role:
+        return None, None, ""
+    username = None
+    if payload.startswith("@"):
+        first, _, rest = payload.partition(" ")
+        username = normalize_username(first)
+        payload = rest.strip()
+    return role, username, payload
+
+
+def parse_warn_payload(text: str | None) -> tuple[str | None, str] | None:
+    command, payload = split_text_command(text)
+    if command != "косяк":
+        return None
+    username = None
+    if payload.startswith("@"):
+        first, _, rest = payload.partition(" ")
+        username = normalize_username(first)
+        payload = rest.strip()
+    return username, payload
+
+
+def parse_moderator_vote_payload(text: str | None) -> str | None:
+    command, payload = split_text_command(text)
+    if command != "голос" or not payload.startswith("@"):
+        return None
+    return normalize_username(payload.split(maxsplit=1)[0])
 
 
 def parse_quiet_manual_payload(text: str | None) -> tuple[str | None, int | None, str]:
@@ -3424,6 +3547,26 @@ async def resolve_command_target(message: Message, username: str | None) -> tupl
     )
     name = f"@{user.username}" if user.username else user.full_name
     return user.id, name, None
+
+
+async def actor_moderation_role(bot: Bot, chat_id: int, user_id: int) -> str | None:
+    if is_bot_admin(user_id) or await is_chat_admin(bot, chat_id, user_id):
+        return "admin"
+    row = db.get_chat_moderator_role(chat_id, user_id)
+    return str(row["role"]) if row else None
+
+
+async def actor_can_manage_moderators(bot: Bot, chat_id: int, user_id: int) -> bool:
+    return is_bot_admin(user_id) or await is_chat_admin(bot, chat_id, user_id)
+
+
+def render_moderation_actor(message: Message, role: str | None) -> str:
+    if not message.from_user:
+        return "unknown"
+    username = f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name
+    if role == "admin":
+        return f"{username} [админ]"
+    return f"{username} [{moderator_role_title(role, short=True)}]"
 
 
 async def resolve_quiet_panel_target(bot: Bot, chat_id: int, target: str) -> tuple[int | None, str | None, str | None]:
@@ -10105,6 +10248,174 @@ async def roll_mute_top(message: Message) -> None:
     )
 
 
+@router.message(F.text.regexp(re.compile(r"^\+(помощник|модератор|стмодератор)(?:\s|$)", re.IGNORECASE)))
+async def assign_chat_moderator_role(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+    if not await actor_can_manage_moderators(message.bot, message.chat.id, message.from_user.id):
+        return
+
+    await remember_sender(message)
+    role, username, payload = parse_moderator_role_payload(message.text, MODERATOR_ASSIGN_COMMANDS)
+    if not role:
+        return
+
+    target_hint, expires_at = parse_moderator_duration(payload)
+    if username is None and target_hint.startswith("@"):
+        first, _, rest = target_hint.partition(" ")
+        username = normalize_username(first)
+        target_hint, expires_at = parse_moderator_duration(rest)
+
+    target_id, target_name, error = await resolve_command_target(message, username)
+    if error:
+        await safe_reply(message, error)
+        return
+    if not target_id or not target_name:
+        return
+
+    member = await get_active_chat_member(message.bot, message.chat.id, target_id)
+    if member is None:
+        await safe_reply(message, "Не нашел этого пользователя среди активных участников чата.")
+        return
+
+    db.set_chat_moderator_role(message.chat.id, target_id, role, message.from_user.id, expires_at)
+    until_line = f"\nСрок: до <b>{escape(expires_at)}</b>" if expires_at else "\nСрок: бессрочно"
+    await safe_reply(message, f"{escape(target_name)} назначен: <b>{moderator_role_title(role)}</b>.{until_line}")
+    await notify_staff_moderation(
+        message.bot,
+        (
+            "🛡 <b>Назначение модератора</b>\n"
+            f"Кто: {escape(render_moderation_actor(message, 'admin'))}\n"
+            f"Кому: {escape(target_name)}\n"
+            f"Должность: <b>{moderator_role_title(role)}</b>{until_line}"
+        ),
+    )
+
+
+@router.message(F.text.regexp(re.compile(r"^\-(помощник|модератор|стмодератор)(?:\s|$)", re.IGNORECASE)))
+async def remove_chat_moderator_role(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+    if not await actor_can_manage_moderators(message.bot, message.chat.id, message.from_user.id):
+        return
+
+    await remember_sender(message)
+    _role, username, payload = parse_moderator_role_payload(message.text, MODERATOR_REMOVE_COMMANDS)
+    if username is None and payload.startswith("@"):
+        username = normalize_username(payload.split(maxsplit=1)[0])
+    target_id, target_name, error = await resolve_command_target(message, username)
+    if error:
+        await safe_reply(message, error)
+        return
+    if not target_id or not target_name:
+        return
+
+    if not db.clear_chat_moderator_role(message.chat.id, target_id):
+        await safe_reply(message, f"{escape(target_name)} не числится в модераторах.")
+        return
+    await safe_reply(message, f"С {escape(target_name)} снята модераторская должность.")
+    await notify_staff_moderation(
+        message.bot,
+        (
+            "🛡 <b>Снятие модератора</b>\n"
+            f"Кто: {escape(render_moderation_actor(message, 'admin'))}\n"
+            f"С кого: {escape(target_name)}"
+        ),
+    )
+
+
+@router.message(F.text.regexp(re.compile(r"^косяк(?:\s|$)", re.IGNORECASE)))
+async def warn_user_for_misconduct(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+    actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
+    if actor_role is None:
+        return
+
+    await remember_sender(message)
+    parsed = parse_warn_payload(message.text)
+    if not parsed:
+        return
+    username, reason = parsed
+    target_id, target_name, error = await resolve_command_target(message, username)
+    if error:
+        await safe_reply(message, error)
+        return
+    if not target_id or not target_name:
+        return
+    if target_id == message.from_user.id:
+        await safe_reply(message, "Себе косяк не выдаём. Самокритика принята, но без записи.")
+        return
+    if await is_chat_admin(message.bot, message.chat.id, target_id):
+        await safe_reply(message, "Администраторам косяки этой командой не выдаём.")
+        return
+
+    warning_id = db.add_moderation_warning(message.chat.id, target_id, message.from_user.id, reason)
+    reason_line = f"\nПричина: {escape(reason)}" if reason else ""
+    await safe_reply(message, f"Косяк #{warning_id} для {escape(target_name)} записан.{reason_line}")
+    await notify_staff_moderation(
+        message.bot,
+        (
+            "⚠️ <b>Косяк</b>\n"
+            f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
+            f"Кому: {escape(target_name)}"
+            f"{reason_line}"
+        ),
+    )
+
+
+@router.message(F.text.regexp(re.compile(r"^(модеры|рейтинг\s+модеров|модрейтинг)[?!.]?$", re.IGNORECASE)))
+async def moderator_rating(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+
+    await remember_sender(message)
+    rows = db.list_chat_moderators(message.chat.id)
+    if not rows:
+        await safe_reply(message, "В этом чате пока нет назначенных модераторов.")
+        return
+
+    rows.sort(key=lambda row: (-int(row["votes_count"]), -moderator_role_rank(str(row["role"])), str(row["full_name"]).casefold()))
+    lines = ["<b>Рейтинг модераторов</b>", "Голос: <code>голос @ник</code> — один активный голос от пользователя."]
+    for index, row in enumerate(rows[:20], start=1):
+        name = f"@{row['username']}" if row["username"] else row["full_name"]
+        lines.append(
+            f"{index}. {escape(str(name))} — {moderator_role_title(str(row['role']), short=True)}, "
+            f"голосов: <b>{int(row['votes_count'])}</b>"
+        )
+    await safe_reply(message, "\n".join(lines))
+
+
+@router.message(F.text.regexp(re.compile(r"^голос\s+@[A-Za-z0-9_]{5,32}(?:\s|$)", re.IGNORECASE)))
+async def vote_for_moderator(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+
+    await remember_sender(message)
+    username = parse_moderator_vote_payload(message.text)
+    if not username:
+        await safe_reply(message, "Формат: <code>голос @username</code>.")
+        return
+    target = db.get_seen_user_by_username(message.chat.id, username)
+    if not target:
+        await safe_reply(message, f"Я еще не видел @{escape(username)} в этом чате.")
+        return
+    role = db.get_chat_moderator_role(message.chat.id, target.user_id)
+    if not role:
+        await safe_reply(message, f"@{escape(username)} сейчас не числится в модераторах.")
+        return
+    if target.user_id == message.from_user.id:
+        await safe_reply(message, "За себя голос не считаем. Скромность — тоже инструмент модерации.")
+        return
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    previous = db.moderator_vote_for_user(message.chat.id, message.from_user.id)
+    db.save_moderator_vote(message.chat.id, message.from_user.id, target.user_id, today)
+    changed = previous is not None and int(previous["moderator_id"]) != target.user_id
+    suffix = " Голос перенесён." if changed else ""
+    await safe_reply(message, f"Голос за @{escape(username)} принят.{suffix}")
+
+
 @router.message(F.text.regexp(re.compile(r"^(@[A-Za-z0-9_]{5,32}\s+)?затихни\s+админ(?:\s+\d+)?(\s+-\s+.*)?$", re.IGNORECASE)))
 async def quiet_admin_user(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
@@ -10160,7 +10471,12 @@ async def quiet_admin_user(message: Message) -> None:
 async def quiet_user(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
         return
-    if not message.from_user or not await has_chat_admin_permission(
+    if not message.from_user:
+        return
+    actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
+    if actor_role is None:
+        return
+    if actor_role == "admin" and not is_bot_admin(message.from_user.id) and not await has_chat_admin_permission(
         message.bot, message.chat.id, message.from_user.id, "can_restrict_members"
     ):
         return
@@ -10181,7 +10497,12 @@ async def quiet_user(message: Message) -> None:
         await safe_reply(message, "Администратора этой командой ограничивать нельзя.")
         return
 
-    minutes = max(1, min(10080, minutes))
+    requested_minutes = minutes
+    if actor_role == "admin":
+        minutes = max(1, min(10080, minutes))
+    else:
+        role_limit = moderator_max_mute_minutes(actor_role)
+        minutes = max(1, min(role_limit, minutes))
     until_date = datetime.now(timezone.utc) + timedelta(minutes=minutes)
     try:
         await message.bot.restrict_chat_member(
@@ -10212,8 +10533,41 @@ async def quiet_user(message: Message) -> None:
         return
 
     settings = db.get_quiet_settings(message.chat.id)
-    await safe_reply(message, render_quiet_reply(settings.reply_text, target_name, minutes, reason))
+    cap_line = ""
+    if actor_role != "admin" and requested_minutes > minutes:
+        cap_line = f"\nЗапрошено {requested_minutes} мин, но лимит роли: <b>{minutes}</b> мин."
+    await safe_reply(message, render_quiet_reply(settings.reply_text, target_name, minutes, reason) + cap_line)
     await send_quiet_media(message, settings.media_type, settings.media_file_id)
+    db.add_moderator_action(message.chat.id, message.from_user.id, target_id, "mute", minutes, reason)
+    reason_line = f"\nПричина: {escape(reason)}" if reason else ""
+    await notify_staff_moderation(
+        message.bot,
+        (
+            "🔇 <b>Мут</b>\n"
+            f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
+            f"Кому: {escape(target_name)}\n"
+            f"Срок: <b>{minutes}</b> мин"
+            f"{reason_line}"
+        ),
+    )
+    since_at = (datetime.now(timezone.utc) - timedelta(hours=MODERATOR_MUTE_ALERT_WINDOW_HOURS)).isoformat(timespec="seconds")
+    target_mutes = db.count_moderator_mutes_for_target(message.chat.id, target_id, since_at)
+    if target_mutes >= MODERATOR_MUTE_ALERT_THRESHOLD:
+        seniors = [
+            f"@{row['username']}" if row["username"] else str(row["full_name"])
+            for row in db.list_chat_moderators(message.chat.id)
+            if str(row["role"]) == "senior"
+        ]
+        senior_line = "\nСтаршие: " + escape(", ".join(seniors[:10])) if seniors else ""
+        await notify_staff_moderation(
+            message.bot,
+            (
+                "🚨 <b>Нужна проверка админов/старших</b>\n"
+                f"Пользователь {escape(target_name)} получил уже <b>{target_mutes}</b> мут(а) за последние "
+                f"{MODERATOR_MUTE_ALERT_WINDOW_HOURS} ч."
+                f"{senior_line}"
+            ),
+        )
 
 
 @router.message(F.text.regexp(re.compile(r"^(@[A-Za-z0-9_]{5,32}\s+)?трещи$", re.IGNORECASE)))
