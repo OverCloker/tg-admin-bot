@@ -560,7 +560,46 @@ def chat_admin_menu(chat_id: int, include_access: bool = False, allowed_features
                 filtered_rows.append(filtered_row)
         rows = filtered_rows
     if include_access:
+        rows.insert(-1, [InlineKeyboardButton(text="Модераторы", callback_data=f"act:moderators:{chat_id}")])
         rows.insert(-1, [InlineKeyboardButton(text="Доступ", callback_data=f"act:access:{chat_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def moderator_panel_menu(chat_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Назначить помощника", callback_data=f"mod:role:{chat_id}:assistant"),
+            ],
+            [
+                InlineKeyboardButton(text="Назначить модератора", callback_data=f"mod:role:{chat_id}:moderator"),
+            ],
+            [
+                InlineKeyboardButton(text="Назначить старшего", callback_data=f"mod:role:{chat_id}:senior"),
+            ],
+            [InlineKeyboardButton(text="Расжаловать", callback_data=f"mod:demote:{chat_id}")],
+            [InlineKeyboardButton(text="Обновить список", callback_data=f"act:moderators:{chat_id}")],
+            [InlineKeyboardButton(text="Назад к настройкам", callback_data=f"chat:{chat_id}")],
+        ]
+    )
+
+
+def moderator_demote_menu(chat_id: int, moderators: list[dict]) -> InlineKeyboardMarkup:
+    role_titles = {
+        "assistant": "Помощник",
+        "moderator": "Модератор",
+        "senior": "Старший",
+    }
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in moderators[:30]:
+        name = f"@{item['username']}" if item.get("username") else str(item.get("full_name") or item["user_id"])
+        role = role_titles.get(str(item.get("role") or ""), str(item.get("role") or ""))
+        label = f"{name} · {role}"
+        if len(label) > 50:
+            label = label[:47] + "..."
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"mod:drop:{chat_id}:{item['user_id']}")])
+    rows.append([InlineKeyboardButton(text="Ввести @ или id", callback_data=f"mod:drop_input:{chat_id}")])
+    rows.append([InlineKeyboardButton(text="Назад к модераторам", callback_data=f"act:moderators:{chat_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

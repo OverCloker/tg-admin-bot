@@ -99,6 +99,8 @@ from .keyboards import (
     media_cancel_menu,
     media_tools_menu,
     miniapp_private_menu,
+    moderator_demote_menu,
+    moderator_panel_menu,
     paid_chat_select_menu,
     participant_top_menu,
     premium_menu,
@@ -849,6 +851,8 @@ class AdminInput(StatesGroup):
     delete_blacklist_word = State()
     delete_quote = State()
     set_access_user = State()
+    set_moderator_user = State()
+    remove_moderator_user = State()
 
 
 class MediaInput(StatesGroup):
@@ -1278,6 +1282,24 @@ def parse_moderator_role_payload(text: str | None, commands: dict[str, str]) -> 
         username = normalize_username(first)
         payload = rest.strip()
     return role, username, payload
+
+
+def parse_private_moderator_role_payload(text: str | None, commands: dict[str, str]) -> tuple[str | None, str | None, int | None, str]:
+    role, username, payload = parse_moderator_role_payload(text, commands)
+    if not role:
+        return None, None, None, ""
+
+    chat_id = None
+    kept_parts: list[str] = []
+    for part in payload.split():
+        if chat_id is None and re.fullmatch(r"-?\d{5,}", part):
+            chat_id = int(part)
+            continue
+        if username is None and part.startswith("@"):
+            username = normalize_username(part)
+            continue
+        kept_parts.append(part)
+    return role, username, chat_id, " ".join(kept_parts).strip()
 
 
 def parse_warn_payload(text: str | None) -> tuple[str | None, str] | None:
@@ -3714,6 +3736,32 @@ async def actor_can_manage_moderators(bot: Bot, chat_id: int, user_id: int) -> b
     return is_bot_admin(user_id) or await is_chat_admin(bot, chat_id, user_id)
 
 
+async def manageable_moderation_chats(bot: Bot, user_id: int) -> list[RegisteredChat]:
+    if is_bot_admin(user_id):
+        return db.list_chats()
+    roles = await user_admin_roles(bot, user_id)
+    return [chat for chat, _status in roles]
+
+
+async def resolve_private_moderation_chat(bot: Bot, user_id: int, requested_chat_id: int | None) -> tuple[RegisteredChat | None, str | None]:
+    chats = await manageable_moderation_chats(bot, user_id)
+    if requested_chat_id is not None:
+        chat = db.get_chat(requested_chat_id)
+        if chat is None:
+            return None, "Я не знаю такой chat_id. Сначала зарегистрируй группу или дождись активности бота в ней."
+        if not any(item.chat_id == requested_chat_id for item in chats):
+            return None, "У тебя нет прав назначать модераторов в этой группе."
+        return chat, None
+    if not chats:
+        return None, "У тебя нет групп, где можно назначать модераторов через бота."
+    if len(chats) == 1:
+        return chats[0], None
+    lines = ["У тебя несколько групп. Укажи chat_id в команде:", ""]
+    lines.extend(f"<code>{chat.chat_id}</code> — {escape(chat.title)}" for chat in chats[:20])
+    lines.append("\nПример: <code>+модератор -1001234567890 @username неделя</code>")
+    return None, "\n".join(lines)
+
+
 def render_moderation_actor(message: Message, role: str | None) -> str:
     if not message.from_user:
         return "unknown"
@@ -3721,6 +3769,27 @@ def render_moderation_actor(message: Message, role: str | None) -> str:
     if role == "admin":
         return f"{username} [админ]"
     return f"{username} [{moderator_role_title(role, short=True)}]"
+
+
+def moderator_admin_panel_text(chat: RegisteredChat) -> str:
+    rows = db.list_chat_moderators(chat.chat_id)
+    rows.sort(key=lambda row: (-moderator_role_rank(str(row["role"])), str(row["full_name"]).casefold()))
+    lines = [
+        f"Группа: <b>{mention_chat(chat)}</b>",
+        "",
+        "<b>Модераторы чата</b>",
+        "Назначение доступно владельцу бота. Ввод: <code>@username</code> или numeric id.",
+    ]
+    if not rows:
+        lines.append("\nПока модераторов нет.")
+    else:
+        lines.append("\n<b>Список:</b>")
+        for row in rows:
+            name = f"@{row['username']}" if row["username"] else row["full_name"]
+            expires = f", до {row['expires_at']}" if row.get("expires_at") else ""
+            votes = int(row.get("votes_count") or 0)
+            lines.append(f"• {escape(str(name))} — <b>{moderator_role_title(str(row['role']))}</b>, голосов: {votes}{escape(expires)}")
+    return "\n".join(lines)
 
 
 async def resolve_quiet_panel_target(bot: Bot, chat_id: int, target: str) -> tuple[int | None, str | None, str | None]:
@@ -6709,6 +6778,15 @@ async def cb_action(callback: CallbackQuery, state: FSMContext) -> None:
     if feature and not await require_callback_feature(callback, feature, mode="view", default=True):
         return
 
+    if action == "moderators":
+        if not is_bot_admin(callback.from_user.id):
+            await callback.answer("Управление модераторами доступно только владельцу.", show_alert=True)
+            return
+        await state.clear()
+        await safe_edit(callback, moderator_admin_panel_text(chat), reply_markup=moderator_panel_menu(chat_id))
+        await callback.answer()
+        return
+
     if action == "logs":
         await state.clear()
         items = db.list_audit_logs(chat_id, limit=30)
@@ -6938,6 +7016,92 @@ async def cb_quotes(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mod:"))
+async def cb_moderator_panel(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_bot_admin(callback.from_user.id):
+        await callback.answer("Управление модераторами доступно только владельцу.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    if len(parts) < 3:
+        await callback.answer("Неизвестное действие.", show_alert=True)
+        return
+    action = parts[1]
+    chat_id = int(parts[2])
+    chat = await require_selected_admin(callback, chat_id)
+    if chat is None:
+        return
+
+    if action == "role":
+        if len(parts) != 4 or parts[3] not in MODERATOR_ROLE_SPECS:
+            await callback.answer("Неизвестная роль.", show_alert=True)
+            return
+        role = parts[3]
+        await state.set_state(AdminInput.set_moderator_user)
+        await state.update_data(chat_id=chat_id, moderator_role=role)
+        await safe_edit(
+            callback,
+            f"Группа: <b>{mention_chat(chat)}</b>\n\n"
+            f"Назначаем: <b>{moderator_role_title(role)}</b>\n"
+            "Отправь <code>@username</code> или numeric id пользователя.\n\n"
+            "Можно добавить срок: <code>@username неделя</code>, <code>123456 30 дней</code>.",
+            reply_markup=moderator_panel_menu(chat_id),
+        )
+        await callback.answer()
+        return
+
+    if action == "demote":
+        await state.clear()
+        rows = db.list_chat_moderators(chat_id)
+        rows.sort(key=lambda row: (-moderator_role_rank(str(row["role"])), str(row["full_name"]).casefold()))
+        await safe_edit(
+            callback,
+            f"Группа: <b>{mention_chat(chat)}</b>\n\nВыбери модератора для расжалования или введи @/id вручную.",
+            reply_markup=moderator_demote_menu(chat_id, rows),
+        )
+        await callback.answer()
+        return
+
+    if action == "drop_input":
+        await state.set_state(AdminInput.remove_moderator_user)
+        await state.update_data(chat_id=chat_id)
+        await safe_edit(
+            callback,
+            f"Группа: <b>{mention_chat(chat)}</b>\n\nОтправь <code>@username</code> или numeric id пользователя для расжалования.",
+            reply_markup=moderator_panel_menu(chat_id),
+        )
+        await callback.answer()
+        return
+
+    if action == "drop":
+        if len(parts) != 4:
+            await callback.answer("Неизвестное действие.", show_alert=True)
+            return
+        user_id = int(parts[3])
+        before = db.get_chat_moderator_role(chat_id, user_id)
+        if not before:
+            await callback.answer("Пользователь уже не модератор.", show_alert=True)
+            return
+        db.clear_chat_moderator_role(chat_id, user_id)
+        user = db.get_known_user(user_id)
+        target_name = f"@{user.username}" if user and user.username else (user.full_name if user else f"ID {user_id}")
+        actor = f"@{callback.from_user.username}" if callback.from_user.username else callback.from_user.full_name
+        await notify_staff_moderation(
+            callback.bot,
+            (
+                "🛡 <b>Расжалование через панель</b>\n"
+                f"Кто: {escape(actor)} [владелец]\n"
+                f"С кого: {escape(target_name)}\n"
+                f"Группа: {escape(chat.title)}"
+            ),
+        )
+        await safe_edit(callback, moderator_admin_panel_text(chat), reply_markup=moderator_panel_menu(chat_id))
+        await callback.answer("Расжалован")
+        return
+
+    await callback.answer("Неизвестное действие.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("blacklist:"))
@@ -7413,6 +7577,111 @@ async def ui_set_access_user(message: Message, state: FSMContext) -> None:
         f"Доступ для <code>{user_id}</code>\n\n"
         "Включи функции, которые можно использовать в приложении. Выключенная функция будет закрыта и в Telegram-админке.",
         reply_markup=access_permissions_menu(chat_id, user_id),
+    )
+
+
+@router.message(AdminInput.set_moderator_user, F.chat.type == "private")
+async def ui_set_moderator_user(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    chat_id = data.get("chat_id")
+    role = data.get("moderator_role")
+    if not isinstance(chat_id, int) or role not in MODERATOR_ROLE_SPECS:
+        await state.clear()
+        await message.answer("Настройка модератора потерялась. Открой панель заново.", reply_markup=main_menu())
+        return
+    if not message.from_user or not is_bot_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("Управление модераторами доступно только владельцу.", reply_markup=main_menu())
+        return
+
+    chat = db.get_chat(chat_id)
+    if chat is None:
+        await state.clear()
+        await message.answer("Группа не найдена.", reply_markup=main_menu())
+        return
+
+    raw = (message.text or "").strip()
+    if not raw:
+        await message.answer("Отправь <code>@username</code> или numeric id пользователя.")
+        return
+    target_token, _, tail = raw.partition(" ")
+    target_id, target_name, error = await resolve_quiet_panel_target(message.bot, chat_id, target_token)
+    if error:
+        await message.answer(error, reply_markup=moderator_panel_menu(chat_id))
+        return
+    if not target_id or not target_name:
+        await message.answer("Не получилось определить пользователя.", reply_markup=moderator_panel_menu(chat_id))
+        return
+    _unused, expires_at = parse_moderator_duration(tail)
+
+    db.set_chat_moderator_role(chat_id, target_id, str(role), message.from_user.id, expires_at)
+    await state.clear()
+    until_line = f"\nСрок: до <b>{escape(expires_at)}</b>" if expires_at else "\nСрок: бессрочно"
+    await message.answer(
+        f"{escape(target_name)} назначен: <b>{moderator_role_title(str(role))}</b>.{until_line}\n\n"
+        f"{moderator_admin_panel_text(chat)}",
+        reply_markup=moderator_panel_menu(chat_id),
+    )
+    actor = f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name
+    await notify_staff_moderation(
+        message.bot,
+        (
+            "🛡 <b>Назначение модератора через панель</b>\n"
+            f"Кто: {escape(actor)} [владелец]\n"
+            f"Кому: {escape(target_name)}\n"
+            f"Должность: <b>{moderator_role_title(str(role))}</b>{until_line}\n"
+            f"Группа: {escape(chat.title)}"
+        ),
+    )
+
+
+@router.message(AdminInput.remove_moderator_user, F.chat.type == "private")
+async def ui_remove_moderator_user(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    chat_id = data.get("chat_id")
+    if not isinstance(chat_id, int):
+        await state.clear()
+        await message.answer("Настройка модератора потерялась. Открой панель заново.", reply_markup=main_menu())
+        return
+    if not message.from_user or not is_bot_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("Управление модераторами доступно только владельцу.", reply_markup=main_menu())
+        return
+
+    chat = db.get_chat(chat_id)
+    if chat is None:
+        await state.clear()
+        await message.answer("Группа не найдена.", reply_markup=main_menu())
+        return
+    target_token = (message.text or "").strip().split(maxsplit=1)[0] if (message.text or "").strip() else ""
+    if not target_token:
+        await message.answer("Отправь <code>@username</code> или numeric id пользователя.")
+        return
+    target_id, target_name, error = await resolve_quiet_panel_target(message.bot, chat_id, target_token)
+    if error:
+        await message.answer(error, reply_markup=moderator_panel_menu(chat_id))
+        return
+    if not target_id or not target_name:
+        await message.answer("Не получилось определить пользователя.", reply_markup=moderator_panel_menu(chat_id))
+        return
+    if not db.clear_chat_moderator_role(chat_id, target_id):
+        await message.answer(f"{escape(target_name)} не числится в модераторах.", reply_markup=moderator_panel_menu(chat_id))
+        return
+
+    await state.clear()
+    await message.answer(
+        f"С {escape(target_name)} снята модераторская должность.\n\n{moderator_admin_panel_text(chat)}",
+        reply_markup=moderator_panel_menu(chat_id),
+    )
+    actor = f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name
+    await notify_staff_moderation(
+        message.bot,
+        (
+            "🛡 <b>Расжалование через панель</b>\n"
+            f"Кто: {escape(actor)} [владелец]\n"
+            f"С кого: {escape(target_name)}\n"
+            f"Группа: {escape(chat.title)}"
+        ),
     )
 
 
@@ -10408,7 +10677,7 @@ async def roll_mute_top(message: Message) -> None:
     )
 
 
-@router.message(F.text.regexp(re.compile(r"^\+(помощник|модератор|стмодератор)(?:\s|$)", re.IGNORECASE)))
+@router.message(F.chat.type.in_(SUPPORTED_CHAT_TYPES), F.text.regexp(re.compile(r"^\+(помощник|модератор|стмодератор)(?:\s|$)", re.IGNORECASE)))
 async def assign_chat_moderator_role(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
         return
@@ -10452,7 +10721,7 @@ async def assign_chat_moderator_role(message: Message) -> None:
     )
 
 
-@router.message(F.text.regexp(re.compile(r"^\-(помощник|модератор|стмодератор)(?:\s|$)", re.IGNORECASE)))
+@router.message(F.chat.type.in_(SUPPORTED_CHAT_TYPES), F.text.regexp(re.compile(r"^\-(помощник|модератор|стмодератор)(?:\s|$)", re.IGNORECASE)))
 async def remove_chat_moderator_role(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
         return
