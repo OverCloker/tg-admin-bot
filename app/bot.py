@@ -8970,6 +8970,12 @@ async def delete_single_emoji_during_alarm(message: Message) -> bool:
     return True
 
 
+@router.edited_message(F.chat.type.in_(SUPPORTED_CHAT_TYPES))
+async def delete_edited_single_emoji_during_alarm(message: Message) -> None:
+    if is_single_emoji_message(message):
+        await delete_single_emoji_during_alarm(message)
+
+
 async def fetch_alerts_location_status() -> str:
     if not ALERTS_API_TOKEN:
         raise RuntimeError("ALERTS_API_TOKEN не настроен")
