@@ -2,6 +2,9 @@ from datetime import datetime, timedelta, timezone
 
 from app.bot import (
     MODERATOR_ASSIGN_COMMANDS,
+    moderator_can_delete_messages,
+    moderator_can_stop_chat,
+    moderator_can_unmute,
     moderator_max_mute_minutes,
     parse_chat_stop_payload,
     parse_duration_seconds_token,
@@ -64,6 +67,20 @@ def test_moderator_mute_count_uses_window(tmp_path) -> None:
     assert db.count_moderator_mutes_for_target(-100, 4, "2999-01-01T00:00:00+00:00") == 0
 
 
+def test_latest_active_mute_tracks_owner_and_unmute(tmp_path) -> None:
+    db = _db(tmp_path)
+    db.add_moderator_action(-100, 2, 4, "mute", 10, "helper")
+    active = db.latest_active_moderator_mute(-100, 4)
+
+    assert active["moderator_id"] == 2
+    assert moderator_can_unmute("assistant", 2, active) is True
+    assert moderator_can_unmute("moderator", 3, active) is False
+    assert moderator_can_unmute("senior", 3, active) is True
+
+    db.add_moderator_action(-100, 3, 4, "unmute", None, "")
+    assert db.latest_active_moderator_mute(-100, 4) is None
+
+
 def test_moderator_payloads_and_limits() -> None:
     role, username, payload = parse_moderator_role_payload("+стМодератор @target неделя", MODERATOR_ASSIGN_COMMANDS)
     name, expires_at = parse_moderator_duration(payload)
@@ -75,6 +92,15 @@ def test_moderator_payloads_and_limits() -> None:
     assert moderator_max_mute_minutes("assistant") == 10
     assert moderator_max_mute_minutes("moderator") == 30
     assert moderator_max_mute_minutes("senior") == 60
+    assert moderator_can_delete_messages("assistant") is False
+    assert moderator_can_delete_messages("moderator") is True
+    assert moderator_can_delete_messages("senior") is True
+    assert moderator_can_stop_chat("assistant", 60) is False
+    assert moderator_can_stop_chat("moderator", 600) is True
+    assert moderator_can_stop_chat("moderator", 601) is False
+    assert moderator_can_stop_chat("moderator", None) is False
+    assert moderator_can_stop_chat("senior", 1800) is True
+    assert moderator_can_stop_chat("senior", 1801) is False
 
 
 def test_chat_lock_storage_and_expiration(tmp_path) -> None:

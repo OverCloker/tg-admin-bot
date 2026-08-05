@@ -586,6 +586,50 @@ async def notify_staff_moderation(bot: Bot, text: str) -> None:
         await staff_service.send(bot, "logs", text)
 
 
+def message_content_label(message: Message) -> str:
+    content_type = str(getattr(message, "content_type", "") or "")
+    if message.text:
+        return "текст/ссылка"
+    if message.sticker:
+        return "стикер"
+    if message.animation:
+        return "gif/анимация"
+    if message.voice:
+        return "голосовое"
+    if message.audio:
+        return "аудио"
+    if message.video:
+        return "видео"
+    if message.video_note:
+        return "видеокружок"
+    if message.photo:
+        return "фото"
+    if message.document:
+        return "документ"
+    return content_type or "сообщение"
+
+
+async def copy_deleted_message_to_staff(bot: Bot, source: Message, header: str) -> None:
+    if not staff_service:
+        return
+    chat_id = staff_service.chat_id
+    topic = "moderation" if staff_service.topic_id("moderation") else "logs"
+    thread_id = staff_service.topic_id(topic)
+    if chat_id is None or thread_id is None:
+        await notify_staff_moderation(bot, header)
+        return
+    try:
+        await bot.send_message(chat_id, header, message_thread_id=thread_id)
+        await bot.copy_message(
+            chat_id=chat_id,
+            from_chat_id=source.chat.id,
+            message_id=source.message_id,
+            message_thread_id=thread_id,
+        )
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as exc:
+        await notify_staff_moderation(bot, f"{header}\nНе удалось скопировать сообщение: <code>{escape(str(exc))}</code>")
+
+
 def invalidate_chat_runtime_cache(chat_id: int) -> None:
     TRIGGER_CACHE.pop(chat_id, None)
     REPLY_CACHE.pop(chat_id, None)
@@ -1133,6 +1177,8 @@ def moderator_role_title(role: str | None, *, short: bool = False) -> str:
 
 
 def moderator_role_rank(role: str | None) -> int:
+    if role == "admin":
+        return 99
     spec = MODERATOR_ROLE_SPECS.get(role or "")
     return int(spec["rank"]) if spec else 0
 
@@ -1140,6 +1186,37 @@ def moderator_role_rank(role: str | None) -> int:
 def moderator_max_mute_minutes(role: str | None) -> int:
     spec = MODERATOR_ROLE_SPECS.get(role or "")
     return int(spec["max_mute_minutes"]) if spec else 0
+
+
+def moderator_can_delete_messages(role: str | None) -> bool:
+    return moderator_role_rank(role) >= moderator_role_rank("moderator")
+
+
+def moderator_chat_lock_limit_seconds(role: str | None) -> int | None:
+    if role == "admin":
+        return None
+    if role == "moderator":
+        return 10 * 60
+    if role == "senior":
+        return 30 * 60
+    return 0
+
+
+def moderator_can_stop_chat(role: str | None, seconds: int | None) -> bool:
+    limit = moderator_chat_lock_limit_seconds(role)
+    if limit is None:
+        return True
+    if limit <= 0:
+        return False
+    return seconds is not None and 1 <= seconds <= limit
+
+
+def moderator_can_unmute(actor_role: str | None, actor_id: int, active_mute: dict | None) -> bool:
+    if actor_role == "admin" or moderator_role_rank(actor_role) >= moderator_role_rank("senior"):
+        return True
+    if not active_mute:
+        return False
+    return int(active_mute["moderator_id"]) == actor_id
 
 
 def parse_moderator_duration(payload: str) -> tuple[str, str | None]:
@@ -10493,6 +10570,69 @@ async def vote_for_moderator(message: Message) -> None:
     await safe_reply(message, f"Голос за @{escape(username)} принят.{suffix}")
 
 
+@router.message(F.text.regexp(re.compile(r"^-сооб[?!.]?$", re.IGNORECASE)))
+async def delete_replied_message_by_moderator(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+    actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
+    if actor_role is None:
+        return
+    if not moderator_can_delete_messages(actor_role):
+        await safe_reply(message, "Помощник не может удалять сообщения.")
+        return
+    if not message.reply_to_message:
+        await safe_reply(message, "Команду <code>-сооб</code> нужно отправлять ответом на сообщение, которое надо удалить.")
+        return
+
+    await remember_sender(message)
+    source = message.reply_to_message
+    source_author = source.from_user.full_name if source.from_user else "unknown"
+    source_username = f"@{source.from_user.username}" if source.from_user and source.from_user.username else source_author
+    header = (
+        "🗑 <b>Удаление сообщения</b>\n"
+        f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
+        f"Автор сообщения: {escape(source_username)}\n"
+        f"Тип: <b>{escape(message_content_label(source))}</b>\n"
+        f"Чат: {escape(chat_title(message.chat))}"
+    )
+    await copy_deleted_message_to_staff(message.bot, source, header)
+    db.add_moderator_action(message.chat.id, message.from_user.id, source.from_user.id if source.from_user else 0, "delete_message", None, message_content_label(source))
+    with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+        await source.delete()
+    with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+        await message.delete()
+
+
+@router.message(F.text.regexp(re.compile(r"^подтвердить(?:\s|$)", re.IGNORECASE)))
+async def confirm_helper_action(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+    actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
+    if actor_role is None:
+        return
+    if actor_role != "admin" and moderator_role_rank(actor_role) < moderator_role_rank("senior"):
+        await safe_reply(message, "Подтверждать спорные действия помощников может только старший модератор или админ.")
+        return
+
+    await remember_sender(message)
+    reason = split_command_payload(message.text).strip()
+    source_line = ""
+    if message.reply_to_message:
+        source_line = f"\nПо сообщению: <code>{message.reply_to_message.message_id}</code>"
+    reason_line = f"\nКомментарий: {escape(reason)}" if reason else ""
+    await safe_reply(message, "✅ Подтверждение старшего записано.")
+    await notify_staff_moderation(
+        message.bot,
+        (
+            "✅ <b>Подтверждение спорного действия</b>\n"
+            f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
+            f"Чат: {escape(chat_title(message.chat))}"
+            f"{source_line}"
+            f"{reason_line}"
+        ),
+    )
+
+
 @router.message(F.text.regexp(re.compile(r"^чат\s+стоп(?:\s|$)", re.IGNORECASE)))
 async def stop_chat_messages(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
@@ -10506,6 +10646,14 @@ async def stop_chat_messages(message: Message) -> None:
     if parsed is None:
         return
     seconds, reason = parsed
+    if not moderator_can_stop_chat(actor_role, seconds):
+        if actor_role == "assistant":
+            await safe_reply(message, "Помощник не может останавливать чат.")
+        else:
+            limit = moderator_chat_lock_limit_seconds(actor_role)
+            limit_text = f"{int(limit / 60)} мин" if limit else "0 мин"
+            await safe_reply(message, f"Лимит этой должности на остановку чата: <b>{limit_text}</b>. Укажи срок, например <code>чат стоп 10м причина</code>.")
+        return
     until_at = None
     until_line = "до команды <code>чат старт</code>"
     if seconds is not None:
@@ -10545,6 +10693,9 @@ async def start_chat_messages(message: Message) -> None:
     actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
     if actor_role is None:
         return
+    if not moderator_can_stop_chat(actor_role, 1):
+        await safe_reply(message, "Помощник не может управлять остановкой чата.")
+        return
 
     await remember_sender(message)
     db.set_chat_lock(message.chat.id, False, message.from_user.id)
@@ -10566,6 +10717,9 @@ async def set_chat_slow_mode(message: Message) -> None:
         return
     actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
     if actor_role is None:
+        return
+    if actor_role == "assistant":
+        await safe_reply(message, "Помощник не может включать медленный режим.")
         return
 
     await remember_sender(message)
@@ -10754,7 +10908,12 @@ async def quiet_user(message: Message) -> None:
 async def unquiet_user(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
         return
-    if not message.from_user or not await has_chat_admin_permission(
+    if not message.from_user:
+        return
+    actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
+    if actor_role is None:
+        return
+    if actor_role == "admin" and not is_bot_admin(message.from_user.id) and not await has_chat_admin_permission(
         message.bot, message.chat.id, message.from_user.id, "can_restrict_members"
     ):
         return
@@ -10770,6 +10929,11 @@ async def unquiet_user(message: Message) -> None:
         await safe_reply(message, error)
         return
     if not target_id or not target_name:
+        return
+
+    active_mute = db.latest_active_moderator_mute(message.chat.id, target_id)
+    if not moderator_can_unmute(actor_role, message.from_user.id, active_mute):
+        await safe_reply(message, "Этой должностью можно снять только свой активный мут. Все муты снимает старший модератор или админ.")
         return
 
     quiet_admin_cleared = db.clear_quiet_admin(message.chat.id, target_id)
@@ -10801,6 +10965,15 @@ async def unquiet_user(message: Message) -> None:
 
     suffix = " Тихий админ-режим тоже снят." if quiet_admin_cleared else ""
     await safe_reply(message, f"{escape(target_name)} снова может трещать.{suffix}")
+    db.add_moderator_action(message.chat.id, message.from_user.id, target_id, "unmute", None, "")
+    await notify_staff_moderation(
+        message.bot,
+        (
+            "🔊 <b>Мут снят</b>\n"
+            f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
+            f"Кому: {escape(target_name)}"
+        ),
+    )
 
 
 @router.message(F.text.casefold() == "в цитаты")

@@ -2,7 +2,7 @@ import sqlite3
 import re
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 import json
@@ -1964,6 +1964,32 @@ class Database:
             tuple(params),
         ).fetchone()
         return int(row["total"]) if row else 0
+
+    def latest_active_moderator_mute(self, chat_id: int, target_user_id: int, now: str | None = None) -> dict | None:
+        check_at = now or utc_now()
+        check_dt = datetime.fromisoformat(check_at)
+        rows = self._conn.execute(
+            """
+            select id, chat_id, moderator_id, target_user_id, action, duration_minutes, reason, created_at
+            from chat_moderator_actions
+            where chat_id = ? and target_user_id = ? and action in ('mute', 'unmute')
+            order by id desc
+            limit 20
+            """,
+            (chat_id, target_user_id),
+        ).fetchall()
+        for row in rows:
+            item = dict(row)
+            if item["action"] == "unmute":
+                return None
+            duration = item.get("duration_minutes")
+            if not duration:
+                return item
+            expires_at = datetime.fromisoformat(str(item["created_at"])) + timedelta(minutes=int(duration))
+            if expires_at > check_dt:
+                return item
+            return None
+        return None
 
     def save_moderator_vote(self, chat_id: int, voter_id: int, moderator_id: int, vote_date: str) -> None:
         now = utc_now()
