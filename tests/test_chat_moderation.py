@@ -3,8 +3,11 @@ from datetime import datetime, timedelta, timezone
 from app.bot import (
     MODERATOR_ASSIGN_COMMANDS,
     moderator_max_mute_minutes,
+    parse_chat_stop_payload,
+    parse_duration_seconds_token,
     parse_moderator_duration,
     parse_moderator_role_payload,
+    parse_slow_mode_payload,
 )
 from app.db import Database
 from app.staff import STAFF_TOPIC_KEYS
@@ -72,3 +75,31 @@ def test_moderator_payloads_and_limits() -> None:
     assert moderator_max_mute_minutes("assistant") == 10
     assert moderator_max_mute_minutes("moderator") == 30
     assert moderator_max_mute_minutes("senior") == 60
+
+
+def test_chat_lock_storage_and_expiration(tmp_path) -> None:
+    db = _db(tmp_path)
+    future = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(timespec="seconds")
+    past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(timespec="seconds")
+
+    db.set_chat_lock(-100, True, 1, "cleanup", future)
+    assert db.get_chat_lock(-100)["reason"] == "cleanup"
+
+    db.set_chat_lock(-100, True, 1, "expired", past)
+    assert db.get_chat_lock(-100) is None
+
+    db.set_chat_lock(-100, True, 1, "manual", None)
+    assert db.get_chat_lock(-100)["reason"] == "manual"
+    db.set_chat_lock(-100, False, 1)
+    assert db.get_chat_lock(-100) is None
+
+
+def test_chat_control_payloads() -> None:
+    assert parse_duration_seconds_token("30с") == 30
+    assert parse_duration_seconds_token("5м") == 300
+    assert parse_duration_seconds_token("1ч") == 3600
+    assert parse_chat_stop_payload("чат стоп 5м зачистка") == (300, "зачистка")
+    assert parse_chat_stop_payload("чат стоп без флуда") == (None, "без флуда")
+    assert parse_slow_mode_payload("медленно 30с") == 30
+    assert parse_slow_mode_payload("медленно 5м") == 300
+    assert parse_slow_mode_payload("медленно выкл") == 0

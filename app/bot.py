@@ -569,6 +569,7 @@ def get_premium_service() -> PremiumService:
         premium_service = PremiumService(load_config().db_path)
     return premium_service
 ALARM_RUNTIME_CACHE: dict[int, tuple[float, object]] = {}
+CHAT_LOCK_CACHE: dict[int, tuple[float, dict | None]] = {}
 BIRTHDAY_CHECK_CACHE: dict[tuple[int, str], float] = {}
 
 
@@ -638,6 +639,20 @@ def cached_alarm_runtime(chat_id: int) -> tuple[bool, bool, str | None, bool]:
     return state
 
 
+def cached_chat_lock(chat_id: int) -> dict | None:
+    now = time.monotonic()
+    cached = CHAT_LOCK_CACHE.get(chat_id)
+    if cached and now - cached[0] < ALARM_RUNTIME_CACHE_SECONDS:
+        return cached[1]
+    lock = db.get_chat_lock(chat_id, datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    CHAT_LOCK_CACHE[chat_id] = (now, lock)
+    return lock
+
+
+def invalidate_chat_lock_cache(chat_id: int) -> None:
+    CHAT_LOCK_CACHE.pop(chat_id, None)
+
+
 class DropStaleMessagesMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         if isinstance(event, Message) and event.date < BOT_STARTED_AT:
@@ -680,6 +695,25 @@ class QuietAdminMiddleware(BaseMiddleware):
                 await event.delete()
             return None
         return await handler(event, data)
+
+
+class ChatLockMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        if not (
+            isinstance(event, Message)
+            and event.chat.type in SUPPORTED_CHAT_TYPES
+            and event.from_user
+            and not event.from_user.is_bot
+            and cached_chat_lock(event.chat.id)
+        ):
+            return await handler(event, data)
+
+        if await actor_moderation_role(event.bot, event.chat.id, event.from_user.id) is not None:
+            return await handler(event, data)
+
+        with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+            await event.delete()
+        return None
 
 
 class AlarmEmojiMiddleware(BaseMiddleware):
@@ -1186,6 +1220,49 @@ def parse_moderator_vote_payload(text: str | None) -> str | None:
     if command != "голос" or not payload.startswith("@"):
         return None
     return normalize_username(payload.split(maxsplit=1)[0])
+
+
+def parse_duration_seconds_token(token: str) -> int | None:
+    value = token.strip().casefold().rstrip(".")
+    match = re.fullmatch(r"(\d+)\s*(с|s|сек|секунд|м|m|мин|минут|ч|h|час|часов)", value)
+    if not match:
+        return None
+    amount = int(match.group(1))
+    unit = match.group(2)
+    if amount < 0:
+        return None
+    if unit in {"с", "s", "сек", "секунд"}:
+        return amount
+    if unit in {"м", "m", "мин", "минут"}:
+        return amount * 60
+    return amount * 3600
+
+
+def parse_chat_stop_payload(text: str | None) -> tuple[int | None, str] | None:
+    command, payload = split_text_command(text)
+    if command != "чат" or not payload.casefold().startswith("стоп"):
+        return None
+    rest = payload[4:].strip()
+    if not rest:
+        return None, ""
+    first, _, tail = rest.partition(" ")
+    seconds = parse_duration_seconds_token(first)
+    if seconds is None:
+        return None, rest
+    return max(1, seconds), tail.strip()
+
+
+def parse_slow_mode_payload(text: str | None) -> int | None:
+    command, payload = split_text_command(text)
+    if command != "медленно":
+        return None
+    value = payload.strip().casefold()
+    if value in {"выкл", "выключить", "off", "0", "0с"}:
+        return 0
+    seconds = parse_duration_seconds_token(value)
+    if seconds is None:
+        return None
+    return max(0, min(3600, seconds))
 
 
 def parse_quiet_manual_payload(text: str | None) -> tuple[str | None, int | None, str]:
@@ -10416,6 +10493,109 @@ async def vote_for_moderator(message: Message) -> None:
     await safe_reply(message, f"Голос за @{escape(username)} принят.{suffix}")
 
 
+@router.message(F.text.regexp(re.compile(r"^чат\s+стоп(?:\s|$)", re.IGNORECASE)))
+async def stop_chat_messages(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+    actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
+    if actor_role is None:
+        return
+
+    await remember_sender(message)
+    parsed = parse_chat_stop_payload(message.text)
+    if parsed is None:
+        return
+    seconds, reason = parsed
+    until_at = None
+    until_line = "до команды <code>чат старт</code>"
+    if seconds is not None:
+        until_dt = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+        until_at = until_dt.isoformat(timespec="seconds")
+        until_line = f"до <b>{escape(until_at)}</b>"
+
+    db.set_chat_lock(message.chat.id, True, message.from_user.id, reason, until_at)
+    invalidate_chat_lock_cache(message.chat.id)
+    reason_line = f"\nПричина: {escape(reason)}" if reason else ""
+    await safe_reply(
+        message,
+        (
+            "🔒 <b>Чат остановлен</b>\n"
+            f"Обычные участники временно не смогут писать: их сообщения будут удаляться.\n"
+            "Писать могут админы Telegram и назначенные модераторы бота.\n"
+            f"Срок: {until_line}"
+            f"{reason_line}"
+        ),
+    )
+    await notify_staff_moderation(
+        message.bot,
+        (
+            "🔒 <b>Чат стоп</b>\n"
+            f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
+            f"Чат: {escape(chat_title(message.chat))}\n"
+            f"Срок: {until_line}"
+            f"{reason_line}"
+        ),
+    )
+
+
+@router.message(F.text.regexp(re.compile(r"^чат\s+старт[?!.]?$", re.IGNORECASE)))
+async def start_chat_messages(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+    actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
+    if actor_role is None:
+        return
+
+    await remember_sender(message)
+    db.set_chat_lock(message.chat.id, False, message.from_user.id)
+    invalidate_chat_lock_cache(message.chat.id)
+    await safe_reply(message, "🔓 Чат снова открыт.")
+    await notify_staff_moderation(
+        message.bot,
+        (
+            "🔓 <b>Чат старт</b>\n"
+            f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
+            f"Чат: {escape(chat_title(message.chat))}"
+        ),
+    )
+
+
+@router.message(F.text.regexp(re.compile(r"^медленно\s+(.+)$", re.IGNORECASE)))
+async def set_chat_slow_mode(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+    actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
+    if actor_role is None:
+        return
+
+    await remember_sender(message)
+    delay = parse_slow_mode_payload(message.text)
+    if delay is None:
+        await safe_reply(message, "Формат: <code>медленно 30с</code>, <code>медленно 5м</code> или <code>медленно выкл</code>.")
+        return
+    try:
+        await telegram_api_call(message.bot, "setChatSlowModeDelay", {"chat_id": message.chat.id, "slow_mode_delay": delay})
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        await safe_reply(
+            message,
+            "Не получилось изменить медленный режим. Проверь, что бот админ и может управлять группой.\n"
+            f"<code>{escape(str(exc))}</code>",
+        )
+        return
+
+    text = "🐢 Медленный режим выключен." if delay == 0 else f"🐢 Медленный режим: <b>{delay}</b> сек."
+    await safe_reply(message, text)
+    await notify_staff_moderation(
+        message.bot,
+        (
+            "🐢 <b>Медленный режим</b>\n"
+            f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
+            f"Чат: {escape(chat_title(message.chat))}\n"
+            f"Задержка: <b>{delay}</b> сек."
+        ),
+    )
+
+
 @router.message(F.text.regexp(re.compile(r"^(@[A-Za-z0-9_]{5,32}\s+)?затихни\s+админ(?:\s+\d+)?(\s+-\s+.*)?$", re.IGNORECASE)))
 async def quiet_admin_user(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
@@ -10988,6 +11168,7 @@ async def main() -> None:
     router.message.middleware(StaffTopicMiddleware())
     router.message.middleware(AuditAdminStateMiddleware())
     router.message.middleware(QuietAdminMiddleware())
+    router.message.middleware(ChatLockMiddleware())
     router.message.middleware(AlarmEmojiMiddleware())
     router.message.middleware(BlacklistMiddleware())
     router.callback_query.middleware(StaleCallbackQueryMiddleware())

@@ -895,6 +895,16 @@ class Database:
             create index if not exists idx_chat_moderator_votes_moderator
                 on chat_moderator_votes(chat_id, moderator_id);
 
+            create table if not exists chat_lock_settings (
+                chat_id integer primary key,
+                enabled integer not null default 0,
+                reason text not null default '',
+                until_at text,
+                updated_by integer,
+                updated_at text not null,
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
             create table if not exists dig_players (
                 chat_id integer not null,
                 user_id integer not null,
@@ -1978,6 +1988,42 @@ class Database:
             where chat_id = ? and voter_id = ?
             """,
             (chat_id, voter_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def set_chat_lock(
+        self,
+        chat_id: int,
+        enabled: bool,
+        updated_by: int | None,
+        reason: str = "",
+        until_at: str | None = None,
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into chat_lock_settings (chat_id, enabled, reason, until_at, updated_by, updated_at)
+            values (?, ?, ?, ?, ?, ?)
+            on conflict(chat_id) do update set
+                enabled = excluded.enabled,
+                reason = excluded.reason,
+                until_at = excluded.until_at,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (chat_id, int(enabled), reason.strip()[:500], until_at, updated_by, utc_now()),
+        )
+        self._conn.commit()
+
+    def get_chat_lock(self, chat_id: int, now: str | None = None) -> dict | None:
+        check_at = now or utc_now()
+        row = self._conn.execute(
+            """
+            select chat_id, enabled, reason, until_at, updated_by, updated_at
+            from chat_lock_settings
+            where chat_id = ? and enabled = 1
+              and (until_at is null or until_at > ?)
+            """,
+            (chat_id, check_at),
         ).fetchone()
         return dict(row) if row else None
 
