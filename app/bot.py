@@ -1537,6 +1537,37 @@ async def is_valid_roll_mute_target(bot: Bot, chat_id: int, user_id: int) -> boo
     return member.status not in ADMIN_STATUSES and status not in ADMIN_STATUS_TEXTS
 
 
+async def current_roll_mute_target_member(bot: Bot, chat_id: int, user_id: int):
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        return None
+
+    user = member.user
+    status = member_status_text(member.status)
+    inactive = status not in ACTIVE_MEMBER_STATUS_TEXTS or (status == "restricted" and getattr(member, "is_member", True) is False)
+    if inactive or user.is_bot or is_deleted_or_empty_user(user):
+        db.upsert_seen_user(
+            chat_id=chat_id,
+            user_id=user.id,
+            username=None,
+            full_name=user.full_name or str(user.id),
+            is_bot=user.is_bot,
+        )
+        return None
+
+    db.upsert_seen_user(
+        chat_id=chat_id,
+        user_id=user.id,
+        username=user.username,
+        full_name=user.full_name,
+        is_bot=user.is_bot,
+    )
+    if member.status in ADMIN_STATUSES or status in ADMIN_STATUS_TEXTS:
+        return None
+    return member
+
+
 def dig_items_map(chat_id: int, user_id: int) -> dict[str, int]:
     return {item.item_key: item.quantity for item in db.list_dig_items(chat_id, user_id)}
 
@@ -10602,14 +10633,17 @@ async def roll_mute(message: Message) -> None:
         return
     until_date = now + timedelta(minutes=settings.mute_minutes)
     picked = None
+    picked_member = None
     protected = False
     last_error = None
     for candidate in candidates:
-        if not await is_valid_roll_mute_target(message.bot, message.chat.id, candidate.user_id):
+        member = await current_roll_mute_target_member(message.bot, message.chat.id, candidate.user_id)
+        if member is None:
             continue
 
         if db.consume_dig_item(message.chat.id, candidate.user_id, "cursed_pick"):
             picked = candidate
+            picked_member = member
             protected = True
             break
 
@@ -10622,6 +10656,7 @@ async def roll_mute(message: Message) -> None:
                 use_independent_chat_permissions=True,
             )
             picked = candidate
+            picked_member = member
             break
         except TelegramBadRequest as exc:
             last_error = exc
@@ -10643,7 +10678,7 @@ async def roll_mute(message: Message) -> None:
             )
             return
 
-    if picked is None:
+    if picked is None or picked_member is None:
         detail = f"\nПоследняя ошибка: <code>{escape(str(last_error))}</code>" if last_error else ""
         await safe_reply(
             message,
@@ -10652,7 +10687,8 @@ async def roll_mute(message: Message) -> None:
         )
         return
 
-    name = profile_link(picked.user_id, picked.username, picked.full_name)
+    current_user = picked_member.user
+    name = profile_link(current_user.id, current_user.username, current_user.full_name)
     if protected:
         await safe_reply(
             message,
@@ -10660,7 +10696,7 @@ async def roll_mute(message: Message) -> None:
         )
         return
 
-    db.increment_roll_mute_stat(message.chat.id, picked.user_id)
+    db.increment_roll_mute_stat(message.chat.id, current_user.id)
     await safe_reply(message, f"Roll mute выбрал {name}. Мут на <b>{settings.mute_minutes}</b> мин.")
 
 
