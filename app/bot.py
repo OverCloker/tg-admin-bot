@@ -1437,8 +1437,8 @@ def dig_player_name(username: str | None, full_name: str) -> str:
 
 
 def profile_link(user_id: int, username: str | None, full_name: str, suffix: str = "") -> str:
-    label = username or full_name
-    href = f"https://t.me/{quote(username)}" if username else f"tg://openmessage?user_id={user_id}"
+    label = f"@{username}" if username else full_name
+    href = f"tg://openmessage?user_id={user_id}"
     return f'<a href="{href}">{escape(label)}</a>{escape(suffix)}'
 
 
@@ -10652,16 +10652,16 @@ async def roll_mute(message: Message) -> None:
         )
         return
 
-    name = f"@{picked.username}" if picked.username else picked.full_name
+    name = profile_link(picked.user_id, picked.username, picked.full_name)
     if protected:
         await safe_reply(
             message,
-            f"У пользователя {escape(name)} сработала <b>Защита от сглаза</b>. Roll mute отменен.",
+            f"У пользователя {name} сработала <b>Защита от сглаза</b>. Roll mute отменен.",
         )
         return
 
     db.increment_roll_mute_stat(message.chat.id, picked.user_id)
-    await safe_reply(message, f"Roll mute выбрал {escape(name)}. Мут на <b>{settings.mute_minutes}</b> мин.")
+    await safe_reply(message, f"Roll mute выбрал {name}. Мут на <b>{settings.mute_minutes}</b> мин.")
 
 
 @router.message(F.text.regexp(re.compile(r"^топ\s+roll\s+mute[?!.]?$", re.IGNORECASE)))
