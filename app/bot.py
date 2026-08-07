@@ -184,10 +184,6 @@ SINGLE_EMOJI_RE = re.compile(
     rf"|{EMOJI_ELEMENT_RE}(?:\u200d{EMOJI_ELEMENT_RE})*(?:[\U000e0020-\U000e007e]*\U000e007f)?"
     rf")$"
 )
-DEFAULT_AVAILABLE_REACTIONS = [
-    {"type": "emoji", "emoji": emoji}
-    for emoji in ['👍', '👎', '❤', '🔥', '🥰', '👏', '😁', '🤔', '🤯', '😱', '🤬', '😢', '🎉', '🤩', '🤮', '💩']
-]
 DIG_COOLDOWN = timedelta(hours=3)
 DIG_LUCK_COST = 35
 DIG_LUCK_REGEN_PER_HOUR = 7
@@ -3460,11 +3456,6 @@ async def telegram_api_get(bot: Bot, method: str) -> dict:
             return data.get("result")
 
 
-async def raw_chat_available_reactions(bot: Bot, chat_id: int) -> list | None:
-    result = await telegram_api_call(bot, "getChat", {"chat_id": chat_id})
-    return result.get("available_reactions")
-
-
 async def set_chat_available_reactions(bot: Bot, chat_id: int, reactions: list) -> None:
     await telegram_api_call(
         bot,
@@ -3717,6 +3708,12 @@ async def is_chat_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
     except (TelegramBadRequest, TelegramForbiddenError):
         return False
     return member.status in ADMIN_STATUSES or member_status_text(member.status) in ADMIN_STATUS_TEXTS
+
+
+async def is_alarm_restriction_exempt(bot: Bot, chat_id: int, user_id: int | None) -> bool:
+    if user_id is None:
+        return True
+    return await is_chat_admin(bot, chat_id, user_id)
 
 
 async def has_chat_admin_permission(bot: Bot, chat_id: int, user_id: int, permission: str) -> bool:
@@ -9262,6 +9259,9 @@ async def delete_single_emoji_during_alarm(message: Message) -> bool:
     restrictions_enabled, api_enabled, last_status, has_saved_permissions = cached_alarm_runtime(message.chat.id)
     if not restrictions_enabled or not api_enabled or last_status not in {"A", "P"} or not has_saved_permissions:
         return False
+    user_id = message.from_user.id if message.from_user else None
+    if await is_alarm_restriction_exempt(message.bot, message.chat.id, user_id):
+        return False
 
     try:
         await message.delete()
@@ -9307,17 +9307,8 @@ async def apply_alarm_restrictions(bot: Bot, chat_id: int) -> None:
     except (TelegramBadRequest, TelegramForbiddenError) as exc:
         logging.warning("Could not apply alarm permissions in chat %s: %s", chat_id, exc)
 
-    try:
-        if settings.reactions_json is None:
-            current_reactions = await raw_chat_available_reactions(bot, chat_id)
-            if current_reactions is not None:
-                db.save_alarm_reactions(chat_id, current_reactions)
-        await set_chat_available_reactions(bot, chat_id, [])
-    except TelegramNotFound:
-        pass
-    except (TelegramBadRequest, TelegramForbiddenError) as exc:
-        if "not found" not in str(exc).casefold():
-            logging.warning("Could not disable alarm reactions in chat %s: %s", chat_id, exc)
+    # Reactions are not disabled globally: Telegram applies that to admins too.
+    # Regular users' reactions are removed by delete_reactions_during_alarm instead.
 
 
 async def send_alarm_notification(bot: Bot, chat_id: int, text: str) -> Message | None:
@@ -9363,7 +9354,10 @@ async def activate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
         db.set_alarm_api_status_message_id(chat_id, "A", alert_message.message_id)
     if not restrictions_enabled:
         return alert_message is not None
-    action_text = settings.alarm_text or "Режим тревоги применен: медиа, реакции и одиночные эмодзи отключены."
+    action_text = settings.alarm_text or (
+        "Режим тревоги применен: медиа, реакции и одиночные эмодзи ограничены для участников. "
+        "Админы не ограничиваются."
+    )
     action_message = await send_alarm_notification(bot, chat_id, action_text)
     if action_message is not None:
         db.set_alarm_api_action_message_id(chat_id, "A", action_message.message_id)
@@ -9384,13 +9378,12 @@ async def restore_alarm_restrictions(bot: Bot, chat_id: int) -> None:
     except (TelegramBadRequest, TelegramForbiddenError) as exc:
         logging.warning("Could not restore alarm permissions in chat %s: %s", chat_id, exc)
 
+    if settings.reactions_json is None:
+        return
+
     try:
-        saved_reactions = json.loads(settings.reactions_json) if settings.reactions_json is not None else None
-        await set_chat_available_reactions(
-            bot,
-            chat_id,
-            saved_reactions if saved_reactions is not None else DEFAULT_AVAILABLE_REACTIONS,
-        )
+        saved_reactions = json.loads(settings.reactions_json)
+        await set_chat_available_reactions(bot, chat_id, saved_reactions)
         if settings.reactions_json is not None:
             db.pop_alarm_reactions(chat_id)
     except TelegramNotFound:
@@ -9565,6 +9558,8 @@ async def delete_reactions_during_alarm(event: MessageReactionUpdated, bot: Bot)
         return
 
     if user_id is None and actor_chat_id is None:
+        return
+    if await is_alarm_restriction_exempt(bot, event.chat.id, user_id):
         return
 
     try:
