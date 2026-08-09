@@ -8,10 +8,14 @@ ACTIVE_ALARM_RUNTIME = (True, True, "A", True)
 
 
 class FakeMessage:
-    def __init__(self, user_id: int | None = 42) -> None:
+    def __init__(self, user_id: int | None = 42, *, text: str | None = "👍", sticker: object | None = None) -> None:
         self.bot = object()
         self.chat = SimpleNamespace(id=-100, type="supergroup")
         self.from_user = SimpleNamespace(id=user_id) if user_id is not None else None
+        self.message_id = 777
+        self.text = text
+        self.entities = None
+        self.sticker = sticker
         self.deleted = False
 
     async def delete(self) -> None:
@@ -54,6 +58,40 @@ def test_alarm_deletes_member_single_emoji(monkeypatch) -> None:
 
     message = FakeMessage()
     result = asyncio.run(bot_module.delete_single_emoji_during_alarm(message))
+
+    assert result is True
+    assert message.deleted is True
+
+
+def test_alarm_restricted_message_matches_stickers() -> None:
+    message = FakeMessage(text=None, sticker=SimpleNamespace(file_id="sticker"))
+
+    assert bot_module.is_alarm_restricted_message(message) is True
+
+
+def test_alarm_does_not_delete_admin_sticker(monkeypatch) -> None:
+    async def fake_is_chat_admin(bot, chat_id, user_id):
+        return True
+
+    monkeypatch.setattr(bot_module, "cached_alarm_runtime", lambda chat_id: ACTIVE_ALARM_RUNTIME)
+    monkeypatch.setattr(bot_module, "is_chat_admin", fake_is_chat_admin)
+
+    message = FakeMessage(text=None, sticker=SimpleNamespace(file_id="sticker"))
+    result = asyncio.run(bot_module.delete_alarm_restricted_message(message))
+
+    assert result is False
+    assert message.deleted is False
+
+
+def test_alarm_deletes_member_sticker(monkeypatch) -> None:
+    async def fake_is_chat_admin(bot, chat_id, user_id):
+        return False
+
+    monkeypatch.setattr(bot_module, "cached_alarm_runtime", lambda chat_id: ACTIVE_ALARM_RUNTIME)
+    monkeypatch.setattr(bot_module, "is_chat_admin", fake_is_chat_admin)
+
+    message = FakeMessage(text=None, sticker=SimpleNamespace(file_id="sticker"))
+    result = asyncio.run(bot_module.delete_alarm_restricted_message(message))
 
     assert result is True
     assert message.deleted is True

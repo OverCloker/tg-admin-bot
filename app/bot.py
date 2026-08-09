@@ -733,8 +733,7 @@ class QuietAdminMiddleware(BaseMiddleware):
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
             )
         ):
-            with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
-                await event.delete()
+            await delete_message_now_or_later(event)
             return None
         return await handler(event, data)
 
@@ -753,18 +752,17 @@ class ChatLockMiddleware(BaseMiddleware):
         if await actor_moderation_role(event.bot, event.chat.id, event.from_user.id) is not None:
             return await handler(event, data)
 
-        with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
-            await event.delete()
+        await delete_message_now_or_later(event)
         return None
 
 
-class AlarmEmojiMiddleware(BaseMiddleware):
+class AlarmRestrictedMessageMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         if (
             isinstance(event, Message)
             and event.chat.type in SUPPORTED_CHAT_TYPES
-            and is_single_emoji_message(event)
-            and await delete_single_emoji_during_alarm(event)
+            and is_alarm_restricted_message(event)
+            and await delete_alarm_restricted_message(event)
         ):
             return None
         return await handler(event, data)
@@ -3583,8 +3581,24 @@ async def delete_message_later(bot: Bot, chat_id: int, message_id: int, delay_se
     await asyncio.sleep(delay_seconds)
     try:
         await bot.delete_message(chat_id, message_id)
+    except TelegramRetryAfter as exc:
+        await asyncio.sleep(int(getattr(exc, "retry_after", 3)) + 1)
+        with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
+            await bot.delete_message(chat_id, message_id)
     except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound):
         return
+
+
+async def delete_message_now_or_later(message: Message) -> bool:
+    try:
+        await message.delete()
+        return True
+    except TelegramRetryAfter as exc:
+        delay = int(getattr(exc, "retry_after", 3)) + 1
+        asyncio.create_task(delete_message_later(message.bot, message.chat.id, message.message_id, delay))
+        return True
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound):
+        return False
 
 
 async def temporary_reply(message: Message, text: str, delay_seconds: int = 60, **kwargs) -> None:
@@ -9255,7 +9269,11 @@ def is_single_emoji_message(message: Message) -> bool:
     return entity_type == "custom_emoji" and entity.offset == 0 and entity.length == utf16_length
 
 
-async def delete_single_emoji_during_alarm(message: Message) -> bool:
+def is_alarm_restricted_message(message: Message) -> bool:
+    return bool(message.sticker) or is_single_emoji_message(message)
+
+
+async def delete_alarm_restricted_message(message: Message) -> bool:
     restrictions_enabled, api_enabled, last_status, has_saved_permissions = cached_alarm_runtime(message.chat.id)
     if not restrictions_enabled or not api_enabled or last_status not in {"A", "P"} or not has_saved_permissions:
         return False
@@ -9263,11 +9281,11 @@ async def delete_single_emoji_during_alarm(message: Message) -> bool:
     if await is_alarm_restriction_exempt(message.bot, message.chat.id, user_id):
         return False
 
-    try:
-        await message.delete()
-    except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
-        return False
-    return True
+    return await delete_message_now_or_later(message)
+
+
+async def delete_single_emoji_during_alarm(message: Message) -> bool:
+    return await delete_alarm_restricted_message(message)
 
 
 @router.edited_message(F.chat.type.in_(SUPPORTED_CHAT_TYPES))
@@ -11648,7 +11666,7 @@ async def main() -> None:
     router.message.middleware(AuditAdminStateMiddleware())
     router.message.middleware(QuietAdminMiddleware())
     router.message.middleware(ChatLockMiddleware())
-    router.message.middleware(AlarmEmojiMiddleware())
+    router.message.middleware(AlarmRestrictedMessageMiddleware())
     router.message.middleware(BlacklistMiddleware())
     router.callback_query.middleware(StaleCallbackQueryMiddleware())
     router.callback_query.middleware(AuditCallbackMiddleware())
