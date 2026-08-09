@@ -144,7 +144,9 @@ MINI_APP_HTML = r"""<!doctype html>
     body[data-theme="glass"] .profile-card::before,
     body[data-theme="glass"] .achievement-card::before,
     body[data-theme="glass"] .inventory-group::before,
-    body[data-theme="glass"] .bag-summary::before {
+    body[data-theme="glass"] .bag-summary::before,
+    body[data-theme="glass"] .mine-admin-card::before,
+    body[data-theme="glass"] .mine-admin-row::before {
       content: "";
       position: absolute;
       inset: 0;
@@ -162,7 +164,9 @@ MINI_APP_HTML = r"""<!doctype html>
     body[data-theme="glass"] .profile-card::after,
     body[data-theme="glass"] .achievement-card::after,
     body[data-theme="glass"] .inventory-group::after,
-    body[data-theme="glass"] .bag-summary::after {
+    body[data-theme="glass"] .bag-summary::after,
+    body[data-theme="glass"] .mine-admin-card::after,
+    body[data-theme="glass"] .mine-admin-row::after {
       content: "";
       position: absolute;
       left: 14px;
@@ -220,7 +224,9 @@ MINI_APP_HTML = r"""<!doctype html>
     body[data-theme="glass"] .profile-card,
     body[data-theme="glass"] .achievement-card,
     body[data-theme="glass"] .inventory-group,
-    body[data-theme="glass"] .bag-summary {
+    body[data-theme="glass"] .bag-summary,
+    body[data-theme="glass"] .mine-admin-card,
+    body[data-theme="glass"] .mine-admin-row {
       position: relative;
       overflow: hidden;
       box-shadow: var(--panel-shadow);
@@ -294,7 +300,7 @@ MINI_APP_HTML = r"""<!doctype html>
       padding: 10px 12px;
       border: 1px solid var(--line);
       border-radius: var(--radius-sm);
-      background: var(--input);
+      background: var(--input-bg);
       color: var(--text);
       font: inherit;
       box-sizing: border-box;
@@ -322,7 +328,7 @@ MINI_APP_HTML = r"""<!doctype html>
       padding:9px 10px;
       border:1px solid var(--line);
       border-radius:var(--radius-sm);
-      background:var(--input);
+      background:var(--input-bg);
       color:var(--text);
       font:inherit;
       box-sizing:border-box;
@@ -330,7 +336,7 @@ MINI_APP_HTML = r"""<!doctype html>
     .mine-admin-form .wide { grid-column: 1 / -1; }
     .mine-admin-row {
       display:grid;
-      grid-template-columns:minmax(0, 1fr) auto;
+      grid-template-columns:minmax(0, 1fr);
       gap:8px;
       align-items:center;
       padding:9px 10px;
@@ -339,7 +345,12 @@ MINI_APP_HTML = r"""<!doctype html>
       background:var(--panel-2);
     }
     .mine-admin-row b,
-    .mine-admin-row span { overflow-wrap:anywhere; }
+    .mine-admin-row span { min-width:0; overflow-wrap:break-word; word-break:normal; }
+    .mine-admin-row > .btn { width:100%; margin:0; }
+    .mine-admin-row > .utility-actions {
+      width:100%;
+      grid-template-columns:repeat(auto-fit, minmax(94px, 1fr));
+    }
     .friend-list { display: grid; gap: 8px; margin-top: 10px; }
     .friend-row {
       display: grid;

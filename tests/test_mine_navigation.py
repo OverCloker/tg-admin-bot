@@ -209,6 +209,13 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'viewer.canManageRoles' in MINI_APP_HTML
     assert 'function showMineAdmin(page = 1)' in MINI_APP_HTML
     assert 'viewer.canViewMineAdmin' in MINI_APP_HTML
+    assert 'body[data-theme="glass"] .mine-admin-card::before' in MINI_APP_HTML
+    assert 'body[data-theme="glass"] .mine-admin-row::before' in MINI_APP_HTML
+    assert ".mine-admin-row > .utility-actions" in MINI_APP_HTML
+    assert "grid-template-columns:repeat(auto-fit, minmax(94px, 1fr));" in MINI_APP_HTML
+    assert ".mine-admin-row span { min-width:0; overflow-wrap:break-word; word-break:normal; }" in MINI_APP_HTML
+    assert ".mine-admin-row span { overflow-wrap:anywhere; }" not in MINI_APP_HTML
+    assert "background:var(--input);" not in MINI_APP_HTML
     assert '"/miniapp/profile/mine-admin/grant"' in MINI_APP_HTML
     assert '"/miniapp/profile/mine-admin/delete"' in MINI_APP_HTML
     assert '"/miniapp/profile/mine-admin/block"' in MINI_APP_HTML
