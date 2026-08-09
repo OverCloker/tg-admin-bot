@@ -26,6 +26,7 @@ MINI_APP_HTML = r"""<!doctype html>
       --radius-sm: 14px;
       --button-radius: 18px;
       --input-bg: #0f1c2a;
+      --input-placeholder: #9fb0c0;
       --panel-shadow: 0 14px 38px #00000024;
       --surface-blur: none;
     }
@@ -43,6 +44,7 @@ MINI_APP_HTML = r"""<!doctype html>
       --radius-sm: 18px;
       --button-radius: 999px;
       --input-bg: #15232e;
+      --input-placeholder: #aebdcc;
       --panel-shadow: 0 10px 28px #00000026;
       background:
         radial-gradient(circle at 18% 0%, #3e6f9180, transparent 32%),
@@ -63,7 +65,8 @@ MINI_APP_HTML = r"""<!doctype html>
       --radius: 30px;
       --radius-sm: 22px;
       --button-radius: 999px;
-      --input-bg: #ffffff18;
+      --input-bg: #203247b8;
+      --input-placeholder: #d9e7f3;
       --panel-shadow:
         0 28px 80px #00000066,
         0 8px 22px #9de1ff16,
@@ -101,6 +104,7 @@ MINI_APP_HTML = r"""<!doctype html>
       font-weight: 800;
       white-space: nowrap;
     }
+    input::placeholder { color: var(--input-placeholder); opacity: 1; }
     body[data-theme="glass"] .top-profile,
     body[data-theme="glass"] .btn,
     body[data-theme="glass"] .mini-form input,
@@ -320,7 +324,7 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     .role-row b,
     .role-row span { overflow-wrap: anywhere; }
-    .mine-admin-grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:8px; margin-top:10px; }
+    .mine-admin-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:8px; margin-top:10px; }
     .mine-admin-card { padding:10px; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel-2); }
     .mine-admin-card b { display:block; margin-top:4px; font-size:18px; }
     .mine-admin-form { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:8px; margin-top:10px; }
@@ -1827,7 +1831,6 @@ MINI_APP_HTML = r"""<!doctype html>
         <div class="mine-admin-grid">
           <div class="mine-admin-card">Игроки<b>${Number(summary.players || 0)}</b></div>
           <div class="mine-admin-card">Глубина<b>${Number(summary.totalDepth || 0)} м</b></div>
-          <div class="mine-admin-card">Доступ<b>${canManage ? "управление" : "просмотр"}</b></div>
         </div>
       </section>
       ${grantForm}

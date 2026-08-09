@@ -213,9 +213,13 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'body[data-theme="glass"] .mine-admin-row::before' in MINI_APP_HTML
     assert 'body[data-theme="glass"] .mine-admin-form input' in MINI_APP_HTML
     assert 'body[data-view="mineAdmin"][data-theme=' not in MINI_APP_HTML
+    assert "--input-placeholder: #d9e7f3;" in MINI_APP_HTML
+    assert "input::placeholder { color: var(--input-placeholder); opacity: 1; }" in MINI_APP_HTML
+    assert ".mine-admin-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr));" in MINI_APP_HTML
     assert 'class="mine-admin-screen"' in MINI_APP_HTML
     assert "/miniapp/profile/mine-admin?per_page=0" in MINI_APP_HTML
     assert "<h2>Игроки шахты</h2>" not in MINI_APP_HTML
+    assert '<div class="mine-admin-card">Доступ' not in MINI_APP_HTML
     assert "players.items" not in MINI_APP_HTML
     assert ".mine-admin-row > .utility-actions" in MINI_APP_HTML
     assert "grid-template-columns:repeat(auto-fit, minmax(94px, 1fr));" in MINI_APP_HTML
