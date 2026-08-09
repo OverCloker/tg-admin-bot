@@ -510,8 +510,9 @@ MINIAPP_MODERATOR_ROLE_TITLES = {
 MINIAPP_MODERATOR_ROLE_RANKS = {"assistant": 1, "moderator": 2, "senior": 3}
 MINIAPP_ASSIGNABLE_PROFILE_ROLES = (
     {"key": "admin", "label": "Админ", "emoji": "🛡️"},
-    {"key": "moderator", "label": "Модератор", "emoji": "⚖️"},
     {"key": "senior", "label": "Старший модератор", "emoji": "⭐"},
+    {"key": "moderator", "label": "Модератор", "emoji": "⚖️"},
+    {"key": "assistant", "label": "Помощник модера", "emoji": "🤝"},
 )
 MINIAPP_ASSIGNABLE_ROLE_LABELS = {str(role["label"]) for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES}
 

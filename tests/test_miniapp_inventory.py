@@ -250,12 +250,12 @@ def test_miniapp_mine_admin_access_is_owner_or_moderator(tmp_path, monkeypatch) 
         db.close()
 
 
-def test_miniapp_profile_role_groups_use_three_presets(tmp_path) -> None:
+def test_miniapp_profile_role_groups_use_moderation_hierarchy_presets(tmp_path) -> None:
     db = Database(str(tmp_path / "bot.sqlite3"))
     db.init()
     db.upsert_chat(-100, "Чат", "supergroup", None)
     db.upsert_seen_user(-100, 7, "helper", "Помощник", False)
-    db.set_miniapp_profile_role(7, "Модератор", 42)
+    db.set_miniapp_profile_role(7, "Помощник модера", 42)
     db.set_miniapp_profile_role(8, "Технарь", 42)
 
     try:
@@ -263,9 +263,9 @@ def test_miniapp_profile_role_groups_use_three_presets(tmp_path) -> None:
     finally:
         db.close()
 
-    assert [group["label"] for group in groups] == ["Админ", "Модератор", "Старший модератор"]
-    moderator_group = next(group for group in groups if group["label"] == "Модератор")
-    assert [item["user_id"] for item in moderator_group["items"]] == [7]
+    assert [group["label"] for group in groups] == ["Админ", "Старший модератор", "Модератор", "Помощник модера"]
+    assistant_group = next(group for group in groups if group["label"] == "Помощник модера")
+    assert [item["user_id"] for item in assistant_group["items"]] == [7]
     assert all(item["label"] != "Технарь" for group in groups for item in group["items"])
 
 
