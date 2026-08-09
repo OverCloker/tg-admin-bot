@@ -104,6 +104,8 @@ MINI_APP_HTML = r"""<!doctype html>
     body[data-theme="glass"] .top-profile,
     body[data-theme="glass"] .btn,
     body[data-theme="glass"] .mini-form input,
+    body[data-theme="glass"] .role-manager-form input,
+    body[data-theme="glass"] .mine-admin-form input,
     body[data-theme="glass"] .persistent-radio {
       border: 1px solid #ffffff4a;
       box-shadow:
@@ -335,39 +337,6 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     .mine-admin-form .wide { grid-column: 1 / -1; }
     .mine-admin-screen { display:grid; gap:14px; }
-    body[data-view="mineAdmin"][data-theme="material"] .mine-admin-screen .panel {
-      background:
-        linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%),
-        var(--panel);
-      border-color: color-mix(in srgb, var(--accent) 24%, var(--line));
-    }
-    body[data-view="mineAdmin"][data-theme="material"] .mine-admin-card,
-    body[data-view="mineAdmin"][data-theme="material"] .mine-admin-row {
-      background: color-mix(in srgb, var(--panel-2) 86%, var(--accent) 14%);
-    }
-    body[data-view="mineAdmin"][data-theme="glass"] .mine-admin-screen .panel {
-      background:
-        linear-gradient(145deg, #ffffff34 0%, #bfeaff20 42%, #42638d1f 100%);
-      border-color: #ffffff68;
-      box-shadow:
-        0 28px 80px #00000066,
-        0 8px 22px #9de1ff16,
-        inset 0 1px 0 #ffffff80,
-        inset 0 -1px 0 #ffffff20;
-    }
-    body[data-view="mineAdmin"][data-theme="glass"] .mine-admin-card,
-    body[data-view="mineAdmin"][data-theme="glass"] .mine-admin-row {
-      background: linear-gradient(145deg, #ffffff2f 0%, #94dfff18 100%);
-      border-color: #ffffff55;
-    }
-    body[data-view="mineAdmin"][data-theme="glass"] .mine-admin-form input {
-      background: #06111f80;
-      border-color: #ffffff50;
-      color: var(--text);
-    }
-    body[data-view="mineAdmin"][data-theme="glass"] .mine-admin-form input::placeholder {
-      color: #dce9f5b8;
-    }
     .mine-admin-row {
       display:grid;
       grid-template-columns:minmax(0, 1fr);

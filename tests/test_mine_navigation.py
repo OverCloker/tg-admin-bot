@@ -211,8 +211,8 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'viewer.canViewMineAdmin' in MINI_APP_HTML
     assert 'body[data-theme="glass"] .mine-admin-card::before' in MINI_APP_HTML
     assert 'body[data-theme="glass"] .mine-admin-row::before' in MINI_APP_HTML
-    assert 'body[data-view="mineAdmin"][data-theme="material"] .mine-admin-screen .panel' in MINI_APP_HTML
-    assert 'body[data-view="mineAdmin"][data-theme="glass"] .mine-admin-screen .panel' in MINI_APP_HTML
+    assert 'body[data-theme="glass"] .mine-admin-form input' in MINI_APP_HTML
+    assert 'body[data-view="mineAdmin"][data-theme=' not in MINI_APP_HTML
     assert 'class="mine-admin-screen"' in MINI_APP_HTML
     assert "/miniapp/profile/mine-admin?per_page=0" in MINI_APP_HTML
     assert "<h2>Игроки шахты</h2>" not in MINI_APP_HTML
