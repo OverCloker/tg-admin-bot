@@ -311,6 +311,34 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     .role-row b,
     .role-row span { overflow-wrap: anywhere; }
+    .mine-admin-grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:8px; margin-top:10px; }
+    .mine-admin-card { padding:10px; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel-2); }
+    .mine-admin-card b { display:block; margin-top:4px; font-size:18px; }
+    .mine-admin-form { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:8px; margin-top:10px; }
+    .mine-admin-form input {
+      width:100%;
+      min-height:42px;
+      padding:9px 10px;
+      border:1px solid var(--line);
+      border-radius:var(--radius-sm);
+      background:var(--input);
+      color:var(--text);
+      font:inherit;
+      box-sizing:border-box;
+    }
+    .mine-admin-form .wide { grid-column: 1 / -1; }
+    .mine-admin-row {
+      display:grid;
+      grid-template-columns:minmax(0, 1fr) auto;
+      gap:8px;
+      align-items:center;
+      padding:9px 10px;
+      border:1px solid var(--line);
+      border-radius:var(--radius-sm);
+      background:var(--panel-2);
+    }
+    .mine-admin-row b,
+    .mine-admin-row span { overflow-wrap:anywhere; }
     .friend-list { display: grid; gap: 8px; margin-top: 10px; }
     .friend-row {
       display: grid;
@@ -1064,6 +1092,9 @@ MINI_APP_HTML = r"""<!doctype html>
     } else if (view === "profile") {
       screenTitle.textContent = "👤 Профиль";
       nameNode.textContent = "Информация игрока";
+    } else if (view === "mineAdmin") {
+      screenTitle.textContent = "⛏️ Панель шахты";
+      nameNode.textContent = "Управление и просмотр";
     } else if (view === "weather") {
       screenTitle.textContent = "🌦️ Погода";
       nameNode.textContent = "Город и текущая сводка";
@@ -1096,6 +1127,7 @@ MINI_APP_HTML = r"""<!doctype html>
     if (target === "bag") return showBag();
     if (target === "weather") return showWeather();
     if (target === "radio") return showRadio();
+    if (target === "mineAdmin") return showMineAdmin();
     return renderMine();
   }
 
@@ -1604,6 +1636,12 @@ MINI_APP_HTML = r"""<!doctype html>
       : "";
   }
 
+  function mineAdminButtonHtml(viewer) {
+    return viewer && viewer.canViewMineAdmin
+      ? `<button class="btn secondary" onclick="showMineAdmin()">⛏️ Шахта</button>`
+      : "";
+  }
+
   function roleRowHtml(item) {
     return `<div class="role-row">
       <span>
@@ -1672,6 +1710,127 @@ MINI_APP_HTML = r"""<!doctype html>
     }
   }
 
+  function mineAdminPlayerName(player) {
+    const name = player.full_name || String(player.user_id);
+    return `${name}${player.username ? ` · @${player.username}` : ""}`;
+  }
+
+  function mineAdminRowHtml(player, canManage = false) {
+    const action = canManage
+      ? `<button class="btn secondary" style="margin:0" onclick="prefillMineGrant(${Number(player.user_id)})">Выбрать</button>`
+      : `<span class="muted">просмотр</span>`;
+    return `<div class="mine-admin-row">
+      <span>
+        <b>${escapeHtml(mineAdminPlayerName(player))}</b><br>
+        <span class="muted">ID ${Number(player.user_id)} · ${Number(player.total_depth || 0)} м · ${Number(player.coins || 0)} котоинов · удача ${Number(player.luck || 0)}/100</span>
+      </span>
+      ${action}
+    </div>`;
+  }
+
+  function mineAdminTopHtml(title, rows, valueKey, suffix = "") {
+    const items = (rows || []).map((player, index) => `<div class="mine-admin-row">
+      <span>
+        <b>${index + 1}. ${escapeHtml(mineAdminPlayerName(player))}</b><br>
+        <span class="muted">ID ${Number(player.user_id)} · ${Number(player[valueKey] || 0)}${suffix}</span>
+      </span>
+    </div>`).join("");
+    return `<section class="panel">
+      <h2>${escapeHtml(title)}</h2>
+      ${items || `<p class="muted">Пока пусто.</p>`}
+    </section>`;
+  }
+
+  function prefillMineGrant(userId) {
+    const input = document.getElementById("mineGrantUserId");
+    if (input) {
+      input.value = String(userId);
+      input.focus();
+    }
+  }
+
+  async function showMineAdmin(page = 1) {
+    setScreenHeader("mineAdmin");
+    content.innerHTML = `<section class="panel muted">Загружаю панель шахты...</section>`;
+    try {
+      const data = await api(`/miniapp/profile/mine-admin?page=${Number(page) || 1}&per_page=20`);
+      const summary = data.summary || {};
+      const players = data.players || { items: [], total: 0, page: 1, perPage: 20 };
+      const totalPages = Math.max(1, Math.ceil((players.total || 0) / (players.perPage || 20)));
+      const canManage = Boolean(data.canManage);
+      const grantForm = canManage ? `<section class="panel">
+        <h2>Управление игроком</h2>
+        <p class="muted">Как в Abstergo: укажи ID игрока, заполни только нужные поля. Отрицательные значения снимают ресурс.</p>
+        <div class="mine-admin-form">
+          <input id="mineGrantUserId" class="wide" placeholder="User ID">
+          <input id="mineGrantCoins" type="number" placeholder="Котоины +/-">
+          <input id="mineGrantLuck" type="number" min="0" max="100" placeholder="Удача 0-100">
+          <input id="mineGrantExtra" type="number" placeholder="Раскопки +/-">
+          <input id="mineGrantTickets" type="number" placeholder="Билеты +/-">
+          <input id="mineGrantSuper" type="number" placeholder="Супер-игры +/-">
+          <label class="muted wide"><input id="mineGrantCooldown" type="checkbox"> сбросить ожидание копки</label>
+          <button class="btn wide" onclick="submitMineGrant()">Сохранить</button>
+        </div>
+      </section>` : `<section class="panel muted">Режим просмотра: управление доступно только владельцу.</section>`;
+      const pager = `<div class="utility-actions">
+        <button class="btn secondary" onclick="showMineAdmin(${Math.max(1, (players.page || 1) - 1)})" ${(players.page || 1) <= 1 ? "disabled" : ""}>Назад</button>
+        <button class="btn secondary" onclick="showMineAdmin(${Math.min(totalPages, (players.page || 1) + 1)})" ${(players.page || 1) >= totalPages ? "disabled" : ""}>Дальше</button>
+      </div>`;
+      content.innerHTML = `<section class="panel">
+        <h2>Сводка</h2>
+        <div class="mine-admin-grid">
+          <div class="mine-admin-card">Игроки<b>${Number(summary.players || 0)}</b></div>
+          <div class="mine-admin-card">Глубина<b>${Number(summary.totalDepth || 0)} м</b></div>
+          <div class="mine-admin-card">Доступ<b>${canManage ? "управление" : "просмотр"}</b></div>
+        </div>
+      </section>
+      ${grantForm}
+      ${mineAdminTopHtml("Топ глубины", data.top && data.top.depth, "total_depth", " м")}
+      ${mineAdminTopHtml("Топ котоинов", data.top && data.top.coins, "coins", " кот.")}
+      <section class="panel">
+        <h2>Игроки шахты</h2>
+        ${pager}
+        <div class="role-list">${(players.items || []).map(player => mineAdminRowHtml(player, canManage)).join("") || `<p class="muted">Пока нет игроков.</p>`}</div>
+        ${pager}
+      </section>
+      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showProfile()">Назад к профилю</button></section>`;
+      scrollToTop();
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function submitMineGrant() {
+    const numberOrNull = id => {
+      const value = document.getElementById(id)?.value;
+      return value === "" || value === undefined ? null : Number(value);
+    };
+    const userId = numberOrNull("mineGrantUserId");
+    if (!userId) {
+      alert("Укажи User ID игрока.");
+      return;
+    }
+    const payload = {
+      userId,
+      coins: numberOrNull("mineGrantCoins"),
+      luck: numberOrNull("mineGrantLuck"),
+      extraDigs: numberOrNull("mineGrantExtra"),
+      goldenTickets: numberOrNull("mineGrantTickets"),
+      superPasses: numberOrNull("mineGrantSuper"),
+      clearCooldown: Boolean(document.getElementById("mineGrantCooldown")?.checked)
+    };
+    try {
+      const result = await api("/miniapp/profile/mine-admin/grant", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      showNotice(result.message || "Шахта обновлена.");
+      showMineAdmin();
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
   function friendRowHtml(friend) {
     const user = { fullName: friend.fullName, username: friend.username, photoUrl: friend.photoUrl };
     return `<button class="friend-row" onclick="showProfile(${Number(friend.id)})">
@@ -1732,6 +1891,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <div class="profile-actions">
         <button class="btn secondary" onclick="showFriendsInfo()">${friends.length ? `Друзья: ${friends.length}` : "Друзья"}</button>
         ${isSelf ? `<button class="btn secondary" onclick="showBag()">Сумка</button>` : `<button class="btn secondary" onclick="showProfile()">Мой профиль</button>`}
+        ${mineAdminButtonHtml(viewer)}
         ${roleManagerButtonHtml(viewer)}
       </div>
       ${isSelf ? themeSwitcherHtml() : ""}

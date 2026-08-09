@@ -1,7 +1,7 @@
 from app.db import Database
 from app import bot as game
 from app import miniapp
-from app.miniapp import _gift_recipients, _gift_target_kind, _miniapp_profile_roles, _miniapp_social_people, _miniapp_social_target, _shop_catalog
+from app.miniapp import _gift_recipients, _gift_target_kind, _miniapp_can_view_mine_admin, _miniapp_profile_roles, _miniapp_social_people, _miniapp_social_target, _shop_catalog
 from app.premium import PremiumService
 from app.user_profile import build_user_profile
 
@@ -233,6 +233,21 @@ def test_miniapp_profile_roles_include_owner_custom_and_moderation(tmp_path, mon
     assert roles[0]["kind"] == "owner"
     assert roles[1]["kind"] == "custom"
     assert roles[2]["chatCount"] == 1
+
+
+def test_miniapp_mine_admin_access_is_owner_or_moderator(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.upsert_chat(-100, "Р§Р°С‚", "supergroup", None)
+    db.set_chat_moderator_role(-100, 7, "assistant", 42)
+
+    try:
+        assert _miniapp_can_view_mine_admin(db, 42) is True
+        assert _miniapp_can_view_mine_admin(db, 7) is True
+        assert _miniapp_can_view_mine_admin(db, 8) is False
+    finally:
+        db.close()
 
 
 def test_miniapp_profile_role_can_be_saved_and_resolved_by_username(tmp_path) -> None:

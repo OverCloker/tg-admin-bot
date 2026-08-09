@@ -70,6 +70,16 @@ class ProfileRoleClear(BaseModel):
     target: str = Field(min_length=1, max_length=64)
 
 
+class MineAdminGrant(BaseModel):
+    userId: int = Field(gt=0)
+    coins: int | None = Field(default=None, ge=-1_000_000, le=1_000_000)
+    luck: int | None = Field(default=None, ge=0, le=100)
+    extraDigs: int | None = Field(default=None, ge=-100, le=100)
+    goldenTickets: int | None = Field(default=None, ge=-100, le=100)
+    superPasses: int | None = Field(default=None, ge=-100, le=100)
+    clearCooldown: bool = False
+
+
 class ShopGiftSend(BaseModel):
     item_key: str = Field(min_length=1, max_length=64)
     target_user_id: int = Field(gt=0)
@@ -501,6 +511,33 @@ def _miniapp_owner_id() -> int | None:
 def _miniapp_can_manage_roles(user_id: int) -> bool:
     owner_id = _miniapp_owner_id()
     return owner_id is not None and int(user_id) == int(owner_id)
+
+
+def _miniapp_can_view_mine_admin(db: Database, user_id: int) -> bool:
+    return _miniapp_can_manage_roles(user_id) or bool(db.list_user_moderator_roles(user_id))
+
+
+def _miniapp_dig_player_public(db: Database, player: Any) -> dict[str, Any]:
+    item_keys = ("star_dig", "golden_ticket", "super_game_pass")
+    return {
+        "chat_id": player.chat_id,
+        "user_id": player.user_id,
+        "username": player.username or "",
+        "full_name": player.full_name,
+        "coins": player.coins,
+        "total_depth": player.total_depth,
+        "best_session_depth": player.best_session_depth,
+        "luck": player.luck,
+        "last_dig_at": player.last_dig_at,
+        "updated_at": player.updated_at,
+        "extraDigs": db.get_dig_item_quantity(0, player.user_id, "star_dig"),
+        "goldenTickets": db.get_dig_item_quantity(0, player.user_id, "golden_ticket"),
+        "superPasses": db.get_dig_item_quantity(0, player.user_id, "super_game_pass"),
+        "specialItems": {
+            key: db.get_dig_item_quantity(0, player.user_id, key)
+            for key in item_keys
+        },
+    }
 
 
 def _normalize_profile_role_label(label: str) -> str:
@@ -1739,6 +1776,8 @@ async def miniapp_profile(
             "isSelf": target_id == viewer_id,
             "isOwner": _miniapp_can_manage_roles(viewer_id),
             "canManageRoles": _miniapp_can_manage_roles(viewer_id),
+            "canViewMineAdmin": _miniapp_can_view_mine_admin(db, viewer_id),
+            "canManageMineAdmin": _miniapp_can_manage_roles(viewer_id),
         }
         profile["social"] = {
             "relation": relation.get("relation", "friend"),
@@ -1811,6 +1850,80 @@ def miniapp_profile_role_clear(
         }
     finally:
         db.close()
+
+
+@router.get("/miniapp/profile/mine-admin")
+def miniapp_profile_mine_admin(
+    page: int = 1,
+    per_page: int = 20,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    safe_page = max(1, int(page))
+    safe_per_page = max(1, min(50, int(per_page)))
+    offset = (safe_page - 1) * safe_per_page
+    db = _db()
+    try:
+        if not _miniapp_can_view_mine_admin(db, user["id"]):
+            raise HTTPException(403, "Панель шахты доступна владельцу и модераторам.")
+        total = db.count_dig_players()
+        players = db.list_dig_players_page(limit=safe_per_page, offset=offset)
+        return {
+            "canManage": _miniapp_can_manage_roles(user["id"]),
+            "viewerRole": "owner" if _miniapp_can_manage_roles(user["id"]) else "moderator",
+            "summary": {
+                "players": total,
+                "totalDepth": sum(int(player.total_depth) for player in db.list_all_dig_players()),
+                "activeSessions": 0,
+            },
+            "top": {
+                "depth": [_miniapp_dig_player_public(db, player) for player in db.top_dig_depth(0, limit=10)],
+                "coins": [_miniapp_dig_player_public(db, player) for player in db.top_dig_coins(0, limit=10)],
+            },
+            "players": {
+                "items": [_miniapp_dig_player_public(db, player) for player in players],
+                "total": total,
+                "page": safe_page,
+                "perPage": safe_per_page,
+            },
+        }
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/mine-admin/grant")
+def miniapp_profile_mine_admin_grant(
+    payload: MineAdminGrant,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    if not _miniapp_can_manage_roles(user["id"]):
+        raise HTTPException(403, "Управление шахтой доступно только владельцу.")
+    with DIG_LOCK:
+        db = _db()
+        try:
+            if db.get_dig_player(0, payload.userId) is None:
+                raise HTTPException(404, "Игрок шахты с таким User ID не зарегистрирован.")
+            if payload.coins is not None:
+                db.add_dig_coins(0, payload.userId, payload.coins)
+            if payload.luck is not None:
+                db.set_dig_luck(0, payload.userId, payload.luck, datetime.now(timezone.utc).isoformat(timespec="seconds"))
+            if payload.extraDigs is not None:
+                db.adjust_dig_item(0, payload.userId, "star_dig", payload.extraDigs)
+            if payload.goldenTickets is not None:
+                db.adjust_dig_item(0, payload.userId, "golden_ticket", payload.goldenTickets)
+            if payload.superPasses is not None:
+                db.adjust_dig_item(0, payload.userId, "super_game_pass", payload.superPasses)
+            if payload.clearCooldown:
+                db.clear_dig_cooldown(0, payload.userId)
+            player = db.get_dig_player(0, payload.userId)
+            return {
+                "ok": True,
+                "player": _miniapp_dig_player_public(db, player) if player else None,
+                "message": "Шахта игрока обновлена.",
+            }
+        finally:
+            db.close()
 
 
 @router.get("/miniapp/avatar/{user_id}")
