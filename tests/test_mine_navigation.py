@@ -204,10 +204,15 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function showRadio()' in MINI_APP_HTML
     assert 'function showFriendsInfo()' in MINI_APP_HTML
     assert 'function showRoleManager()' in MINI_APP_HTML
+    assert 'function roleGroupHtml(group)' in MINI_APP_HTML
+    assert 'roleTarget_${escapeHtml(group.key)}' in MINI_APP_HTML
     assert 'viewer.canManageRoles' in MINI_APP_HTML
     assert 'function showMineAdmin(page = 1)' in MINI_APP_HTML
     assert 'viewer.canViewMineAdmin' in MINI_APP_HTML
     assert '"/miniapp/profile/mine-admin/grant"' in MINI_APP_HTML
+    assert '"/miniapp/profile/mine-admin/delete"' in MINI_APP_HTML
+    assert '"/miniapp/profile/mine-admin/block"' in MINI_APP_HTML
+    assert '"/miniapp/profile/mine-admin/unblock"' in MINI_APP_HTML
     assert 'onclick="showMineAdmin()">⛏️ Шахта</button>' in MINI_APP_HTML
     assert '"/miniapp/profile/roles"' in MINI_APP_HTML
     assert 'function profileAvatarHtml(user, cosmetics = {}, small = false)' in MINI_APP_HTML

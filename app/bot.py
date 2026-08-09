@@ -5946,6 +5946,14 @@ async def cb_dig_register(callback: CallbackQuery) -> None:
     owner_id = await resolve_dig_button_owner(callback, parts[2] if len(parts) > 2 else None)
     if owner_id is None:
         return
+    block = db.get_dig_block(callback.from_user.id)
+    if block:
+        reason = str(block.get("reason") or "").strip()
+        await callback.answer(
+            "Доступ к шахте заблокирован." + (f" Причина: {reason}" if reason else ""),
+            show_alert=True,
+        )
+        return
 
     is_private = callback.message.chat.type == "private"
     if not is_private and callback.message.chat.type not in SUPPORTED_CHAT_TYPES:
@@ -10058,6 +10066,14 @@ async def chat_profile(message: Message) -> None:
 @router.message(F.text.casefold() == "копай")
 async def dig_command(message: Message) -> None:
     if not message.from_user:
+        return
+    block = db.get_dig_block(message.from_user.id)
+    if block:
+        reason = str(block.get("reason") or "").strip()
+        await temporary_reply(
+            message,
+            "Доступ к шахте заблокирован." + (f" Причина: {escape(reason)}" if reason else ""),
+        )
         return
     if message.chat.type == "private":
         player = db.get_dig_player(0, message.from_user.id)

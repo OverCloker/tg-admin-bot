@@ -957,6 +957,13 @@ class Database:
                 updated_at text not null
             );
 
+            create table if not exists dig_blocked_users (
+                user_id integer primary key,
+                reason text not null default '',
+                blocked_by integer,
+                created_at text not null
+            );
+
             create table if not exists dig_achievements (
                 chat_id integer not null,
                 user_id integer not null,
@@ -4397,6 +4404,35 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_miniapp_profile_roles_by_label(self, labels: list[str]) -> list[dict]:
+        if not labels:
+            return []
+        placeholders = ",".join("?" for _ in labels)
+        rows = self._conn.execute(
+            f"""
+            select
+                r.user_id,
+                r.label,
+                r.emoji,
+                r.color,
+                r.granted_by,
+                r.updated_at,
+                coalesce(u.username, '') as username,
+                coalesce(u.full_name, cast(r.user_id as text)) as full_name
+            from miniapp_profile_roles r
+            left join (
+                select user_id, max(nullif(username, '')) as username, max(nullif(full_name, '')) as full_name
+                from seen_users
+                where coalesce(is_bot, 0) = 0
+                group by user_id
+            ) u on u.user_id = r.user_id
+            where r.label in ({placeholders})
+            order by r.label, lower(coalesce(u.full_name, cast(r.user_id as text)))
+            """,
+            tuple(labels),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def get_known_user_by_username(self, username: str) -> SeenUser | None:
         normalized = normalize_username(username)
         row = self._conn.execute(
@@ -4601,6 +4637,94 @@ class Database:
             (utc_now(), chat_id, user_id),
         )
         self._conn.commit()
+
+    def delete_dig_player(self, user_id: int) -> bool:
+        chat_id = DIG_GLOBAL_CHAT_ID
+        uid = int(user_id)
+        try:
+            self._conn.execute("begin immediate")
+            existed = self._conn.execute(
+                "select 1 from dig_players where chat_id = ? and user_id = ?",
+                (chat_id, uid),
+            ).fetchone()
+            for table in (
+                "dig_items",
+                "dig_achievements",
+                "dig_players",
+            ):
+                self._conn.execute(
+                    f"delete from {table} where chat_id = ? and user_id = ?",
+                    (chat_id, uid),
+                )
+            for table in (
+                "dig_progress",
+                "dig_sessions",
+                "interactive_dig_sessions",
+                "dig_weekly_depth",
+                "gold_ticket_games",
+                "super_ticket_games",
+                "dig_contracts",
+            ):
+                self._conn.execute(f"delete from {table} where user_id = ?", (uid,))
+            self._conn.execute("delete from dig_expedition_contributors where user_id = ?", (uid,))
+            self._conn.execute("delete from dig_player_tags where user_id = ?", (uid,))
+            self._conn.commit()
+            return existed is not None
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def block_dig_user(self, user_id: int, blocked_by: int | None, reason: str = "") -> None:
+        self._conn.execute(
+            """
+            insert into dig_blocked_users (user_id, reason, blocked_by, created_at)
+            values (?, ?, ?, ?)
+            on conflict(user_id) do update set
+                reason = excluded.reason,
+                blocked_by = excluded.blocked_by,
+                created_at = excluded.created_at
+            """,
+            (int(user_id), reason.strip()[:500], blocked_by, utc_now()),
+        )
+        self._conn.commit()
+
+    def unblock_dig_user(self, user_id: int) -> bool:
+        cur = self._conn.execute("delete from dig_blocked_users where user_id = ?", (int(user_id),))
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def get_dig_block(self, user_id: int) -> dict | None:
+        row = self._conn.execute(
+            """
+            select user_id, reason, blocked_by, created_at
+            from dig_blocked_users
+            where user_id = ?
+            """,
+            (int(user_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_dig_blocks(self) -> list[dict]:
+        rows = self._conn.execute(
+            """
+            select
+                b.user_id,
+                b.reason,
+                b.blocked_by,
+                b.created_at,
+                coalesce(u.username, '') as username,
+                coalesce(u.full_name, cast(b.user_id as text)) as full_name
+            from dig_blocked_users b
+            left join (
+                select user_id, max(nullif(username, '')) as username, max(nullif(full_name, '')) as full_name
+                from seen_users
+                where coalesce(is_bot, 0) = 0
+                group by user_id
+            ) u on u.user_id = b.user_id
+            order by b.created_at desc
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def add_dig_achievement(self, chat_id: int, user_id: int, achievement_key: str) -> bool:
         chat_id = DIG_GLOBAL_CHAT_ID

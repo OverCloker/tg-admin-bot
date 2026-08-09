@@ -80,6 +80,12 @@ class MineAdminGrant(BaseModel):
     clearCooldown: bool = False
 
 
+class MineAdminTarget(BaseModel):
+    userId: int = Field(gt=0)
+    reason: str = Field(default="", max_length=500)
+    deletePlayer: bool = False
+
+
 class ShopGiftSend(BaseModel):
     item_key: str = Field(min_length=1, max_length=64)
     target_user_id: int = Field(gt=0)
@@ -502,6 +508,12 @@ MINIAPP_MODERATOR_ROLE_TITLES = {
     "senior": "Старший модератор",
 }
 MINIAPP_MODERATOR_ROLE_RANKS = {"assistant": 1, "moderator": 2, "senior": 3}
+MINIAPP_ASSIGNABLE_PROFILE_ROLES = (
+    {"key": "admin", "label": "Админ", "emoji": "🛡️"},
+    {"key": "moderator", "label": "Модератор", "emoji": "⚖️"},
+    {"key": "senior", "label": "Старший модератор", "emoji": "⭐"},
+)
+MINIAPP_ASSIGNABLE_ROLE_LABELS = {str(role["label"]) for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES}
 
 
 def _miniapp_owner_id() -> int | None:
@@ -511,6 +523,22 @@ def _miniapp_owner_id() -> int | None:
 def _miniapp_can_manage_roles(user_id: int) -> bool:
     owner_id = _miniapp_owner_id()
     return owner_id is not None and int(user_id) == int(owner_id)
+
+
+def _miniapp_profile_role_groups(db: Database) -> list[dict[str, Any]]:
+    rows = db.list_miniapp_profile_roles_by_label(list(MINIAPP_ASSIGNABLE_ROLE_LABELS))
+    by_label: dict[str, list[dict[str, Any]]] = {str(role["label"]): [] for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES}
+    for row in rows:
+        by_label.setdefault(str(row["label"]), []).append(row)
+    return [
+        {
+            "key": str(role["key"]),
+            "label": str(role["label"]),
+            "emoji": str(role["emoji"]),
+            "items": by_label.get(str(role["label"]), []),
+        }
+        for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES
+    ]
 
 
 def _miniapp_can_view_mine_admin(db: Database, user_id: int) -> bool:
@@ -540,12 +568,35 @@ def _miniapp_dig_player_public(db: Database, player: Any) -> dict[str, Any]:
     }
 
 
+def _miniapp_dig_block_public(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "user_id": int(item["user_id"]),
+        "username": item.get("username") or "",
+        "full_name": item.get("full_name") or str(item["user_id"]),
+        "reason": item.get("reason") or "",
+        "blocked_by": item.get("blocked_by"),
+        "created_at": item.get("created_at") or "",
+    }
+
+
+def _ensure_mine_not_blocked(db: Database, user_id: int) -> None:
+    block = db.get_dig_block(user_id)
+    if block:
+        reason = str(block.get("reason") or "").strip()
+        detail = "Доступ к шахте заблокирован."
+        if reason:
+            detail += f" Причина: {reason}"
+        raise HTTPException(403, detail)
+
+
 def _normalize_profile_role_label(label: str) -> str:
     normalized = " ".join(label.strip().split())
     if not normalized:
         raise HTTPException(400, "Укажи текст роли.")
     if len(normalized) > 16:
         raise HTTPException(400, "Роль должна быть до 16 символов.")
+    if normalized not in MINIAPP_ASSIGNABLE_ROLE_LABELS:
+        raise HTTPException(400, "Можно выбрать только одну из доступных ролей приложения.")
     return normalized
 
 
@@ -776,6 +827,7 @@ def _radio_station_public(station: dict[str, Any]) -> dict[str, Any]:
 
 def _state(db: Database, user_id: int) -> dict[str, Any]:
     from . import bot as game
+    _ensure_mine_not_blocked(db, user_id)
     player = db.get_dig_player(0, user_id)
     if not player:
         return {"registered": False, "userId": user_id}
@@ -816,6 +868,7 @@ def _state(db: Database, user_id: int) -> dict[str, Any]:
 
 def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) -> None:
     uid = user["id"]
+    _ensure_mine_not_blocked(db, uid)
     player = db.get_dig_player(0, uid)
     if not player:
         raise HTTPException(400, "Сначала зарегистрируйтесь в игре.")
@@ -934,6 +987,7 @@ def _begin_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) 
 
 def _begin_interactive_manual(db: Database, game: Any, user: dict[str, Any], now: datetime) -> dict[str, Any]:
     uid = user["id"]
+    _ensure_mine_not_blocked(db, uid)
     player = db.get_dig_player(0, uid)
     if not player:
         raise HTTPException(400, "Сначала зарегистрируйтесь в игре.")
@@ -1490,6 +1544,7 @@ def miniapp_merchant_sell(
     with DIG_LOCK:
         db = _db()
         try:
+            _ensure_mine_not_blocked(db, user["id"])
             if not db.get_dig_player(0, user["id"]):
                 raise HTTPException(400, "Сначала зарегистрируйтесь в шахте.")
             prices = mine_resource_prices()
@@ -1801,7 +1856,10 @@ def miniapp_profile_roles(
         raise HTTPException(403, "Управление ролями доступно только владельцу.")
     db = _db()
     try:
-        return {"items": db.list_miniapp_profile_roles()}
+        return {
+            "items": db.list_miniapp_profile_roles_by_label(list(MINIAPP_ASSIGNABLE_ROLE_LABELS)),
+            "groups": _miniapp_profile_role_groups(db),
+        }
     finally:
         db.close()
 
@@ -1824,7 +1882,8 @@ def miniapp_profile_role_set(
             "ok": True,
             "target": {"id": target_id, "fullName": full_name, "username": username or ""},
             "role": dict(role.__dict__) if role else None,
-            "roles": db.list_miniapp_profile_roles(),
+            "roles": db.list_miniapp_profile_roles_by_label(list(MINIAPP_ASSIGNABLE_ROLE_LABELS)),
+            "groups": _miniapp_profile_role_groups(db),
         }
     finally:
         db.close()
@@ -1846,7 +1905,8 @@ def miniapp_profile_role_clear(
             "ok": True,
             "removed": removed,
             "target": {"id": target_id, "fullName": full_name, "username": username or ""},
-            "roles": db.list_miniapp_profile_roles(),
+            "roles": db.list_miniapp_profile_roles_by_label(list(MINIAPP_ASSIGNABLE_ROLE_LABELS)),
+            "groups": _miniapp_profile_role_groups(db),
         }
     finally:
         db.close()
@@ -1886,6 +1946,7 @@ def miniapp_profile_mine_admin(
                 "page": safe_page,
                 "perPage": safe_per_page,
             },
+            "blocked": [_miniapp_dig_block_public(item) for item in db.list_dig_blocks()],
         }
     finally:
         db.close()
@@ -1922,6 +1983,62 @@ def miniapp_profile_mine_admin_grant(
                 "player": _miniapp_dig_player_public(db, player) if player else None,
                 "message": "Шахта игрока обновлена.",
             }
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/profile/mine-admin/delete")
+def miniapp_profile_mine_admin_delete(
+    payload: MineAdminTarget,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    if not _miniapp_can_manage_roles(user["id"]):
+        raise HTTPException(403, "Управление шахтой доступно только владельцу.")
+    with DIG_LOCK:
+        db = _db()
+        try:
+            deleted = db.delete_dig_player(payload.userId)
+            return {"ok": True, "deleted": deleted, "message": "Игрок удалён из шахты." if deleted else "Игрока в шахте уже не было."}
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/profile/mine-admin/block")
+def miniapp_profile_mine_admin_block(
+    payload: MineAdminTarget,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    if not _miniapp_can_manage_roles(user["id"]):
+        raise HTTPException(403, "Управление шахтой доступно только владельцу.")
+    with DIG_LOCK:
+        db = _db()
+        try:
+            db.block_dig_user(payload.userId, user["id"], payload.reason)
+            deleted = db.delete_dig_player(payload.userId) if payload.deletePlayer else False
+            return {
+                "ok": True,
+                "deleted": deleted,
+                "message": "Игрок заблокирован в шахте." + (" Прогресс удалён." if deleted else ""),
+            }
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/profile/mine-admin/unblock")
+def miniapp_profile_mine_admin_unblock(
+    payload: MineAdminTarget,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    if not _miniapp_can_manage_roles(user["id"]):
+        raise HTTPException(403, "Управление шахтой доступно только владельцу.")
+    with DIG_LOCK:
+        db = _db()
+        try:
+            removed = db.unblock_dig_user(payload.userId)
+            return {"ok": True, "removed": removed, "message": "Блокировка снята." if removed else "Блокировки уже не было."}
         finally:
             db.close()
 
@@ -2045,6 +2162,7 @@ def miniapp_register(x_telegram_init_data: str | None = Header(default=None, ali
     user = _telegram_user(x_telegram_init_data)
     db = _db()
     try:
+        _ensure_mine_not_blocked(db, user["id"])
         db.register_dig_player(0, user["id"], user.get("username"), user["full_name"])
         return _state(db, user["id"])
     finally:
@@ -2213,6 +2331,7 @@ def miniapp_interactive_start(
         db = _db()
         try:
             from . import bot as game
+            _ensure_mine_not_blocked(db, user["id"])
             _begin_interactive_manual(db, game, user, datetime.now(timezone.utc))
             return {"ok": True, "message": "Вылазка началась.", "state": _state(db, user["id"])}
         finally:
@@ -2229,6 +2348,7 @@ def miniapp_interactive_cell(
         db = _db()
         try:
             from . import bot as game
+            _ensure_mine_not_blocked(db, user["id"])
             session = db.get_active_interactive_dig_session(user["id"])
             if not session:
                 raise HTTPException(400, "Сначала начни вылазку.")
@@ -2345,6 +2465,7 @@ def miniapp_interactive_tool(
     with DIG_LOCK:
         db = _db()
         try:
+            _ensure_mine_not_blocked(db, user["id"])
             session = db.get_active_interactive_dig_session(user["id"])
             if not session:
                 raise HTTPException(400, "Сначала начни вылазку.")
@@ -2406,6 +2527,7 @@ def miniapp_interactive_event(
         db = _db()
         try:
             from . import bot as game
+            _ensure_mine_not_blocked(db, user["id"])
             session = db.get_active_interactive_dig_session(user["id"])
             if not session:
                 raise HTTPException(400, "Сначала начни вылазку.")
@@ -2494,6 +2616,7 @@ def miniapp_interactive_exit(
         db = _db()
         try:
             from . import bot as game
+            _ensure_mine_not_blocked(db, user["id"])
             session = db.get_active_interactive_dig_session(user["id"])
             if not session:
                 raise HTTPException(400, "Активной вылазки нет.")
@@ -2513,6 +2636,7 @@ def miniapp_dig_manual(
         db = _db()
         try:
             from . import bot as game
+            _ensure_mine_not_blocked(db, user["id"])
 
             now = datetime.now(timezone.utc)
             session = db.get_dig_session(user["id"])

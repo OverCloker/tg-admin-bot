@@ -1,7 +1,7 @@
 from app.db import Database
 from app import bot as game
 from app import miniapp
-from app.miniapp import _gift_recipients, _gift_target_kind, _miniapp_can_view_mine_admin, _miniapp_profile_roles, _miniapp_social_people, _miniapp_social_target, _shop_catalog
+from app.miniapp import _gift_recipients, _gift_target_kind, _miniapp_can_view_mine_admin, _miniapp_profile_role_groups, _miniapp_profile_roles, _miniapp_social_people, _miniapp_social_target, _shop_catalog
 from app.premium import PremiumService
 from app.user_profile import build_user_profile
 
@@ -249,6 +249,44 @@ def test_miniapp_mine_admin_access_is_owner_or_moderator(tmp_path, monkeypatch) 
     finally:
         db.close()
 
+
+def test_miniapp_profile_role_groups_use_three_presets(tmp_path) -> None:
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.upsert_chat(-100, "Чат", "supergroup", None)
+    db.upsert_seen_user(-100, 7, "helper", "Помощник", False)
+    db.set_miniapp_profile_role(7, "Модератор", 42)
+    db.set_miniapp_profile_role(8, "Технарь", 42)
+
+    try:
+        groups = _miniapp_profile_role_groups(db)
+    finally:
+        db.close()
+
+    assert [group["label"] for group in groups] == ["Админ", "Модератор", "Старший модератор"]
+    moderator_group = next(group for group in groups if group["label"] == "Модератор")
+    assert [item["user_id"] for item in moderator_group["items"]] == [7]
+    assert all(item["label"] != "Технарь" for group in groups for item in group["items"])
+
+
+def test_dig_player_can_be_deleted_and_blocked(tmp_path) -> None:
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.register_dig_player(0, 42, "miner", "Шахтёр")
+    db.add_dig_item(0, 42, "tea", 2)
+    db.add_dig_achievement(0, 42, "first_dig")
+
+    try:
+        db.block_dig_user(42, 1, "spam")
+        block = db.get_dig_block(42)
+        deleted = db.delete_dig_player(42)
+        blocks = db.list_dig_blocks()
+    finally:
+        db.close()
+
+    assert block and block["reason"] == "spam"
+    assert deleted is True
+    assert blocks[0]["user_id"] == 42
 
 def test_miniapp_profile_role_can_be_saved_and_resolved_by_username(tmp_path) -> None:
     db = Database(str(tmp_path / "bot.sqlite3"))

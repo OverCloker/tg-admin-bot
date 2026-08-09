@@ -1642,14 +1642,26 @@ MINI_APP_HTML = r"""<!doctype html>
       : "";
   }
 
-  function roleRowHtml(item) {
+  function roleRowHtml(item, roleLabel = "") {
     return `<div class="role-row">
       <span>
-        <b>${escapeHtml(item.label || "Роль")}</b><br>
-        <span class="muted">${escapeHtml(item.full_name || String(item.user_id))}${item.username ? ` · @${escapeHtml(item.username)}` : ""} · ID ${Number(item.user_id)}</span>
+        <b>${escapeHtml(item.username ? `@${item.username}` : (item.full_name || String(item.user_id)))}</b><br>
+        <span class="muted">${escapeHtml(item.full_name || String(item.user_id))} ? ID ${Number(item.user_id)}</span>
       </span>
-      <button class="btn secondary" style="margin:0" onclick="clearProfileRole('${Number(item.user_id)}')">Снять</button>
+      <button class="btn secondary" style="margin:0" onclick="clearProfileRole('${Number(item.user_id)}')">Удалить</button>
     </div>`;
+  }
+
+  function roleGroupHtml(group) {
+    const items = (group.items || []).map(item => roleRowHtml(item, group.label)).join("");
+    return `<details class="panel" open>
+      <summary style="cursor:pointer;font-weight:900;font-size:20px">${escapeHtml(group.emoji || "")} ${escapeHtml(group.label)} ? ${(group.items || []).length}</summary>
+      <div class="role-list">${items || `<p class="muted">На этой роли пока никого нет.</p>`}</div>
+      <div class="role-manager-form">
+        <input id="roleTarget_${escapeHtml(group.key)}" placeholder="@ник или ID">
+        <button class="btn" onclick="setProfileRole('${escapeHtml(group.key)}', '${escapeHtml(group.label)}')">Добавить</button>
+      </div>
+    </details>`;
   }
 
   async function showRoleManager() {
@@ -1657,31 +1669,22 @@ MINI_APP_HTML = r"""<!doctype html>
     content.innerHTML = `<section class="panel muted">Загружаю роли...</section>`;
     try {
       const data = await api("/miniapp/profile/roles");
-      const rows = (data.items || []).map(roleRowHtml).join("");
+      const groups = data.groups || [];
       content.innerHTML = `<section class="panel">
         <h2>Роли Mini App</h2>
-        <p class="muted">Доступно только владельцу. Укажи ID или @username и текст плашки до 16 символов.</p>
-        <div class="role-manager-form">
-          <input id="roleTarget" placeholder="ID или @username">
-          <input id="roleLabel" placeholder="Например: Админ, Модер, Технарь" maxlength="16">
-          <button class="btn" onclick="setProfileRole()">Выдать роль</button>
-        </div>
+        <p class="muted">Выбери роль, раскрой список пользователей, удали лишних или добавь нового по @нику/ID.</p>
       </section>
-      <section class="panel">
-        <h2>Выданные роли</h2>
-        ${rows ? `<div class="role-list">${rows}</div>` : `<p class="muted">Кастомных ролей пока нет.</p>`}
-      </section>
+      ${groups.map(roleGroupHtml).join("")}
       <section class="panel"><button class="btn secondary" style="margin:0" onclick="showProfile()">Назад к профилю</button></section>`;
     } catch (error) {
       showError(error);
     }
   }
 
-  async function setProfileRole() {
-    const target = document.getElementById("roleTarget")?.value || "";
-    const label = document.getElementById("roleLabel")?.value || "";
+  async function setProfileRole(roleKey = "", label = "") {
+    const target = document.getElementById(`roleTarget_${roleKey}`)?.value || "";
     if (!target.trim() || !label.trim()) {
-      alert("Укажи пользователя и роль.");
+      alert("Укажи пользователя.");
       return;
     }
     try {
@@ -1697,13 +1700,13 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   async function clearProfileRole(target) {
-    if (!confirm("Снять кастомную роль с пользователя?")) return;
+    if (!confirm("Удалить роль у пользователя?")) return;
     try {
       await api("/miniapp/profile/roles/clear", {
         method: "POST",
         body: JSON.stringify({ target: String(target) })
       });
-      showNotice("Роль снята.");
+      showNotice("Роль удалена.");
       showRoleManager();
     } catch (error) {
       alert(error.message);
@@ -1712,12 +1715,12 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function mineAdminPlayerName(player) {
     const name = player.full_name || String(player.user_id);
-    return `${name}${player.username ? ` · @${player.username}` : ""}`;
+    return `${name}${player.username ? ` ? @${player.username}` : ""}`;
   }
 
   function mineAdminRowHtml(player, canManage = false) {
     const action = canManage
-      ? `<button class="btn secondary" style="margin:0" onclick="prefillMineGrant(${Number(player.user_id)})">Выбрать</button>`
+      ? `<span class="utility-actions" style="margin:0"><button class="btn secondary" style="margin:0" onclick="prefillMineGrant(${Number(player.user_id)})">Выбрать</button><button class="btn danger" style="margin:0" onclick="deleteMinePlayer(${Number(player.user_id)})">Удалить</button><button class="btn danger" style="margin:0" onclick="blockMinePlayer(${Number(player.user_id)}, true)">Бан+удалить</button></span>`
       : `<span class="muted">просмотр</span>`;
     return `<div class="mine-admin-row">
       <span>
@@ -1728,11 +1731,24 @@ MINI_APP_HTML = r"""<!doctype html>
     </div>`;
   }
 
+  function mineAdminBlockRowHtml(item, canManage = false) {
+    const action = canManage
+      ? `<button class="btn secondary" style="margin:0" onclick="unblockMinePlayer(${Number(item.user_id)})">Разблокировать</button>`
+      : `<span class="muted">бан</span>`;
+    return `<div class="mine-admin-row">
+      <span>
+        <b>${escapeHtml(mineAdminPlayerName(item))}</b><br>
+        <span class="muted">ID ${Number(item.user_id)}${item.reason ? ` ? ${escapeHtml(item.reason)}` : ""}</span>
+      </span>
+      ${action}
+    </div>`;
+  }
+
   function mineAdminTopHtml(title, rows, valueKey, suffix = "") {
     const items = (rows || []).map((player, index) => `<div class="mine-admin-row">
       <span>
         <b>${index + 1}. ${escapeHtml(mineAdminPlayerName(player))}</b><br>
-        <span class="muted">ID ${Number(player.user_id)} · ${Number(player[valueKey] || 0)}${suffix}</span>
+        <span class="muted">ID ${Number(player.user_id)} ? ${Number(player[valueKey] || 0)}${suffix}</span>
       </span>
     </div>`).join("");
     return `<section class="panel">
@@ -1756,6 +1772,7 @@ MINI_APP_HTML = r"""<!doctype html>
       const data = await api(`/miniapp/profile/mine-admin?page=${Number(page) || 1}&per_page=20`);
       const summary = data.summary || {};
       const players = data.players || { items: [], total: 0, page: 1, perPage: 20 };
+      const blocked = data.blocked || [];
       const totalPages = Math.max(1, Math.ceil((players.total || 0) / (players.perPage || 20)));
       const canManage = Boolean(data.canManage);
       const grantForm = canManage ? `<section class="panel">
@@ -1770,6 +1787,17 @@ MINI_APP_HTML = r"""<!doctype html>
           <input id="mineGrantSuper" type="number" placeholder="Супер-игры +/-">
           <label class="muted wide"><input id="mineGrantCooldown" type="checkbox"> сбросить ожидание копки</label>
           <button class="btn wide" onclick="submitMineGrant()">Сохранить</button>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>Опасная зона</h2>
+        <p class="muted">Удаление стирает прогресс шахты. Блокировка запрещает Mini App шахты и команду копай.</p>
+        <div class="mine-admin-form">
+          <input id="mineDangerUserId" class="wide" placeholder="User ID">
+          <input id="mineDangerReason" class="wide" placeholder="Причина блокировки, необязательно">
+          <button class="btn danger" onclick="deleteMinePlayer()">Удалить из шахты</button>
+          <button class="btn danger" onclick="blockMinePlayer(null, false)">Заблокировать</button>
+          <button class="btn danger wide" onclick="blockMinePlayer(null, true)">Заблокировать и удалить прогресс</button>
         </div>
       </section>` : `<section class="panel muted">Режим просмотра: управление доступно только владельцу.</section>`;
       const pager = `<div class="utility-actions">
@@ -1792,6 +1820,10 @@ MINI_APP_HTML = r"""<!doctype html>
         ${pager}
         <div class="role-list">${(players.items || []).map(player => mineAdminRowHtml(player, canManage)).join("") || `<p class="muted">Пока нет игроков.</p>`}</div>
         ${pager}
+      </section>
+      <section class="panel">
+        <h2>Заблокированы в копай</h2>
+        <div class="role-list">${blocked.map(item => mineAdminBlockRowHtml(item, canManage)).join("") || `<p class="muted">Блокировок пока нет.</p>`}</div>
       </section>
       <section class="panel"><button class="btn secondary" style="margin:0" onclick="showProfile()">Назад к профилю</button></section>`;
       scrollToTop();
@@ -1825,6 +1857,59 @@ MINI_APP_HTML = r"""<!doctype html>
         body: JSON.stringify(payload)
       });
       showNotice(result.message || "Шахта обновлена.");
+      showMineAdmin();
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
+  function mineDangerUserId(userId = null) {
+    const raw = userId || document.getElementById("mineDangerUserId")?.value || document.getElementById("mineGrantUserId")?.value || "";
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  async function deleteMinePlayer(userId = null) {
+    const target = mineDangerUserId(userId);
+    if (!target) return alert("Укажи User ID игрока.");
+    if (!confirm("Удалить игрока из шахты? Прогресс будет стёрт.")) return;
+    try {
+      const result = await api("/miniapp/profile/mine-admin/delete", {
+        method: "POST",
+        body: JSON.stringify({ userId: target })
+      });
+      showNotice(result.message || "Игрок удалён.");
+      showMineAdmin();
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
+  async function blockMinePlayer(userId = null, deletePlayer = false) {
+    const target = mineDangerUserId(userId);
+    if (!target) return alert("Укажи User ID игрока.");
+    const reason = document.getElementById("mineDangerReason")?.value || "";
+    if (!confirm(deletePlayer ? "Заблокировать и удалить прогресс игрока?" : "Заблокировать игроку шахту и команду копай?")) return;
+    try {
+      const result = await api("/miniapp/profile/mine-admin/block", {
+        method: "POST",
+        body: JSON.stringify({ userId: target, reason, deletePlayer })
+      });
+      showNotice(result.message || "Игрок заблокирован.");
+      showMineAdmin();
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
+  async function unblockMinePlayer(userId) {
+    if (!confirm("Снять блокировку шахты?")) return;
+    try {
+      const result = await api("/miniapp/profile/mine-admin/unblock", {
+        method: "POST",
+        body: JSON.stringify({ userId: Number(userId) })
+      });
+      showNotice(result.message || "Блокировка снята.");
       showMineAdmin();
     } catch (error) {
       alert(error.message);
