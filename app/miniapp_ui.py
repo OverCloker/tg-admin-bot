@@ -353,6 +353,15 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     .mine-admin-row b,
     .mine-admin-row span { min-width:0; overflow-wrap:break-word; word-break:normal; }
+    .mine-admin-title {
+      display:flex;
+      flex-wrap:wrap;
+      gap:2px 8px;
+      align-items:baseline;
+      min-width:0;
+    }
+    .mine-admin-title b { overflow-wrap:break-word; }
+    .mine-admin-username { color:var(--text); font-weight:850; overflow-wrap:anywhere; }
     .mine-admin-row > .btn { width:100%; margin:0; }
     .mine-admin-row > .utility-actions {
       width:100%;
@@ -1740,9 +1749,10 @@ MINI_APP_HTML = r"""<!doctype html>
     }
   }
 
-  function mineAdminPlayerName(player) {
+  function mineAdminPlayerTitleHtml(player, prefix = "") {
     const name = player.full_name || String(player.user_id);
-    return `${name}${player.username ? ` · @${player.username}` : ""}`;
+    const username = player.username ? `<span class="mine-admin-username">@${escapeHtml(player.username)}</span>` : "";
+    return `<span class="mine-admin-title"><b>${escapeHtml(prefix + name)}</b>${username}</span>`;
   }
 
   function mineAdminRowHtml(player, canManage = false) {
@@ -1751,7 +1761,7 @@ MINI_APP_HTML = r"""<!doctype html>
       : `<span class="muted">просмотр</span>`;
     return `<div class="mine-admin-row">
       <span>
-        <b>${escapeHtml(mineAdminPlayerName(player))}</b><br>
+        ${mineAdminPlayerTitleHtml(player)}<br>
         <span class="muted">ID ${Number(player.user_id)} · ${Number(player.total_depth || 0)} м · ${Number(player.coins || 0)} котоинов · удача ${Number(player.luck || 0)}/100</span>
       </span>
       ${action}
@@ -1764,7 +1774,7 @@ MINI_APP_HTML = r"""<!doctype html>
       : `<span class="muted">бан</span>`;
     return `<div class="mine-admin-row">
       <span>
-        <b>${escapeHtml(mineAdminPlayerName(item))}</b><br>
+        ${mineAdminPlayerTitleHtml(item)}<br>
         <span class="muted">ID ${Number(item.user_id)}${item.reason ? ` · ${escapeHtml(item.reason)}` : ""}</span>
       </span>
       ${action}
@@ -1774,7 +1784,7 @@ MINI_APP_HTML = r"""<!doctype html>
   function mineAdminTopHtml(title, rows, valueKey, suffix = "") {
     const items = (rows || []).map((player, index) => `<div class="mine-admin-row">
       <span>
-        <b>${index + 1}. ${escapeHtml(mineAdminPlayerName(player))}</b><br>
+        ${mineAdminPlayerTitleHtml(player, `${index + 1}. `)}<br>
         <span class="muted">ID ${Number(player.user_id)} · ${Number(player[valueKey] || 0)}${suffix}</span>
       </span>
     </div>`).join("");

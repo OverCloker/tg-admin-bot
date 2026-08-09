@@ -1,12 +1,15 @@
 from datetime import datetime, timedelta, timezone
 
 from app.bot import (
+    DICTIONARY_HIT_MUTE_MINUTES,
+    DICTIONARY_HIT_PHOTO_PATH,
     MODERATOR_ASSIGN_COMMANDS,
     moderator_can_delete_messages,
     moderator_can_stop_chat,
     moderator_can_unmute,
     moderator_max_mute_minutes,
     parse_chat_stop_payload,
+    parse_dictionary_hit_payload,
     parse_duration_seconds_token,
     parse_moderator_duration,
     parse_moderator_role_payload,
@@ -140,3 +143,12 @@ def test_chat_control_payloads() -> None:
     assert parse_slow_mode_payload("медленно 30с") == 30
     assert parse_slow_mode_payload("медленно 5м") == 300
     assert parse_slow_mode_payload("медленно выкл") == 0
+
+
+def test_dictionary_hit_payload_and_asset() -> None:
+    assert parse_dictionary_hit_payload("ударить словарём") is None
+    assert parse_dictionary_hit_payload("ударить словарем") is None
+    assert parse_dictionary_hit_payload("@target_user ударить словарём") == "target_user"
+    assert parse_dictionary_hit_payload("ударить словарём быстро") == ""
+    assert DICTIONARY_HIT_MUTE_MINUTES == 1
+    assert DICTIONARY_HIT_PHOTO_PATH.exists()

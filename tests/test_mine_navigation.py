@@ -224,6 +224,11 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert ".mine-admin-row > .utility-actions" in MINI_APP_HTML
     assert "grid-template-columns:repeat(auto-fit, minmax(94px, 1fr));" in MINI_APP_HTML
     assert ".mine-admin-row span { min-width:0; overflow-wrap:break-word; word-break:normal; }" in MINI_APP_HTML
+    assert ".mine-admin-title" in MINI_APP_HTML
+    assert "gap:2px 8px;" in MINI_APP_HTML
+    assert "function mineAdminPlayerTitleHtml(player, prefix = \"\")" in MINI_APP_HTML
+    assert 'class="mine-admin-username"' in MINI_APP_HTML
+    assert "mineAdminPlayerName" not in MINI_APP_HTML
     assert ".mine-admin-row span { overflow-wrap:anywhere; }" not in MINI_APP_HTML
     assert "background:var(--input);" not in MINI_APP_HTML
     assert '"/miniapp/profile/mine-admin/grant"' in MINI_APP_HTML

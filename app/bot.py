@@ -150,6 +150,8 @@ MODERATOR_REMOVE_COMMANDS = {
 }
 MODERATOR_MUTE_ALERT_THRESHOLD = 3
 MODERATOR_MUTE_ALERT_WINDOW_HOURS = 24
+DICTIONARY_HIT_MUTE_MINUTES = 1
+DICTIONARY_HIT_PHOTO_PATH = Path(__file__).with_name("assets") / "dictionary_hit.jpg"
 DAY_PICK_KEY = "day_pick"
 DAY_QUERY_TEXT = "кто пидор"
 DAY_REPLY_TEMPLATE = "Пидор дня: {user}"
@@ -1137,6 +1139,19 @@ def parse_quiet_payload(text: str | None) -> tuple[str | None, int | None, str]:
     if not minutes_text.strip().isdigit():
         return username, None, reason.strip()
     return username, int(minutes_text.strip()), reason.strip()
+
+
+def parse_dictionary_hit_payload(text: str | None) -> str | None:
+    if not text:
+        return ""
+    match = re.fullmatch(
+        r"(?:(@[A-Za-z0-9_]{5,32})\s+)?ударить\s+словар[её]м",
+        text.strip(),
+        re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    return normalize_username(match.group(1)) if match.group(1) else None
 
 
 def parse_unquiet_payload(text: str | None) -> str | None:
@@ -11240,6 +11255,116 @@ async def quiet_user(message: Message) -> None:
                 f"{senior_line}"
             ),
         )
+
+
+@router.message(F.text.regexp(re.compile(r"^(@[A-Za-z0-9_]{5,32}\s+)?ударить\s+словар[её]м$", re.IGNORECASE)))
+async def dictionary_hit_user(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+    if not message.from_user:
+        return
+
+    actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
+    if actor_role is None:
+        return
+    if actor_role == "admin" and not is_bot_admin(message.from_user.id) and not await has_chat_admin_permission(
+        message.bot, message.chat.id, message.from_user.id, "can_restrict_members"
+    ):
+        return
+
+    await remember_sender(message)
+    username = parse_dictionary_hit_payload(message.text)
+    if username == "":
+        await safe_reply(message, "Формат: ответом на сообщение <code>ударить словарём</code> или <code>@username ударить словарём</code>.")
+        return
+
+    target_id, target_name, error = await resolve_command_target(message, username)
+    if error:
+        await safe_reply(message, error)
+        return
+    if not target_id or not target_name:
+        return
+    if target_id == message.from_user.id:
+        await safe_reply(message, "Словарём себя не бьём. Самообразование — добровольно.")
+        return
+    if await is_chat_admin(message.bot, message.chat.id, target_id):
+        await safe_reply(message, "Администраторов словарём не бьём: у них броня из прав.")
+        return
+
+    until_date = datetime.now(timezone.utc) + timedelta(minutes=DICTIONARY_HIT_MUTE_MINUTES)
+    try:
+        await message.bot.restrict_chat_member(
+            chat_id=message.chat.id,
+            user_id=target_id,
+            permissions=ChatPermissions(
+                can_send_messages=False,
+                can_send_audios=False,
+                can_send_documents=False,
+                can_send_photos=False,
+                can_send_videos=False,
+                can_send_video_notes=False,
+                can_send_voice_notes=False,
+                can_send_polls=False,
+                can_send_other_messages=False,
+                can_add_web_page_previews=False,
+                can_react_to_messages=False,
+            ),
+            until_date=until_date,
+            use_independent_chat_permissions=True,
+        )
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        await safe_reply(
+            message,
+            "Не получилось ограничить пользователя. Проверь, что бот админ и может ограничивать участников.\n"
+            f"<code>{escape(str(exc))}</code>",
+        )
+        return
+
+    db.add_moderator_action(
+        message.chat.id,
+        message.from_user.id,
+        target_id,
+        "mute",
+        DICTIONARY_HIT_MUTE_MINUTES,
+        "удар словарём",
+    )
+    reply_to_message_id = (
+        message.reply_to_message.message_id
+        if username is None and message.reply_to_message
+        else message.message_id
+    )
+    caption = f"Мут на <b>{DICTIONARY_HIT_MUTE_MINUTES}</b> мин."
+    if DICTIONARY_HIT_PHOTO_PATH.exists():
+        try:
+            await message.bot.send_photo(
+                chat_id=message.chat.id,
+                photo=FSInputFile(DICTIONARY_HIT_PHOTO_PATH),
+                caption=caption,
+                reply_to_message_id=reply_to_message_id,
+            )
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(int(getattr(exc, "retry_after", 3)) + 1)
+            with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+                await message.bot.send_photo(
+                    chat_id=message.chat.id,
+                    photo=FSInputFile(DICTIONARY_HIT_PHOTO_PATH),
+                    caption=caption,
+                    reply_to_message_id=reply_to_message_id,
+                )
+        except (TelegramBadRequest, TelegramForbiddenError):
+            await safe_reply(message, caption)
+    else:
+        await safe_reply(message, caption)
+
+    await notify_staff_moderation(
+        message.bot,
+        (
+            "📚 <b>Удар словарём</b>\n"
+            f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
+            f"Кому: {escape(target_name)}\n"
+            f"Срок: <b>{DICTIONARY_HIT_MUTE_MINUTES}</b> мин"
+        ),
+    )
 
 
 @router.message(F.text.regexp(re.compile(r"^(@[A-Za-z0-9_]{5,32}\s+)?трещи$", re.IGNORECASE)))
