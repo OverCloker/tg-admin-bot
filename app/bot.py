@@ -98,6 +98,7 @@ from .keyboards import (
     main_menu,
     media_cancel_menu,
     media_tools_menu,
+    miniapp_deep_link,
     miniapp_private_menu,
     moderator_demote_menu,
     moderator_panel_menu,
@@ -117,7 +118,6 @@ from .keyboards import (
     user_shift_contract_menu,
     user_buy_confirm_menu,
     user_chat_select_menu,
-    user_donate_menu,
     user_dig_mode_menu,
     user_mine_menu,
     user_menu,
@@ -4442,17 +4442,19 @@ async def start(message: Message, state: FSMContext) -> None:
         if chat_id is not None and message.from_user:
             chat = db.get_chat(chat_id)
             if chat is None:
-                await message.answer("Группа для доната больше не найдена.", reply_markup=main_menu())
+                await message.answer("Группа для покупок шахты больше не найдена.", reply_markup=main_menu())
                 return
             if not await is_chat_member(message.bot, chat_id, message.from_user.id):
-                await message.answer("Донат шахты доступен только участникам выбранной группы.", reply_markup=main_menu())
+                await message.answer("Покупки шахты доступны только участникам выбранной группы.", reply_markup=main_menu())
                 return
             if db.get_dig_player(chat_id, message.from_user.id) is None:
                 await message.answer("Сначала зарегистрируйся в шахте командой копай внутри группы.", reply_markup=main_menu())
                 return
             await message.answer(
-                f"<b>Донат шахты</b>\nГруппа: <b>{mention_chat(chat)}</b>\n\nВыбери покупку за Stars.",
-                reply_markup=user_donate_menu(chat_id, message.from_user.id),
+                f"<b>Покупки шахты за Stars переехали в Mini App</b>\n"
+                f"Группа: <b>{mention_chat(chat)}</b>\n\n"
+                "Открой магазин шахты — вкладка <b>Покупки за Stars</b> теперь там.",
+                reply_markup=miniapp_private_menu("Открыть магазин", view="shop"),
             )
             return
         await message.answer(
@@ -5045,8 +5047,9 @@ async def cb_user_donate(callback: CallbackQuery) -> None:
 
     await safe_edit(
         callback,
-        "<b>Донат шахты</b>\n\nВыбери покупку за Stars.",
-        reply_markup=user_donate_menu(chat_id, callback.from_user.id),
+        "<b>Покупки шахты за Stars переехали в Mini App</b>\n\n"
+        "Открой магазин шахты и выбери вкладку <b>Покупки за Stars</b>.",
+        reply_markup=miniapp_private_menu("Открыть магазин", view="shop"),
     )
     await callback.answer()
 
@@ -6200,7 +6203,7 @@ async def cb_dig_shop(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("dig:donate:"))
 async def cb_dig_donate(callback: CallbackQuery) -> None:
     if not callback.message or callback.message.chat.type not in SUPPORTED_CHAT_TYPES:
-        await callback.answer("Донат шахты доступен в группе.", show_alert=True)
+        await callback.answer("Покупки шахты доступны в группе.", show_alert=True)
         return
 
     owner_id = int(callback.data.split(":", 2)[2])
@@ -6210,12 +6213,7 @@ async def cb_dig_donate(callback: CallbackQuery) -> None:
         await callback.answer("Сначала зарегистрируйся.", show_alert=True)
         return
 
-    bot_user = await callback.bot.me()
-    if not bot_user.username:
-        await callback.answer("Не получилось открыть личный чат с ботом.", show_alert=True)
-        return
-    url = f"https://t.me/{bot_user.username}?start={donate_start_payload(callback.message.chat.id)}"
-    await callback.answer(url=url)
+    await callback.answer(url=miniapp_deep_link(f"shop_{callback.from_user.id}"))
 
 
 @router.callback_query(F.data.startswith("dig:star:"))

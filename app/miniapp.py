@@ -1105,27 +1105,33 @@ def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
         if products:
             categories.append({"key": category_key, "title": title, "items": products})
 
-    mute_title, mute_description, mute_price = game.dig_star_invoice("super_mute30")
+    star_products: list[dict[str, Any]] = []
+    for action, (title, description, star_price, item_key, quantity) in game.DIG_STAR_ACTIONS.items():
+        current_quantity = db.get_dig_item_quantity(0, user_id, item_key) if item_key else 0
+        star_products.append(
+            {
+                "key": action,
+                "name": title,
+                "price": 0,
+                "basePrice": 0,
+                "starPrice": star_price,
+                "discount": 0,
+                "description": description,
+                "quantity": current_quantity,
+                "owned": False,
+                "requirement": None,
+                "requirementName": None,
+                "canBuy": True,
+                "instant": item_key is None,
+                "grantItem": item_key,
+                "grantQuantity": quantity,
+            }
+        )
     categories.append(
         {
             "key": "stars",
             "title": "Покупки за Stars",
-            "items": [
-                {
-                    "key": "super_mute30",
-                    "name": mute_title,
-                    "price": 0,
-                    "basePrice": 0,
-                    "starPrice": mute_price,
-                    "discount": 0,
-                    "description": mute_description,
-                    "quantity": items.get("super_mute30", 0),
-                    "owned": False,
-                    "requirement": None,
-                    "requirementName": None,
-                    "canBuy": True,
-                }
-            ],
+            "items": star_products,
         }
     )
 
@@ -1284,10 +1290,10 @@ async def miniapp_shop_star_invoice(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, str]:
     user = _telegram_user(x_telegram_init_data)
-    if payload.item_key != "super_mute30":
-        raise HTTPException(400, "Этот товар нельзя купить за Stars.")
-
     from . import bot as game
+
+    if payload.item_key not in game.DIG_STAR_ACTIONS:
+        raise HTTPException(400, "Этот товар нельзя купить за Stars.")
 
     db = _db()
     try:
@@ -1296,13 +1302,13 @@ async def miniapp_shop_star_invoice(
     finally:
         db.close()
 
-    title, description, price = game.dig_star_invoice("super_mute30")
+    title, description, price = game.dig_star_invoice(payload.item_key)
     bot = Bot(token=load_config().bot_token)
     try:
         link = await bot.create_invoice_link(
             title=title,
             description=description,
-            payload=game.dig_star_payload("super_mute30", user["id"], 0),
+            payload=game.dig_star_payload(payload.item_key, user["id"], 0),
             currency="XTR",
             prices=[LabeledPrice(label=title, amount=price)],
             provider_token="",

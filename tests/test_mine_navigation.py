@@ -40,7 +40,6 @@ def test_group_mine_callbacks_are_bound_to_message_owner() -> None:
     assert [button.callback_data for button in buttons] == [
         "user:dig:mode:-1001:42",
         "user:bag:-1001:42",
-        "user:donate:-1001:42",
     ]
 
 
@@ -52,11 +51,13 @@ def test_group_registration_is_bound_to_requesting_user() -> None:
 
 def test_group_bag_opens_main_miniapp_store(monkeypatch) -> None:
     monkeypatch.delenv("MINI_APP_SHORT_NAME", raising=False)
-    button = dig_bag_menu(42).inline_keyboard[0][0]
+    buttons = [button for row in dig_bag_menu(42).inline_keyboard for button in row]
+    button = buttons[0]
 
     assert button.text == "Магазин"
     assert button.url == "https://t.me/ypominanieBot?startapp=shop_42"
     assert button.web_app is None
+    assert "dig:donate:42" not in {item.callback_data for item in buttons if item.callback_data}
 
 
 def test_private_store_button_opens_shop_view(monkeypatch) -> None:

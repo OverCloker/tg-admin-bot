@@ -373,7 +373,6 @@ def user_mine_menu(chat_id: int, user_id: int, show_back: bool = True) -> Inline
     rows = [
         [InlineKeyboardButton(text="\u041a\u043e\u043f\u0430\u0442\u044c", callback_data=f"user:dig:mode:{chat_id}:{user_id}")],
         [InlineKeyboardButton(text="\u0421\u0443\u043c\u043a\u0430", callback_data=f"user:bag:{chat_id}:{user_id}")],
-        [InlineKeyboardButton(text="\u0414\u043e\u043d\u0430\u0442", callback_data=f"user:donate:{chat_id}:{user_id}")],
     ]
     if show_back:
         rows.append([InlineKeyboardButton(text="\u041d\u0430\u0437\u0430\u0434", callback_data=f"user:chat:{chat_id}")])
@@ -387,7 +386,6 @@ def user_bag_menu(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Маршруты", callback_data=f"user:routes:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Контракты", callback_data=f"user:contracts:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Экспедиция", callback_data=f"user:expedition:{chat_id}:{user_id}")],
-            [InlineKeyboardButton(text="Донат", callback_data=f"user:donate:{chat_id}:{user_id}")],
             [InlineKeyboardButton(text="Назад", callback_data=f"user:mine:{chat_id}:{user_id}")],
         ]
     )
@@ -470,22 +468,6 @@ def user_buy_confirm_menu(chat_id: int, user_id: int, item_key: str) -> InlineKe
                 )
             ],
             [InlineKeyboardButton(text="Назад в магазин", callback_data=f"user:shop:{chat_id}:{user_id}")],
-        ]
-    )
-
-
-def user_donate_menu(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Восстановить удачу - 3 ⭐", callback_data=f"user:star:luck:{chat_id}:{user_id}")],
-            [InlineKeyboardButton(text="Сбросить ожидание копай - 1 ⭐", callback_data=f"user:star:cooldown:{chat_id}:{user_id}")],
-            [InlineKeyboardButton(text="Копать 3 раза - 3 ⭐", callback_data=f"user:star:digs3:{chat_id}:{user_id}")],
-            [InlineKeyboardButton(text="Копать 3 раза со 100 удачей - 10 ⭐", callback_data=f"user:star:lucky_digs3:{chat_id}:{user_id}")],
-            [InlineKeyboardButton(text="Копать 5 раз - 5 ⭐", callback_data=f"user:star:digs5:{chat_id}:{user_id}")],
-            [InlineKeyboardButton(text="Копать 5 раз со 100 удачей - 15 ⭐", callback_data=f"user:star:lucky_digs5:{chat_id}:{user_id}")],
-            [InlineKeyboardButton(text="Прокопать 10 м - 50 ⭐", callback_data=f"user:star:depth10:{chat_id}:{user_id}")],
-            [InlineKeyboardButton(text="Супер-игра 9×9 - 10 ⭐", callback_data=f"user:star:super_game:{chat_id}:{user_id}")],
-            [InlineKeyboardButton(text="Назад", callback_data=f"user:mine:{chat_id}")],
         ]
     )
 
@@ -748,7 +730,6 @@ def dig_bag_menu(user_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Контракты", callback_data=f"dig:contracts:{user_id}")],
             [InlineKeyboardButton(text="Экспедиция", callback_data=f"dig:expedition:{user_id}")],
             [InlineKeyboardButton(text="Достижения", callback_data=f"dig:achievements:{user_id}")],
-            [InlineKeyboardButton(text="Донат", callback_data=f"dig:donate:{user_id}")],
         ]
     )
 

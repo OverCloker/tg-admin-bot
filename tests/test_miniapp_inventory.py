@@ -55,10 +55,11 @@ def test_shop_requirement_is_human_readable(tmp_path) -> None:
     assert products["helmet_2"]["requirementName"] == "Каска I"
 
 
-def test_shop_catalog_has_star_mute_purchase(tmp_path) -> None:
+def test_shop_catalog_has_all_star_donate_purchases(tmp_path) -> None:
     db = Database(str(tmp_path / "bot.sqlite3"))
     db.init()
     db.register_dig_player(0, 42, "miner", "Шахтёр")
+    db.add_dig_item(0, 42, "star_dig", 2)
 
     try:
         catalog = _shop_catalog(db, 42)
@@ -66,6 +67,11 @@ def test_shop_catalog_has_star_mute_purchase(tmp_path) -> None:
         db.close()
 
     star_category = next(category for category in catalog["categories"] if category["key"] == "stars")
+    star_items = {item["key"]: item for item in star_category["items"]}
+    assert set(game.DIG_STAR_ACTIONS) <= set(star_items)
+    assert star_items["luck"]["starPrice"] == 3
+    assert star_items["luck"]["instant"] is True
+    assert star_items["digs3"]["quantity"] == 2
     mute = next(item for item in star_category["items"] if item["key"] == "super_mute30")
     assert mute["starPrice"] == 3
     assert mute["quantity"] == 0
