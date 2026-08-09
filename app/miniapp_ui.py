@@ -266,7 +266,8 @@ MINI_APP_HTML = r"""<!doctype html>
     .profile-avatar.frame-copper { border-color: #d58d54; box-shadow: 0 0 20px #d58d5430, 0 0 0 1px #ffd8af55 inset; }
     .profile-avatar.frame-couple { border-color: #ff8fd1; box-shadow: 0 0 22px #ff8fd144, 0 0 0 1px #ffffff66 inset; }
     .profile-avatar > * { grid-area: 1 / 1; }
-    .profile-avatar img { position: relative; z-index: 2; width: 100%; height: 100%; object-fit: cover; }
+    .profile-avatar img { position: relative; z-index: 2; width: 100%; height: 100%; object-fit: cover; background: var(--panel-2); }
+    .profile-avatar.has-image .profile-avatar-fallback { display: none; }
     .profile-avatar-fallback { position: relative; z-index: 1; letter-spacing: -.04em; }
     .profile-title { min-width: 0; }
     .profile-title h2 { margin: 0; overflow-wrap: anywhere; }
@@ -1600,9 +1601,9 @@ MINI_APP_HTML = r"""<!doctype html>
       frame === "couple_frame" ? "frame-couple" : "";
     const fallback = `<span class="profile-avatar-fallback">${escapeHtml(profileInitials(user.fullName))}</span>`;
     const image = user.photoUrl
-      ? `<img src="${escapeHtml(user.photoUrl)}" alt="" loading="${small ? "lazy" : "eager"}" onerror="this.remove()">`
+      ? `<img src="${escapeHtml(user.photoUrl)}" alt="" loading="${small ? "lazy" : "eager"}" onerror="this.parentElement.classList.remove('has-image');this.remove()">`
       : "";
-    return `<div class="profile-avatar ${frameClass}">${image}${fallback}</div>`;
+    return `<div class="profile-avatar ${frameClass} ${image ? "has-image" : ""}">${image}${fallback}</div>`;
   }
 
   function profileHeroClass(cosmetics = {}) {
@@ -1646,7 +1647,7 @@ MINI_APP_HTML = r"""<!doctype html>
     const sourceTitle = item.source === "owner"
       ? "\u0432\u043b\u0430\u0434\u0435\u043b\u0435\u0446"
       : item.source === "moderation"
-        ? `\u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044f${item.chatCount ? ` ? \u0447\u0430\u0442\u043e\u0432: ${Number(item.chatCount)}` : ""}`
+        ? `\u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044f${item.chatCount ? ` · \u0447\u0430\u0442\u043e\u0432: ${Number(item.chatCount)}` : ""}`
         : "Mini App";
     const removeButton = item.canRemove === false
       ? `<span class="muted">\u043d\u0435\u043b\u044c\u0437\u044f \u0443\u0434\u0430\u043b\u0438\u0442\u044c</span>`
@@ -1663,7 +1664,7 @@ MINI_APP_HTML = r"""<!doctype html>
   function roleGroupHtml(group) {
     const items = (group.items || []).map(item => roleRowHtml(item, group.label)).join("");
     return `<details class="panel" open>
-      <summary style="cursor:pointer;font-weight:900;font-size:20px">${escapeHtml(group.emoji || "")} ${escapeHtml(group.label)} ? ${(group.items || []).length}</summary>
+      <summary style="cursor:pointer;font-weight:900;font-size:20px">${escapeHtml(group.emoji || "")} ${escapeHtml(group.label)} · ${(group.items || []).length}</summary>
       <div class="role-list">${items || `<p class="muted">На этой роли пока никого нет.</p>`}</div>
       <div class="role-manager-form">
         <input id="roleTarget_${escapeHtml(group.key)}" placeholder="@ник или ID">
@@ -1723,7 +1724,7 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function mineAdminPlayerName(player) {
     const name = player.full_name || String(player.user_id);
-    return `${name}${player.username ? ` ? @${player.username}` : ""}`;
+    return `${name}${player.username ? ` · @${player.username}` : ""}`;
   }
 
   function mineAdminRowHtml(player, canManage = false) {
@@ -1746,7 +1747,7 @@ MINI_APP_HTML = r"""<!doctype html>
     return `<div class="mine-admin-row">
       <span>
         <b>${escapeHtml(mineAdminPlayerName(item))}</b><br>
-        <span class="muted">ID ${Number(item.user_id)}${item.reason ? ` ? ${escapeHtml(item.reason)}` : ""}</span>
+        <span class="muted">ID ${Number(item.user_id)}${item.reason ? ` · ${escapeHtml(item.reason)}` : ""}</span>
       </span>
       ${action}
     </div>`;
@@ -1756,7 +1757,7 @@ MINI_APP_HTML = r"""<!doctype html>
     const items = (rows || []).map((player, index) => `<div class="mine-admin-row">
       <span>
         <b>${index + 1}. ${escapeHtml(mineAdminPlayerName(player))}</b><br>
-        <span class="muted">ID ${Number(player.user_id)} ? ${Number(player[valueKey] || 0)}${suffix}</span>
+        <span class="muted">ID ${Number(player.user_id)} · ${Number(player[valueKey] || 0)}${suffix}</span>
       </span>
     </div>`).join("");
     return `<section class="panel">

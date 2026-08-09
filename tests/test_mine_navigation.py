@@ -218,6 +218,10 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function profileAvatarHtml(user, cosmetics = {}, small = false)' in MINI_APP_HTML
     assert 'function friendRowHtml(friend)' in MINI_APP_HTML
     assert ".profile-avatar img { position: relative; z-index: 2;" in MINI_APP_HTML
+    assert ".profile-avatar.has-image .profile-avatar-fallback { display: none; }" in MINI_APP_HTML
+    assert "parentElement.classList.remove('has-image')" in MINI_APP_HTML
+    assert '${escapeHtml(group.label)} ? ${(group.items || []).length}' not in MINI_APP_HTML
+    assert 'модерация${item.chatCount ? ` ? ' not in MINI_APP_HTML
     assert 'social.relation !== "self" && social.relationTitle' in MINI_APP_HTML
     assert "Пока нет друзей из общих чатов." in MINI_APP_HTML
     assert "Пока нет друзей, которые зарегистрированы в шахте." not in MINI_APP_HTML
