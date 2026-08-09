@@ -334,6 +334,40 @@ MINI_APP_HTML = r"""<!doctype html>
       box-sizing:border-box;
     }
     .mine-admin-form .wide { grid-column: 1 / -1; }
+    .mine-admin-screen { display:grid; gap:14px; }
+    body[data-view="mineAdmin"][data-theme="material"] .mine-admin-screen .panel {
+      background:
+        linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%),
+        var(--panel);
+      border-color: color-mix(in srgb, var(--accent) 24%, var(--line));
+    }
+    body[data-view="mineAdmin"][data-theme="material"] .mine-admin-card,
+    body[data-view="mineAdmin"][data-theme="material"] .mine-admin-row {
+      background: color-mix(in srgb, var(--panel-2) 86%, var(--accent) 14%);
+    }
+    body[data-view="mineAdmin"][data-theme="glass"] .mine-admin-screen .panel {
+      background:
+        linear-gradient(145deg, #ffffff34 0%, #bfeaff20 42%, #42638d1f 100%);
+      border-color: #ffffff68;
+      box-shadow:
+        0 28px 80px #00000066,
+        0 8px 22px #9de1ff16,
+        inset 0 1px 0 #ffffff80,
+        inset 0 -1px 0 #ffffff20;
+    }
+    body[data-view="mineAdmin"][data-theme="glass"] .mine-admin-card,
+    body[data-view="mineAdmin"][data-theme="glass"] .mine-admin-row {
+      background: linear-gradient(145deg, #ffffff2f 0%, #94dfff18 100%);
+      border-color: #ffffff55;
+    }
+    body[data-view="mineAdmin"][data-theme="glass"] .mine-admin-form input {
+      background: #06111f80;
+      border-color: #ffffff50;
+      color: var(--text);
+    }
+    body[data-view="mineAdmin"][data-theme="glass"] .mine-admin-form input::placeholder {
+      color: #dce9f5b8;
+    }
     .mine-admin-row {
       display:grid;
       grid-template-columns:minmax(0, 1fr);
@@ -1789,11 +1823,9 @@ MINI_APP_HTML = r"""<!doctype html>
     setScreenHeader("mineAdmin");
     content.innerHTML = `<section class="panel muted">Загружаю панель шахты...</section>`;
     try {
-      const data = await api(`/miniapp/profile/mine-admin?page=${Number(page) || 1}&per_page=20`);
+      const data = await api("/miniapp/profile/mine-admin?per_page=0");
       const summary = data.summary || {};
-      const players = data.players || { items: [], total: 0, page: 1, perPage: 20 };
       const blocked = data.blocked || [];
-      const totalPages = Math.max(1, Math.ceil((players.total || 0) / (players.perPage || 20)));
       const canManage = Boolean(data.canManage);
       const grantForm = canManage ? `<section class="panel">
         <h2>Управление игроком</h2>
@@ -1820,11 +1852,8 @@ MINI_APP_HTML = r"""<!doctype html>
           <button class="btn danger wide" onclick="blockMinePlayer(null, true)">Заблокировать и удалить прогресс</button>
         </div>
       </section>` : `<section class="panel muted">Режим просмотра: управление доступно только владельцу.</section>`;
-      const pager = `<div class="utility-actions">
-        <button class="btn secondary" onclick="showMineAdmin(${Math.max(1, (players.page || 1) - 1)})" ${(players.page || 1) <= 1 ? "disabled" : ""}>Назад</button>
-        <button class="btn secondary" onclick="showMineAdmin(${Math.min(totalPages, (players.page || 1) + 1)})" ${(players.page || 1) >= totalPages ? "disabled" : ""}>Дальше</button>
-      </div>`;
-      content.innerHTML = `<section class="panel">
+      content.innerHTML = `<div class="mine-admin-screen">
+      <section class="panel">
         <h2>Сводка</h2>
         <div class="mine-admin-grid">
           <div class="mine-admin-card">Игроки<b>${Number(summary.players || 0)}</b></div>
@@ -1836,16 +1865,11 @@ MINI_APP_HTML = r"""<!doctype html>
       ${mineAdminTopHtml("Топ глубины", data.top && data.top.depth, "total_depth", " м")}
       ${mineAdminTopHtml("Топ котоинов", data.top && data.top.coins, "coins", " кот.")}
       <section class="panel">
-        <h2>Игроки шахты</h2>
-        ${pager}
-        <div class="role-list">${(players.items || []).map(player => mineAdminRowHtml(player, canManage)).join("") || `<p class="muted">Пока нет игроков.</p>`}</div>
-        ${pager}
-      </section>
-      <section class="panel">
         <h2>Заблокированы в копай</h2>
         <div class="role-list">${blocked.map(item => mineAdminBlockRowHtml(item, canManage)).join("") || `<p class="muted">Блокировок пока нет.</p>`}</div>
       </section>
-      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showProfile()">Назад к профилю</button></section>`;
+      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showProfile()">Назад к профилю</button></section>
+      </div>`;
       scrollToTop();
     } catch (error) {
       showError(error);
