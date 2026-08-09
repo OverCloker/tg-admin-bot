@@ -283,6 +283,34 @@ MINI_APP_HTML = r"""<!doctype html>
       font-size: 12px;
       font-weight: 850;
     }
+    .profile-badge.owner { border-color:#ffd66d; background:#3a2a10; color:#fff0be; }
+    .profile-badge.moderation { border-color:#83b7ff; background:#102947; color:#ddecff; }
+    .profile-badge.custom { border-color:#b98cff; background:#271946; color:#f2e8ff; }
+    .role-manager-form { display: grid; gap: 8px; margin-top: 10px; }
+    .role-manager-form input {
+      width: 100%;
+      min-height: 44px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--input);
+      color: var(--text);
+      font: inherit;
+      box-sizing: border-box;
+    }
+    .role-list { display: grid; gap: 8px; margin-top: 12px; }
+    .role-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--panel-2);
+    }
+    .role-row b,
+    .role-row span { overflow-wrap: anywhere; }
     .friend-list { display: grid; gap: 8px; margin-top: 10px; }
     .friend-row {
       display: grid;
@@ -1560,9 +1588,88 @@ MINI_APP_HTML = r"""<!doctype html>
     if (social.relation !== "self" && social.relationTitle) badges.push(social.relationTitle);
     if (mine.rank) badges.push(mine.rank);
     (cosmetics.badges || []).slice(0, 2).forEach(item => badges.push(`${item.emoji || ""} ${item.title || ""}`.trim()));
-    return badges.length
-      ? `<div class="profile-badges">${badges.map(item => `<span class="profile-badge">${escapeHtml(item)}</span>`).join("")}</div>`
+    const roleBadges = (profile.roles || []).map(role => {
+      const kind = ["owner", "moderation", "custom"].includes(role.kind) ? role.kind : "custom";
+      const title = `${role.emoji || ""} ${role.title || ""}`.trim();
+      return `<span class="profile-badge ${kind}">${escapeHtml(title)}</span>`;
+    }).join("");
+    return badges.length || roleBadges
+      ? `<div class="profile-badges">${roleBadges}${badges.map(item => `<span class="profile-badge">${escapeHtml(item)}</span>`).join("")}</div>`
       : "";
+  }
+
+  function roleManagerButtonHtml(viewer) {
+    return viewer && viewer.canManageRoles
+      ? `<button class="btn secondary" onclick="showRoleManager()">Роли</button>`
+      : "";
+  }
+
+  function roleRowHtml(item) {
+    return `<div class="role-row">
+      <span>
+        <b>${escapeHtml(item.label || "Роль")}</b><br>
+        <span class="muted">${escapeHtml(item.full_name || String(item.user_id))}${item.username ? ` · @${escapeHtml(item.username)}` : ""} · ID ${Number(item.user_id)}</span>
+      </span>
+      <button class="btn secondary" style="margin:0" onclick="clearProfileRole('${Number(item.user_id)}')">Снять</button>
+    </div>`;
+  }
+
+  async function showRoleManager() {
+    setScreenHeader("profile");
+    content.innerHTML = `<section class="panel muted">Загружаю роли...</section>`;
+    try {
+      const data = await api("/miniapp/profile/roles");
+      const rows = (data.items || []).map(roleRowHtml).join("");
+      content.innerHTML = `<section class="panel">
+        <h2>Роли Mini App</h2>
+        <p class="muted">Доступно только владельцу. Укажи ID или @username и текст плашки до 16 символов.</p>
+        <div class="role-manager-form">
+          <input id="roleTarget" placeholder="ID или @username">
+          <input id="roleLabel" placeholder="Например: Админ, Модер, Технарь" maxlength="16">
+          <button class="btn" onclick="setProfileRole()">Выдать роль</button>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>Выданные роли</h2>
+        ${rows ? `<div class="role-list">${rows}</div>` : `<p class="muted">Кастомных ролей пока нет.</p>`}
+      </section>
+      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showProfile()">Назад к профилю</button></section>`;
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function setProfileRole() {
+    const target = document.getElementById("roleTarget")?.value || "";
+    const label = document.getElementById("roleLabel")?.value || "";
+    if (!target.trim() || !label.trim()) {
+      alert("Укажи пользователя и роль.");
+      return;
+    }
+    try {
+      const result = await api("/miniapp/profile/roles", {
+        method: "POST",
+        body: JSON.stringify({ target, label })
+      });
+      showNotice(`Роль выдана: ${result.target ? result.target.fullName : target}`);
+      showRoleManager();
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
+  async function clearProfileRole(target) {
+    if (!confirm("Снять кастомную роль с пользователя?")) return;
+    try {
+      await api("/miniapp/profile/roles/clear", {
+        method: "POST",
+        body: JSON.stringify({ target: String(target) })
+      });
+      showNotice("Роль снята.");
+      showRoleManager();
+    } catch (error) {
+      alert(error.message);
+    }
   }
 
   function friendRowHtml(friend) {
@@ -1625,6 +1732,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <div class="profile-actions">
         <button class="btn secondary" onclick="showFriendsInfo()">${friends.length ? `Друзья: ${friends.length}` : "Друзья"}</button>
         ${isSelf ? `<button class="btn secondary" onclick="showBag()">Сумка</button>` : `<button class="btn secondary" onclick="showProfile()">Мой профиль</button>`}
+        ${roleManagerButtonHtml(viewer)}
       </div>
       ${isSelf ? themeSwitcherHtml() : ""}
     </section>

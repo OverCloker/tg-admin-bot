@@ -61,6 +61,15 @@ class ShopPurchase(BaseModel):
     item_key: str = Field(min_length=1, max_length=64)
 
 
+class ProfileRoleSet(BaseModel):
+    target: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=16)
+
+
+class ProfileRoleClear(BaseModel):
+    target: str = Field(min_length=1, max_length=64)
+
+
 class ShopGiftSend(BaseModel):
     item_key: str = Field(min_length=1, max_length=64)
     target_user_id: int = Field(gt=0)
@@ -475,6 +484,90 @@ def _display_name(db: Database, game: Any, user_id: int, username: str | None, f
     tag = db.get_dig_player_tag(user_id)
     tag_suffix = f" «{tag}»" if tag else ""
     return f"{name}{tag_suffix}{game.dig_title_suffix(items)}"
+
+
+MINIAPP_MODERATOR_ROLE_TITLES = {
+    "assistant": "Помощник модератора",
+    "moderator": "Модератор",
+    "senior": "Старший модератор",
+}
+MINIAPP_MODERATOR_ROLE_RANKS = {"assistant": 1, "moderator": 2, "senior": 3}
+
+
+def _miniapp_owner_id() -> int | None:
+    return load_config().owner_id
+
+
+def _miniapp_can_manage_roles(user_id: int) -> bool:
+    owner_id = _miniapp_owner_id()
+    return owner_id is not None and int(user_id) == int(owner_id)
+
+
+def _normalize_profile_role_label(label: str) -> str:
+    normalized = " ".join(label.strip().split())
+    if not normalized:
+        raise HTTPException(400, "Укажи текст роли.")
+    if len(normalized) > 16:
+        raise HTTPException(400, "Роль должна быть до 16 символов.")
+    return normalized
+
+
+def _resolve_profile_role_target(db: Database, target: str) -> tuple[int, str, str | None]:
+    value = target.strip()
+    if not value:
+        raise HTTPException(400, "Укажи ID или @username пользователя.")
+    if value.startswith("@"):
+        user = db.get_known_user_by_username(value[1:])
+        if not user:
+            raise HTTPException(404, "Я ещё не видел пользователя с таким @username.")
+        return user.user_id, user.full_name, user.username
+    if value.isdigit():
+        user_id = int(value)
+        known = db.get_known_user(user_id)
+        player = db.get_dig_player(0, user_id)
+        if player:
+            return user_id, player.full_name, player.username
+        if known:
+            return user_id, known.full_name, known.username
+        return user_id, str(user_id), None
+    raise HTTPException(400, "Цель должна быть ID или @username.")
+
+
+def _miniapp_profile_roles(db: Database, user_id: int) -> list[dict[str, Any]]:
+    roles: list[dict[str, Any]] = []
+    owner_id = _miniapp_owner_id()
+    if owner_id is not None and int(user_id) == int(owner_id):
+        roles.append({"key": "owner", "title": "Админ", "kind": "owner", "emoji": "🛡️"})
+
+    custom = db.get_miniapp_profile_role(user_id)
+    if custom:
+        roles.append(
+            {
+                "key": "custom",
+                "title": custom.label,
+                "kind": "custom",
+                "emoji": custom.emoji or "🏷️",
+                "color": custom.color or "",
+            }
+        )
+
+    moderator_roles = db.list_user_moderator_roles(user_id)
+    if moderator_roles:
+        best = max(
+            moderator_roles,
+            key=lambda row: MINIAPP_MODERATOR_ROLE_RANKS.get(str(row["role"]), 0),
+        )
+        role_key = str(best["role"])
+        roles.append(
+            {
+                "key": f"moderation:{role_key}",
+                "title": MINIAPP_MODERATOR_ROLE_TITLES.get(role_key, "Модерация"),
+                "kind": "moderation",
+                "emoji": "⚖️",
+                "chatCount": len({int(row["chat_id"]) for row in moderator_roles}),
+            }
+        )
+    return roles
 
 
 def _telegram_user(init_data: str | None) -> dict[str, Any]:
@@ -1614,8 +1707,10 @@ async def miniapp_profile(
     try:
         db.init()
         relation = _miniapp_social_target(db, viewer_id, target_id)
-        if relation is None:
+        if relation is None and not _miniapp_can_manage_roles(viewer_id):
             raise HTTPException(403, "Этот профиль доступен только вам, друзьям или паре.")
+        if relation is None:
+            relation = {"relation": "owner", "relationTitle": "Владелец"}
         target = db.get_dig_player(0, target_id)
         known_target = db.get_known_user(target_id)
         if not target and target_id != viewer_id and not known_target:
@@ -1631,6 +1726,7 @@ async def miniapp_profile(
             target.full_name if target else (known_target.full_name if known_target else user["full_name"]),
             photo_url=photo_url,
         )
+        profile["roles"] = _miniapp_profile_roles(db, target_id)
         target_people = _miniapp_social_people(db, target_id)
         if target_id == viewer_id:
             people = target_people
@@ -1638,7 +1734,12 @@ async def miniapp_profile(
             accessible_ids = {viewer_id, *(int(item["id"]) for item in _miniapp_social_people(db, viewer_id))}
             people = [item for item in target_people if int(item["id"]) in accessible_ids]
         partner = next((item for item in people if item["relation"] == "partner"), None)
-        profile["viewer"] = {"id": viewer_id, "isSelf": target_id == viewer_id}
+        profile["viewer"] = {
+            "id": viewer_id,
+            "isSelf": target_id == viewer_id,
+            "isOwner": _miniapp_can_manage_roles(viewer_id),
+            "canManageRoles": _miniapp_can_manage_roles(viewer_id),
+        }
         profile["social"] = {
             "relation": relation.get("relation", "friend"),
             "relationTitle": relation.get("relationTitle", "Друг"),
@@ -1649,6 +1750,66 @@ async def miniapp_profile(
         return profile
     finally:
         premium.close()
+        db.close()
+
+
+@router.get("/miniapp/profile/roles")
+def miniapp_profile_roles(
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    if not _miniapp_can_manage_roles(user["id"]):
+        raise HTTPException(403, "Управление ролями доступно только владельцу.")
+    db = _db()
+    try:
+        return {"items": db.list_miniapp_profile_roles()}
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/roles")
+def miniapp_profile_role_set(
+    payload: ProfileRoleSet,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    if not _miniapp_can_manage_roles(user["id"]):
+        raise HTTPException(403, "Управление ролями доступно только владельцу.")
+    label = _normalize_profile_role_label(payload.label)
+    db = _db()
+    try:
+        target_id, full_name, username = _resolve_profile_role_target(db, payload.target)
+        db.set_miniapp_profile_role(target_id, label, user["id"])
+        role = db.get_miniapp_profile_role(target_id)
+        return {
+            "ok": True,
+            "target": {"id": target_id, "fullName": full_name, "username": username or ""},
+            "role": dict(role.__dict__) if role else None,
+            "roles": db.list_miniapp_profile_roles(),
+        }
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/roles/clear")
+def miniapp_profile_role_clear(
+    payload: ProfileRoleClear,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    if not _miniapp_can_manage_roles(user["id"]):
+        raise HTTPException(403, "Управление ролями доступно только владельцу.")
+    db = _db()
+    try:
+        target_id, full_name, username = _resolve_profile_role_target(db, payload.target)
+        removed = db.clear_miniapp_profile_role(target_id)
+        return {
+            "ok": True,
+            "removed": removed,
+            "target": {"id": target_id, "fullName": full_name, "username": username or ""},
+            "roles": db.list_miniapp_profile_roles(),
+        }
+    finally:
         db.close()
 
 

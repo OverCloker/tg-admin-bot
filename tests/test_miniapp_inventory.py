@@ -1,7 +1,7 @@
 from app.db import Database
 from app import bot as game
 from app import miniapp
-from app.miniapp import _gift_recipients, _gift_target_kind, _miniapp_social_people, _miniapp_social_target, _shop_catalog
+from app.miniapp import _gift_recipients, _gift_target_kind, _miniapp_profile_roles, _miniapp_social_people, _miniapp_social_target, _shop_catalog
 from app.premium import PremiumService
 from app.user_profile import build_user_profile
 
@@ -213,6 +213,46 @@ def test_dig_player_tag_can_be_saved(tmp_path) -> None:
         assert db.get_dig_player_tag(42) == "Deep Baron"
     finally:
         db.close()
+
+
+def test_miniapp_profile_roles_include_owner_custom_and_moderation(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.upsert_chat(-100, "Чат", "supergroup", None)
+    db.upsert_seen_user(-100, 42, "owner", "Владелец", False)
+    db.set_miniapp_profile_role(42, "Технарь", 42)
+    db.set_chat_moderator_role(-100, 42, "senior", 42)
+
+    try:
+        roles = _miniapp_profile_roles(db, 42)
+    finally:
+        db.close()
+
+    assert [role["title"] for role in roles] == ["Админ", "Технарь", "Старший модератор"]
+    assert roles[0]["kind"] == "owner"
+    assert roles[1]["kind"] == "custom"
+    assert roles[2]["chatCount"] == 1
+
+
+def test_miniapp_profile_role_can_be_saved_and_resolved_by_username(tmp_path) -> None:
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.upsert_chat(-100, "Чат", "supergroup", None)
+    db.upsert_seen_user(-100, 7, "helper", "Помощник", False)
+
+    try:
+        user = db.get_known_user_by_username("@helper")
+        assert user and user.user_id == 7
+        db.set_miniapp_profile_role(user.user_id, "Модерация", 42)
+        role = db.get_miniapp_profile_role(7)
+        roles = db.list_miniapp_profile_roles()
+    finally:
+        db.close()
+
+    assert role and role.label == "Модерация"
+    assert roles[0]["username"] == "helper"
+    assert roles[0]["full_name"] == "Помощник"
 
 
 def test_miniapp_does_not_rebind_bot_global_database() -> None:

@@ -203,6 +203,9 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function showWeather()' in MINI_APP_HTML
     assert 'function showRadio()' in MINI_APP_HTML
     assert 'function showFriendsInfo()' in MINI_APP_HTML
+    assert 'function showRoleManager()' in MINI_APP_HTML
+    assert 'viewer.canManageRoles' in MINI_APP_HTML
+    assert '"/miniapp/profile/roles"' in MINI_APP_HTML
     assert 'function profileAvatarHtml(user, cosmetics = {}, small = false)' in MINI_APP_HTML
     assert 'function friendRowHtml(friend)' in MINI_APP_HTML
     assert ".profile-avatar img { position: relative; z-index: 2;" in MINI_APP_HTML

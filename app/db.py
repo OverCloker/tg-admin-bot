@@ -57,6 +57,16 @@ class SeenUser:
 
 
 @dataclass(frozen=True)
+class MiniAppProfileRole:
+    user_id: int
+    label: str
+    emoji: str | None
+    color: str | None
+    granted_by: int | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class SocialGiftRecipient:
     user_id: int
     username: str | None
@@ -935,6 +945,15 @@ class Database:
             create table if not exists dig_player_tags (
                 user_id integer primary key,
                 tag text not null,
+                updated_at text not null
+            );
+
+            create table if not exists miniapp_profile_roles (
+                user_id integer primary key,
+                label text not null,
+                emoji text,
+                color text,
+                granted_by integer,
                 updated_at text not null
             );
 
@@ -4311,6 +4330,107 @@ class Database:
             (int(user_id), tag, utc_now()),
         )
         self._conn.commit()
+
+    def get_miniapp_profile_role(self, user_id: int) -> MiniAppProfileRole | None:
+        row = self._conn.execute(
+            """
+            select user_id, label, emoji, color, granted_by, updated_at
+            from miniapp_profile_roles
+            where user_id = ?
+            """,
+            (int(user_id),),
+        ).fetchone()
+        return MiniAppProfileRole(**dict(row)) if row else None
+
+    def set_miniapp_profile_role(
+        self,
+        user_id: int,
+        label: str,
+        granted_by: int | None,
+        emoji: str | None = None,
+        color: str | None = None,
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into miniapp_profile_roles (user_id, label, emoji, color, granted_by, updated_at)
+            values (?, ?, ?, ?, ?, ?)
+            on conflict(user_id) do update set
+                label = excluded.label,
+                emoji = excluded.emoji,
+                color = excluded.color,
+                granted_by = excluded.granted_by,
+                updated_at = excluded.updated_at
+            """,
+            (int(user_id), label.strip()[:16], emoji, color, granted_by, utc_now()),
+        )
+        self._conn.commit()
+
+    def clear_miniapp_profile_role(self, user_id: int) -> bool:
+        cur = self._conn.execute(
+            "delete from miniapp_profile_roles where user_id = ?",
+            (int(user_id),),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def list_miniapp_profile_roles(self) -> list[dict]:
+        rows = self._conn.execute(
+            """
+            select
+                r.user_id,
+                r.label,
+                r.emoji,
+                r.color,
+                r.granted_by,
+                r.updated_at,
+                coalesce(u.username, '') as username,
+                coalesce(u.full_name, cast(r.user_id as text)) as full_name
+            from miniapp_profile_roles r
+            left join (
+                select user_id, max(nullif(username, '')) as username, max(nullif(full_name, '')) as full_name
+                from seen_users
+                where coalesce(is_bot, 0) = 0
+                group by user_id
+            ) u on u.user_id = r.user_id
+            order by r.updated_at desc
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_known_user_by_username(self, username: str) -> SeenUser | None:
+        normalized = normalize_username(username)
+        row = self._conn.execute(
+            """
+            select
+                u.chat_id,
+                u.user_id,
+                u.username,
+                coalesce(nullif(u.full_name, ''), 'Игрок') as full_name,
+                u.is_bot,
+                u.updated_at
+            from seen_users u
+            where u.username = ? and coalesce(u.is_bot, 0) = 0
+            order by u.updated_at desc
+            limit 1
+            """,
+            (normalized,),
+        ).fetchone()
+        return SeenUser(**dict(row)) if row else None
+
+    def list_user_moderator_roles(self, user_id: int, now: str | None = None) -> list[dict]:
+        check_at = now or utc_now()
+        rows = self._conn.execute(
+            """
+            select r.chat_id, r.user_id, r.role, r.granted_at, r.expires_at, coalesce(c.title, cast(r.chat_id as text)) as chat_title
+            from chat_moderator_roles r
+            left join chats c on c.chat_id = r.chat_id
+            where r.user_id = ? and r.active = 1
+              and (r.expires_at is null or r.expires_at > ?)
+            order by r.granted_at desc
+            """,
+            (int(user_id), check_at),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_dig_item_quantity(self, chat_id: int, user_id: int, item_key: str) -> int:
         chat_id = DIG_GLOBAL_CHAT_ID
