@@ -1643,12 +1643,20 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   function roleRowHtml(item, roleLabel = "") {
+    const sourceTitle = item.source === "owner"
+      ? "\u0432\u043b\u0430\u0434\u0435\u043b\u0435\u0446"
+      : item.source === "moderation"
+        ? `\u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044f${item.chatCount ? ` ? \u0447\u0430\u0442\u043e\u0432: ${Number(item.chatCount)}` : ""}`
+        : "Mini App";
+    const removeButton = item.canRemove === false
+      ? `<span class="muted">\u043d\u0435\u043b\u044c\u0437\u044f \u0443\u0434\u0430\u043b\u0438\u0442\u044c</span>`
+      : `<button class="btn secondary" style="margin:0" onclick="clearProfileRole('${Number(item.user_id)}')">\u0423\u0434\u0430\u043b\u0438\u0442\u044c</button>`;
     return `<div class="role-row">
       <span>
         <b>${escapeHtml(item.username ? `@${item.username}` : (item.full_name || String(item.user_id)))}</b><br>
-        <span class="muted">${escapeHtml(item.full_name || String(item.user_id))} ? ID ${Number(item.user_id)}</span>
+        <span class="muted">${escapeHtml(item.full_name || String(item.user_id))} · ID ${Number(item.user_id)} · ${escapeHtml(sourceTitle)}</span>
       </span>
-      <button class="btn secondary" style="margin:0" onclick="clearProfileRole('${Number(item.user_id)}')">Удалить</button>
+      ${removeButton}
     </div>`;
   }
 

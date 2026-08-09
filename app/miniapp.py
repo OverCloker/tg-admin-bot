@@ -527,10 +527,67 @@ def _miniapp_can_manage_roles(user_id: int) -> bool:
 
 
 def _miniapp_profile_role_groups(db: Database) -> list[dict[str, Any]]:
-    rows = db.list_miniapp_profile_roles_by_label(list(MINIAPP_ASSIGNABLE_ROLE_LABELS))
+    role_by_key = {str(role["key"]): role for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES}
     by_label: dict[str, list[dict[str, Any]]] = {str(role["label"]): [] for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES}
-    for row in rows:
-        by_label.setdefault(str(row["label"]), []).append(row)
+    seen_by_label: dict[str, set[int]] = {str(role["label"]): set() for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES}
+
+    def add(label: str, item: dict[str, Any]) -> None:
+        user_id = int(item["user_id"])
+        if user_id in seen_by_label.setdefault(label, set()):
+            return
+        seen_by_label[label].add(user_id)
+        by_label.setdefault(label, []).append(item)
+
+    owner_id = _miniapp_owner_id()
+    admin_label = str(role_by_key["admin"]["label"])
+    if owner_id is not None:
+        known = db.get_known_user(owner_id)
+        player = db.get_dig_player(0, owner_id)
+        add(
+            admin_label,
+            {
+                "user_id": int(owner_id),
+                "label": admin_label,
+                "username": (player.username if player else None) or (known.username if known else "") or "",
+                "full_name": (player.full_name if player else None) or (known.full_name if known else str(owner_id)),
+                "source": "owner",
+                "canRemove": False,
+                "chatCount": 0,
+            },
+        )
+
+    moderator_label_by_role = {
+        "senior": str(role_by_key["senior"]["label"]),
+        "moderator": str(role_by_key["moderator"]["label"]),
+        "assistant": str(role_by_key["assistant"]["label"]),
+    }
+    moderators_by_role_user: dict[tuple[str, int], dict[str, Any]] = {}
+    for row in db.list_all_chat_moderators():
+        role_key = str(row.get("role") or "")
+        label = moderator_label_by_role.get(role_key)
+        if not label:
+            continue
+        key = (role_key, int(row["user_id"]))
+        current = moderators_by_role_user.setdefault(
+            key,
+            {
+                **row,
+                "label": label,
+                "source": "moderation",
+                "canRemove": True,
+                "chatCount": 0,
+            },
+        )
+        current["chatCount"] = int(current.get("chatCount") or 0) + 1
+    for item in moderators_by_role_user.values():
+        add(str(item["label"]), item)
+
+    for row in db.list_miniapp_profile_roles_by_label(list(MINIAPP_ASSIGNABLE_ROLE_LABELS)):
+        row["source"] = "miniapp"
+        row["canRemove"] = True
+        row.setdefault("chatCount", 0)
+        add(str(row["label"]), row)
+
     return [
         {
             "key": str(role["key"]),
@@ -1901,10 +1958,14 @@ def miniapp_profile_role_clear(
     db = _db()
     try:
         target_id, full_name, username = _resolve_profile_role_target(db, payload.target)
-        removed = db.clear_miniapp_profile_role(target_id)
+        if _miniapp_can_manage_roles(target_id):
+            raise HTTPException(400, "Роль владельца нельзя удалить из Mini App.")
+        removed_custom = db.clear_miniapp_profile_role(target_id)
+        removed_moderator_count = db.clear_all_chat_moderator_roles(target_id)
         return {
             "ok": True,
-            "removed": removed,
+            "removed": bool(removed_custom or removed_moderator_count),
+            "removedModeratorRoles": removed_moderator_count,
             "target": {"id": target_id, "fullName": full_name, "username": username or ""},
             "roles": db.list_miniapp_profile_roles_by_label(list(MINIAPP_ASSIGNABLE_ROLE_LABELS)),
             "groups": _miniapp_profile_role_groups(db),

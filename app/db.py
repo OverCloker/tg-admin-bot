@@ -1906,6 +1906,28 @@ class Database:
         self._conn.commit()
         return cur.rowcount > 0
 
+    def clear_all_chat_moderator_roles(self, user_id: int, role: str | None = None) -> int:
+        if role:
+            cur = self._conn.execute(
+                """
+                update chat_moderator_roles
+                set active = 0
+                where user_id = ? and role = ? and active = 1
+                """,
+                (int(user_id), role),
+            )
+        else:
+            cur = self._conn.execute(
+                """
+                update chat_moderator_roles
+                set active = 0
+                where user_id = ? and active = 1
+                """,
+                (int(user_id),),
+            )
+        self._conn.commit()
+        return int(cur.rowcount)
+
     def get_chat_moderator_role(self, chat_id: int, user_id: int, now: str | None = None) -> dict | None:
         check_at = now or utc_now()
         row = self._conn.execute(
@@ -1945,6 +1967,38 @@ class Database:
               and (r.expires_at is null or r.expires_at > ?)
             """,
             (chat_id, chat_id, check_at),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_all_chat_moderators(self, now: str | None = None) -> list[dict]:
+        check_at = now or utc_now()
+        rows = self._conn.execute(
+            """
+            select
+                r.chat_id,
+                r.user_id,
+                r.role,
+                r.granted_by,
+                r.granted_at,
+                r.expires_at,
+                coalesce(c.title, cast(r.chat_id as text)) as chat_title,
+                coalesce(u.username, '') as username,
+                coalesce(u.full_name, cast(r.user_id as text)) as full_name
+            from chat_moderator_roles r
+            left join chats c on c.chat_id = r.chat_id
+            left join (
+                select user_id, max(nullif(username, '')) as username, max(nullif(full_name, '')) as full_name
+                from seen_users
+                where coalesce(is_bot, 0) = 0
+                group by user_id
+            ) u on u.user_id = r.user_id
+            where r.active = 1
+              and (r.expires_at is null or r.expires_at > ?)
+            order by
+                case r.role when 'senior' then 1 when 'moderator' then 2 when 'assistant' then 3 else 9 end,
+                lower(coalesce(u.full_name, cast(r.user_id as text)))
+            """,
+            (check_at,),
         ).fetchall()
         return [dict(row) for row in rows]
 

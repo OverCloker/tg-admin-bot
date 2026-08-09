@@ -43,6 +43,17 @@ def test_moderator_role_expires(tmp_path) -> None:
     assert db.get_chat_moderator_role(-100, 2) is None
 
 
+def test_clear_all_chat_moderator_roles(tmp_path) -> None:
+    db = _db(tmp_path)
+    db.upsert_chat(-200, "Other chat", "supergroup", None)
+    db.set_chat_moderator_role(-100, 2, "assistant", 1)
+    db.set_chat_moderator_role(-200, 2, "moderator", 1)
+
+    assert len(db.list_user_moderator_roles(2)) == 2
+    assert db.clear_all_chat_moderator_roles(2) == 2
+    assert db.list_user_moderator_roles(2) == []
+
+
 def test_moderator_vote_replaces_previous_choice(tmp_path) -> None:
     db = _db(tmp_path)
     db.set_chat_moderator_role(-100, 2, "assistant", 1)
