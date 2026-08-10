@@ -545,6 +545,7 @@ MINIAPP_ASSIGNABLE_PROFILE_ROLES = (
     {"key": "assistant", "label": "Помощник модера", "emoji": "🤝"},
 )
 MINIAPP_ASSIGNABLE_ROLE_LABELS = {str(role["label"]) for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES}
+MINIAPP_ADMIN_PROFILE_LABELS = {str(MINIAPP_ASSIGNABLE_PROFILE_ROLES[0]["label"]), "\u0410\u0434\u043c\u0438\u043d"}
 
 
 def _miniapp_owner_id() -> int | None:
@@ -560,7 +561,7 @@ def _miniapp_is_app_admin(db: Database, user_id: int) -> bool:
     if _miniapp_can_manage_roles(user_id):
         return True
     role = db.get_miniapp_profile_role(user_id)
-    return bool(role and role.label == "Админ")
+    return bool(role and role.label in MINIAPP_ADMIN_PROFILE_LABELS)
 
 
 def _miniapp_can_view_admin_panel(db: Database, user_id: int) -> bool:
@@ -647,7 +648,7 @@ def _miniapp_can_view_mine_admin(db: Database, user_id: int) -> bool:
 
 
 def _miniapp_can_manage_mine_admin(db: Database, user_id: int) -> bool:
-    return _miniapp_is_app_admin(db, user_id)
+    return _miniapp_can_manage_roles(user_id)
 
 
 def _miniapp_can_manage_triggers(db: Database, user_id: int) -> bool:

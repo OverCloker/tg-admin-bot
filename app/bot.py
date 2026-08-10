@@ -138,6 +138,8 @@ MODERATOR_ROLE_SPECS = {
     "moderator": {"title": "Модератор", "short": "Модератор", "max_mute_minutes": 30, "rank": 2},
     "senior": {"title": "Старший модератор", "short": "Старший", "max_mute_minutes": 60, "rank": 3},
 }
+MINIAPP_ADMIN_PROFILE_LABEL = "\u0410\u0434\u043c\u0438\u043d"
+MINIAPP_ADMIN_PROFILE_LABELS = {MINIAPP_ADMIN_PROFILE_LABEL, "РђРґРјРёРЅ"}
 MODERATOR_ASSIGN_COMMANDS = {
     "+админ": "app_admin",
     "+помощник": "assistant",
@@ -1239,6 +1241,13 @@ def moderator_can_unmute(actor_role: str | None, actor_id: int, active_mute: dic
     if not active_mute:
         return False
     return int(active_mute["moderator_id"]) == actor_id
+
+
+def is_miniapp_admin_user(user_id: int | None) -> bool:
+    if user_id is None:
+        return False
+    role = db.get_miniapp_profile_role(int(user_id))
+    return bool(role and role.label in MINIAPP_ADMIN_PROFILE_LABELS)
 
 
 def parse_moderator_duration(payload: str) -> tuple[str, str | None]:
@@ -3802,18 +3811,18 @@ async def resolve_command_target(message: Message, username: str | None) -> tupl
 
 
 async def actor_moderation_role(bot: Bot, chat_id: int, user_id: int) -> str | None:
-    if is_bot_admin(user_id) or await is_chat_admin(bot, chat_id, user_id):
+    if is_bot_admin(user_id) or is_miniapp_admin_user(user_id) or await is_chat_admin(bot, chat_id, user_id):
         return "admin"
     row = db.get_chat_moderator_role(chat_id, user_id)
     return str(row["role"]) if row else None
 
 
 async def actor_can_manage_moderators(bot: Bot, chat_id: int, user_id: int) -> bool:
-    return is_bot_admin(user_id) or await is_chat_admin(bot, chat_id, user_id)
+    return is_bot_admin(user_id) or is_miniapp_admin_user(user_id) or await is_chat_admin(bot, chat_id, user_id)
 
 
 async def manageable_moderation_chats(bot: Bot, user_id: int) -> list[RegisteredChat]:
-    if is_bot_admin(user_id):
+    if is_bot_admin(user_id) or is_miniapp_admin_user(user_id):
         return db.list_chats()
     roles = await user_admin_roles(bot, user_id)
     return [chat for chat, _status in roles]
@@ -11258,8 +11267,13 @@ async def quiet_user(message: Message) -> None:
     actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
     if actor_role is None:
         return
-    if actor_role == "admin" and not is_bot_admin(message.from_user.id) and not await has_chat_admin_permission(
-        message.bot, message.chat.id, message.from_user.id, "can_restrict_members"
+    if (
+        actor_role == "admin"
+        and not is_bot_admin(message.from_user.id)
+        and not is_miniapp_admin_user(message.from_user.id)
+        and not await has_chat_admin_permission(
+            message.bot, message.chat.id, message.from_user.id, "can_restrict_members"
+        )
     ):
         return
 
@@ -11362,8 +11376,13 @@ async def dictionary_hit_user(message: Message) -> None:
     actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
     if actor_role is None:
         return
-    if actor_role == "admin" and not is_bot_admin(message.from_user.id) and not await has_chat_admin_permission(
-        message.bot, message.chat.id, message.from_user.id, "can_restrict_members"
+    if (
+        actor_role == "admin"
+        and not is_bot_admin(message.from_user.id)
+        and not is_miniapp_admin_user(message.from_user.id)
+        and not await has_chat_admin_permission(
+            message.bot, message.chat.id, message.from_user.id, "can_restrict_members"
+        )
     ):
         return
 
@@ -11471,8 +11490,13 @@ async def unquiet_user(message: Message) -> None:
     actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
     if actor_role is None:
         return
-    if actor_role == "admin" and not is_bot_admin(message.from_user.id) and not await has_chat_admin_permission(
-        message.bot, message.chat.id, message.from_user.id, "can_restrict_members"
+    if (
+        actor_role == "admin"
+        and not is_bot_admin(message.from_user.id)
+        and not is_miniapp_admin_user(message.from_user.id)
+        and not await has_chat_admin_permission(
+            message.bot, message.chat.id, message.from_user.id, "can_restrict_members"
+        )
     ):
         return
 

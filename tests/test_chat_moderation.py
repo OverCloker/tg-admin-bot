@@ -4,10 +4,13 @@ from app.bot import (
     DICTIONARY_HIT_MUTE_MINUTES,
     DICTIONARY_HIT_PHOTO_PATH,
     MODERATOR_ASSIGN_COMMANDS,
+    MINIAPP_ADMIN_PROFILE_LABEL,
+    is_miniapp_admin_user,
     moderator_can_delete_messages,
     moderator_can_stop_chat,
     moderator_can_unmute,
     moderator_max_mute_minutes,
+    moderator_role_rank,
     parse_chat_stop_payload,
     parse_dictionary_hit_payload,
     parse_duration_seconds_token,
@@ -72,6 +75,17 @@ def test_moderator_vote_replaces_previous_choice(tmp_path) -> None:
     assert rating[3] == 1
 
 
+def test_miniapp_admin_profile_role_grants_chat_admin_power(tmp_path, monkeypatch) -> None:
+    from app import bot as bot_module
+
+    db = _db(tmp_path)
+    db.set_miniapp_profile_role(2, MINIAPP_ADMIN_PROFILE_LABEL, 1)
+    monkeypatch.setattr(bot_module, "db", db, raising=False)
+
+    assert is_miniapp_admin_user(2) is True
+    assert is_miniapp_admin_user(3) is False
+
+
 def test_moderator_mute_count_uses_window(tmp_path) -> None:
     db = _db(tmp_path)
     db.add_moderator_action(-100, 2, 4, "mute", 10, "one")
@@ -113,12 +127,17 @@ def test_moderator_payloads_and_limits() -> None:
     assert moderator_can_delete_messages("assistant") is False
     assert moderator_can_delete_messages("moderator") is True
     assert moderator_can_delete_messages("senior") is True
+    assert moderator_can_delete_messages("admin") is True
     assert moderator_can_stop_chat("assistant", 60) is False
     assert moderator_can_stop_chat("moderator", 600) is True
     assert moderator_can_stop_chat("moderator", 601) is False
     assert moderator_can_stop_chat("moderator", None) is False
     assert moderator_can_stop_chat("senior", 1800) is True
     assert moderator_can_stop_chat("senior", 1801) is False
+    assert moderator_can_stop_chat("admin", None) is True
+    assert moderator_can_stop_chat("admin", 24 * 60 * 60) is True
+    assert moderator_role_rank("admin") > moderator_role_rank("senior")
+    assert moderator_can_unmute("admin", 99, {"moderator_id": 2}) is True
 
 
 def test_chat_lock_storage_and_expiration(tmp_path) -> None:

@@ -265,7 +265,8 @@ def test_miniapp_mine_admin_access_is_owner_or_moderator(tmp_path, monkeypatch) 
         assert _miniapp_can_view_mine_admin(db, 7) is True
         assert _miniapp_can_view_mine_admin(db, 8) is True
         assert _miniapp_can_view_admin_panel(db, 8) is True
-        assert _miniapp_can_manage_mine_admin(db, 8) is True
+        assert _miniapp_can_manage_mine_admin(db, 42) is True
+        assert _miniapp_can_manage_mine_admin(db, 8) is False
         assert _miniapp_can_manage_mine_admin(db, 7) is False
         assert _miniapp_can_view_mine_admin(db, 9) is False
     finally:
