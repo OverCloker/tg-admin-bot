@@ -1801,7 +1801,7 @@ MINI_APP_HTML = r"""<!doctype html>
     </div>`).join("");
     return `<section class="panel">
       <h2>${escapeHtml(title)}</h2>
-      ${items || `<p class="muted">Пока пусто.</p>`}
+      <div class="role-list">${items || `<p class="muted">Пока пусто.</p>`}</div>
     </section>`;
   }
 
