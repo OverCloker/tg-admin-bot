@@ -292,6 +292,10 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
 def test_miniapp_has_interface_themes() -> None:
     assert 'body[data-theme="material"]' in MINI_APP_HTML
     assert 'body[data-theme="glass"]' in MINI_APP_HTML
+    assert "--app-bg-layer:" in MINI_APP_HTML
+    assert "body::before" in MINI_APP_HTML
+    assert "background-position: center top;" in MINI_APP_HTML
+    assert "background-attachment: fixed;" not in MINI_APP_HTML
     assert "Material You" in MINI_APP_HTML
     assert "Liquid Glass" in MINI_APP_HTML
     assert 'id="themeApple" value="glass"' in MINI_APP_HTML

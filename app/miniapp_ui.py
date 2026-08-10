@@ -29,6 +29,7 @@ MINI_APP_HTML = r"""<!doctype html>
       --input-placeholder: #9fb0c0;
       --panel-shadow: 0 14px 38px #00000024;
       --surface-blur: none;
+      --app-bg-layer: var(--bg);
     }
     body[data-theme="material"] {
       --bg: #101820;
@@ -46,7 +47,7 @@ MINI_APP_HTML = r"""<!doctype html>
       --input-bg: #15232e;
       --input-placeholder: #aebdcc;
       --panel-shadow: 0 10px 28px #00000026;
-      background:
+      --app-bg-layer:
         radial-gradient(circle at 18% 0%, #3e6f9180, transparent 32%),
         radial-gradient(circle at 88% 12%, #5f6fa555, transparent 30%),
         linear-gradient(180deg, #12202b 0%, #0f1720 100%),
@@ -73,7 +74,7 @@ MINI_APP_HTML = r"""<!doctype html>
         inset 0 1px 0 #ffffff70,
         inset 0 -1px 0 #ffffff18;
       --surface-blur: blur(28px) saturate(1.75);
-      background:
+      --app-bg-layer:
         radial-gradient(circle at 16% -6%, #ffffff6f, transparent 20%),
         radial-gradient(circle at 80% 3%, #9fe9ff55, transparent 24%),
         radial-gradient(circle at 18% 72%, #8f7dff38, transparent 28%),
@@ -84,9 +85,21 @@ MINI_APP_HTML = r"""<!doctype html>
     * { box-sizing: border-box; }
     html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
     body {
+      position: relative;
+      isolation: isolate;
       font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
       padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
-      background-attachment: fixed;
+      background: var(--bg);
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background: var(--app-bg-layer);
+      background-size: cover;
+      background-position: center top;
     }
     button { font: inherit; }
     main { width: min(100%, 560px); margin: 0 auto; }
