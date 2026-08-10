@@ -209,6 +209,11 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function triggerRowHtml(item)' in MINI_APP_HTML
     assert 'function saveMiniAppTrigger(chatId)' in MINI_APP_HTML
     assert 'function deleteMiniAppTrigger(chatId, trigger)' in MINI_APP_HTML
+    assert 'function enforceMiniAppTheme()' in MINI_APP_HTML
+    assert 'telegram.onEvent("themeChanged", enforceMiniAppTheme)' in MINI_APP_HTML
+    assert 'document.documentElement.dataset.theme = safeTheme' in MINI_APP_HTML
+    assert 'new MutationObserver' in MINI_APP_HTML
+    assert 'class="admin-list-row"' in MINI_APP_HTML
     assert 'function adminPanelButtonHtml(viewer)' in MINI_APP_HTML
     assert 'viewer.canViewAdminPanel' in MINI_APP_HTML
     assert 'api("/miniapp/profile/admin")' in MINI_APP_HTML

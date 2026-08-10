@@ -382,6 +382,22 @@ MINI_APP_HTML = r"""<!doctype html>
       width:100%;
       grid-template-columns:repeat(auto-fit, minmax(94px, 1fr));
     }
+    .admin-list-row {
+      display:grid;
+      grid-template-columns:minmax(0, 1fr);
+      gap:8px;
+      align-items:center;
+      padding:9px 10px;
+      border:1px solid var(--line);
+      border-radius:var(--radius-sm);
+      background:var(--panel-2);
+    }
+    .admin-list-row b,
+    .admin-list-row span { min-width:0; overflow-wrap:break-word; word-break:normal; }
+    .admin-list-row > .utility-actions {
+      width:100%;
+      grid-template-columns:repeat(auto-fit, minmax(94px, 1fr));
+    }
     .friend-list { display: grid; gap: 8px; margin-top: 10px; }
     .friend-row {
       display: grid;
@@ -1404,14 +1420,20 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function applyMiniTheme(theme) {
     const safeTheme = Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "material";
+    document.documentElement.dataset.theme = safeTheme;
+    document.documentElement.style.colorScheme = "dark";
     document.body.dataset.theme = safeTheme;
+  }
+
+  function enforceMiniAppTheme() {
+    applyMiniTheme(currentMiniTheme());
   }
 
   function setMiniTheme(theme) {
     const settings = loadMiniSettings();
     settings.theme = Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "material";
     saveMiniSettings(settings);
-    applyMiniTheme(settings.theme);
+    enforceMiniAppTheme();
     const block = document.getElementById("themeSwitcher");
     if (block) block.outerHTML = themeSwitcherHtml();
   }
@@ -1448,7 +1470,13 @@ MINI_APP_HTML = r"""<!doctype html>
     </div>`;
   }
 
-  applyMiniTheme(currentMiniTheme());
+  enforceMiniAppTheme();
+  if (telegram && typeof telegram.onEvent === "function") {
+    telegram.onEvent("themeChanged", enforceMiniAppTheme);
+  }
+  new MutationObserver(() => {
+    if (document.body.dataset.theme !== currentMiniTheme()) enforceMiniAppTheme();
+  }).observe(document.body, { attributes: true, attributeFilter: ["data-theme", "style", "class"] });
 
   function weatherDescription(code) {
     const map = {
@@ -1742,7 +1770,7 @@ MINI_APP_HTML = r"""<!doctype html>
         : section.key === "triggers" && section.enabled
           ? `<button class="btn secondary" onclick="showTriggerManager()">Открыть триггеры</button>`
           : `<span class="muted">Скоро</span>`;
-    return `<div class="mine-admin-row">
+    return `<div class="admin-list-row">
       <span>
         <b>${escapeHtml(section.title || section.key)}</b><br>
         <span class="muted">${escapeHtml(section.description || "")}</span>
@@ -1789,7 +1817,7 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function triggerRowHtml(item) {
     const media = item.hasMedia ? ` <span class="muted">· медиа</span>` : "";
-    return `<div class="mine-admin-row">
+    return `<div class="admin-list-row">
       <span>
         <b>${escapeHtml(item.trigger)}</b>${media}<br>
         <span class="muted">${escapeHtml(item.text || "Без текста")}</span>
