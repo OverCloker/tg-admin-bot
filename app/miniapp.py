@@ -54,6 +54,8 @@ TRIGGER_MEDIA_TYPES = {
     "animation": {"image/gif", "video/mp4"},
     "audio": {"audio/mpeg", "audio/mp3", "audio/ogg", "audio/wav", "audio/webm", "audio/mp4", "audio/x-m4a"},
 }
+DYNAMITE_MISHAP_CHANCE = 20
+DYNAMITE_MISHAP_MESSAGE = "Из-за неосторожного обращения динамит взорвался в руках. Метр не пробит."
 
 
 class TicketPick(BaseModel):
@@ -2889,6 +2891,32 @@ def miniapp_interactive_tool(
                 snapshot["map_used"] = True
                 message = "Карта показала следующий ряд."
             elif tool == "dynamite":
+                if secrets.randbelow(100) < DYNAMITE_MISHAP_CHANCE:
+                    durability = max(0, int(session["durability"]) - 1)
+                    used_tools.add(tool)
+                    snapshot["used_tools"] = sorted(used_tools)
+                    _remember_repair_candidate(snapshot, tool)
+                    snapshot[f"{tool}_count"] = max(0, int(snapshot.get(f"{tool}_count", 0)) - 1)
+                    db.update_interactive_dig_session(
+                        session["id"],
+                        durability=durability,
+                        equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
+                    )
+                    if durability <= 0:
+                        from . import bot as game
+                        finished = db.get_interactive_dig_session(session["id"])
+                        result = _settle_interactive_manual(db, game, user, finished, datetime.now(timezone.utc), collapsed=True)
+                        return {
+                            "ok": True,
+                            "finished": True,
+                            "message": f"{DYNAMITE_MISHAP_MESSAGE} {result}",
+                            "state": _state(db, user["id"]),
+                        }
+                    return {
+                        "ok": True,
+                        "message": f"{DYNAMITE_MISHAP_MESSAGE} Прочность: {durability}/{INTERACTIVE_DIG_DURABILITY}.",
+                        "state": _state(db, user["id"]),
+                    }
                 targets = [i for i, cell in enumerate(cells) if cell.get("kind") in {"hard", "unknown", "roots"}] or available
                 secrets.SystemRandom().shuffle(targets)
                 for index in targets[:3]:

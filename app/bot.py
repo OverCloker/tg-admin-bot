@@ -275,7 +275,7 @@ DIG_SHOP_ITEMS = {
     "camp": ("Переносной лагерь", 1200, "Один раз сокращает ожидание раскопки на 50%."),
     "repair_kit": ("Ремонтный набор", 200, "После раскопки возвращает один использованный расходник."),
     "mystery_chest": ("Таинственный сундук", 350, "В следующей раскопке даёт случайную награду или пустышку."),
-    "dynamite": ("Динамит", 150, "Один раз пробивает метр, на котором раскопка должна была остановиться."),
+    "dynamite": ("Динамит", 150, "Один раз за вылазку ослабляет сложные клетки. Риск 20%: взрыв в руках, -1 прочность и метр не пробит."),
     "insurance": ("Страховка", 60, "Если раскопка провалилась на первом метре, засчитает 1 метр."),
     "cursed_pick": ("Защита от сглаза", 60, "Одноразово защищает от roll mute."),
     "tea": ("Чай перед сменой", 40, "Кладется в сумку и вручную восстанавливает +35 удачи."),
@@ -308,6 +308,8 @@ DIG_SHOP_ITEMS["golden_ticket"] = (
     1500,
     "Один билет для игры 3×3 в шахте Mini App.",
 )
+DYNAMITE_MISHAP_CHANCE = 20
+DYNAMITE_MISHAP_MESSAGE = "Из-за неосторожного обращения динамит взорвался в руках. Метр не пробит."
 DIG_ITEM_ORDER = [
     "tea", "insurance", "dynamite", "safe", "compass", "scanner", "drill", "medkit", "map", "talisman", "camp", "repair_kit", "mystery_chest",
     "shovel_1", "shovel_2", "shovel_3", "helmet_1", "helmet_2", "helmet_3",
@@ -5604,6 +5606,39 @@ async def cb_interactive_dig_tool(callback: CallbackQuery) -> None:
             stage["preview"] = " ".join(emoji_map.get(str(cell.get("kind")), "❓") for cell in preview_cells)
             message = "🗺 Карта показала признаки следующего ряда."
         elif tool_key == "dynamite":
+            if secrets.randbelow(100) < DYNAMITE_MISHAP_CHANCE:
+                durability = max(0, int(session["durability"]) - 1)
+                snapshot[f"{tool_key}_count"] = max(0, int(snapshot.get(f"{tool_key}_count", 0)) - 1)
+                used_tools.add(tool_key)
+                snapshot["used_tools"] = sorted(used_tools)
+                remember_repair_candidate(snapshot, tool_key)
+                db.update_interactive_dig_session(
+                    session_id,
+                    durability=durability,
+                    equipment_snapshot=json.dumps(snapshot, ensure_ascii=False),
+                    processing=0,
+                )
+                updated = db.get_interactive_dig_session(session_id)
+                if durability <= 0:
+                    finished = dict(updated)
+                    finished.update({"durability": 0, "processing": 0})
+                    result = settle_interactive_dig(finished, callback.from_user, collapsed=True)
+                    await safe_edit(
+                        callback,
+                        f"🧨 {escape(DYNAMITE_MISHAP_MESSAGE)}\n\n{result.text}",
+                        reply_markup=user_mine_menu(int(session["chat_id"]), callback.from_user.id, show_back=False),
+                    )
+                    return
+                view = interactive_dig_view(
+                    updated,
+                    f"🧨 {escape(DYNAMITE_MISHAP_MESSAGE)} Прочность: <b>{durability}</b>/{INTERACTIVE_DIG_DURABILITY}.",
+                )
+                await safe_edit(
+                    callback,
+                    view.text,
+                    reply_markup=interactive_dig_menu(session_id, int(updated["depth"]), stage, used_cells, interactive_dig_tools(snapshot, stage)),
+                )
+                return
             targets = [index for index in available if cells[index].get("kind") in {"hard", "unknown", "roots"}] or available
             blasted = targets[:]
             random.SystemRandom().shuffle(blasted)

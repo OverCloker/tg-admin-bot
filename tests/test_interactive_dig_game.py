@@ -2,6 +2,7 @@ import json
 import random
 from datetime import datetime
 
+from app import miniapp
 from app.db import Database
 from app.dig_game import (
     INTERACTIVE_DIG_MAX_CELLS_PER_METER,
@@ -24,6 +25,7 @@ from app.dig_game import (
     resolve_cell,
     scale_interactive_reward,
 )
+from app.miniapp import MineToolUse
 
 
 def test_generation_keeps_cell_limits() -> None:
@@ -182,6 +184,49 @@ def test_failed_row_can_be_replaced_when_all_cells_are_used() -> None:
     assert stage["type"] == "cells"
     assert 3 <= len(stage["cells"]) <= 7
     assert cell_row_is_exhausted(stage["cells"], []) is False
+
+
+def test_miniapp_dynamite_can_misfire_without_breaking_meter(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    cells = [{"kind": "hard"}, {"kind": "normal"}, {"kind": "roots"}]
+    db.register_dig_player(0, 10, "miner", "Шахтёр")
+    db.add_dig_item(0, 10, "dynamite", 1)
+    session = db.create_interactive_dig_session(
+        session_id="dynamite-misfire",
+        user_id=10,
+        chat_id=0,
+        route_key="old_mine",
+        depth=2,
+        durability=3,
+        temporary_coins=0,
+        luck_snapshot=50,
+        equipment_snapshot=json.dumps({"dynamite_count": 1, "used_tools": []}, ensure_ascii=False),
+        cells_json=json.dumps({"type": "cells", "cells": cells}, ensure_ascii=False),
+    )
+    db.close()
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 10, "username": "miner", "first_name": "Шахтёр"})
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp.secrets, "randbelow", lambda _limit: 0)
+
+    result = miniapp.miniapp_interactive_tool(MineToolUse(item_key="dynamite"), x_telegram_init_data="test")
+
+    db = Database(str(db_path))
+    try:
+        updated = db.get_interactive_dig_session(session["id"])
+        snapshot = json.loads(updated["equipment_snapshot"])
+        stage = json.loads(updated["cells_json"])
+    finally:
+        db.close()
+
+    assert "взорвался в руках" in result["message"]
+    assert "Метр не пробит" in result["message"]
+    assert updated["depth"] == 2
+    assert updated["durability"] == 2
+    assert snapshot["dynamite_count"] == 0
+    assert snapshot["used_tools"] == ["dynamite"]
+    assert all("revealed" not in cell and "bonus" not in cell for cell in stage["cells"])
 
 
 def test_depth_ten_has_final_bonus() -> None:
