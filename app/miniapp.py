@@ -19,7 +19,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Response
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from .config import load_config
-from .db import Database
+from .db import Database, normalize_trigger
 from .dig_game import (
     INTERACTIVE_DIG_DURABILITY,
     INTERACTIVE_DIG_MAX_DEPTH,
@@ -68,6 +68,17 @@ class ProfileRoleSet(BaseModel):
 
 class ProfileRoleClear(BaseModel):
     target: str = Field(min_length=1, max_length=64)
+
+
+class MiniAppTriggerSave(BaseModel):
+    chatId: int
+    trigger: str = Field(min_length=1, max_length=120)
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class MiniAppTriggerDelete(BaseModel):
+    chatId: int
+    trigger: str = Field(min_length=1, max_length=120)
 
 
 class MineAdminGrant(BaseModel):
@@ -619,6 +630,30 @@ def _miniapp_can_view_mine_admin(db: Database, user_id: int) -> bool:
 
 def _miniapp_can_manage_mine_admin(db: Database, user_id: int) -> bool:
     return _miniapp_is_app_admin(db, user_id)
+
+
+def _miniapp_can_manage_triggers(db: Database, user_id: int) -> bool:
+    return _miniapp_is_app_admin(db, user_id)
+
+
+def _miniapp_chat_public(chat: Any) -> dict[str, Any]:
+    return {
+        "id": int(chat.chat_id),
+        "title": chat.title or str(chat.chat_id),
+        "type": chat.type or "",
+        "username": chat.username or "",
+    }
+
+
+def _miniapp_trigger_public(item: Any) -> dict[str, Any]:
+    return {
+        "chatId": int(item.chat_id),
+        "trigger": item.trigger,
+        "text": item.text,
+        "mediaType": item.media_type or "",
+        "hasMedia": bool(item.media_type and item.media_file_id),
+        "updatedAt": item.updated_at,
+    }
 
 
 def _miniapp_dig_player_public(db: Database, player: Any) -> dict[str, Any]:
@@ -2025,8 +2060,96 @@ def miniapp_profile_admin_panel(
                 {"key": "roles", "title": "Роли", "enabled": is_owner, "description": "Выдача ролей приложения."},
                 {"key": "mine", "title": "Шахта", "enabled": _miniapp_can_manage_mine_admin(db, user["id"]), "description": "Управление игроками шахты."},
                 {"key": "moderation", "title": "Модерация", "enabled": False, "description": "Права и действия перенесём следующим шагом."},
-                {"key": "triggers", "title": "Триггеры", "enabled": False, "description": "Динамические ответы перенесём после схемы вариантов."},
+                {"key": "triggers", "title": "Триггеры", "enabled": _miniapp_can_manage_triggers(db, user["id"]), "description": "Слова и фразы, на которые бот отвечает в чатах."},
             ],
+        }
+    finally:
+        db.close()
+
+
+@router.get("/miniapp/profile/triggers")
+def miniapp_profile_triggers(
+    chat_id: int | None = Query(default=None),
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not _miniapp_can_manage_triggers(db, user["id"]):
+            raise HTTPException(403, "Триггеры доступны владельцу и админам Mini App.")
+        chats = db.list_chats()
+        selected_chat_id = int(chat_id) if chat_id is not None else (int(chats[0].chat_id) if chats else 0)
+        selected_chat = db.get_chat(selected_chat_id) if selected_chat_id else None
+        triggers = db.list_triggers(selected_chat_id) if selected_chat else []
+        return {
+            "ok": True,
+            "canManage": True,
+            "selectedChatId": selected_chat_id if selected_chat else 0,
+            "selectedChat": _miniapp_chat_public(selected_chat) if selected_chat else None,
+            "chats": [_miniapp_chat_public(chat) for chat in chats],
+            "triggers": [_miniapp_trigger_public(item) for item in triggers],
+        }
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/triggers")
+def miniapp_profile_trigger_save(
+    payload: MiniAppTriggerSave,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not _miniapp_can_manage_triggers(db, user["id"]):
+            raise HTTPException(403, "Триггеры доступны владельцу и админам Mini App.")
+        if db.get_chat(payload.chatId) is None:
+            raise HTTPException(404, "Чат не найден.")
+        normalized = normalize_trigger(payload.trigger)
+        if not normalized:
+            raise HTTPException(400, "Укажи слово или фразу для триггера.")
+        existing = next((item for item in db.list_triggers(payload.chatId) if item.trigger == normalized), None)
+        db.set_trigger(
+            payload.chatId,
+            normalized,
+            payload.text,
+            user["id"],
+            existing.media_type if existing else None,
+            existing.media_file_id if existing else None,
+        )
+        return {
+            "ok": True,
+            "message": "Триггер сохранён.",
+            "trigger": {
+                "chatId": int(payload.chatId),
+                "trigger": normalized,
+                "text": payload.text.strip(),
+                "mediaType": existing.media_type if existing else "",
+                "hasMedia": bool(existing and existing.media_type and existing.media_file_id),
+            },
+        }
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/triggers/delete")
+def miniapp_profile_trigger_delete(
+    payload: MiniAppTriggerDelete,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not _miniapp_can_manage_triggers(db, user["id"]):
+            raise HTTPException(403, "Триггеры доступны владельцу и админам Mini App.")
+        if db.get_chat(payload.chatId) is None:
+            raise HTTPException(404, "Чат не найден.")
+        normalized = normalize_trigger(payload.trigger)
+        deleted = db.delete_trigger(payload.chatId, normalized)
+        return {
+            "ok": True,
+            "deleted": deleted,
+            "message": "Триггер удалён." if deleted else "Такой триггер уже не найден.",
         }
     finally:
         db.close()

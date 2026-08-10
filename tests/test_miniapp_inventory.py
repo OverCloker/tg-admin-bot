@@ -4,9 +4,12 @@ from app import miniapp
 from app.miniapp import (
     MINIAPP_ASSIGNABLE_PROFILE_ROLES,
     MINIAPP_OWNER_PROFILE_ROLE,
+    MiniAppTriggerDelete,
+    MiniAppTriggerSave,
     _gift_recipients,
     _gift_target_kind,
     _miniapp_can_manage_mine_admin,
+    _miniapp_can_manage_triggers,
     _miniapp_can_view_admin_panel,
     _miniapp_can_view_mine_admin,
     _miniapp_profile_role_groups,
@@ -264,6 +267,75 @@ def test_miniapp_mine_admin_access_is_owner_or_moderator(tmp_path, monkeypatch) 
         assert _miniapp_can_manage_mine_admin(db, 8) is True
         assert _miniapp_can_manage_mine_admin(db, 7) is False
         assert _miniapp_can_view_mine_admin(db, 9) is False
+    finally:
+        db.close()
+
+
+def test_miniapp_trigger_admin_can_list_save_and_delete(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-100, "Чат", "supergroup", None)
+    db.set_miniapp_profile_role(8, "Админ", 42)
+    db.close()
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 8})
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+
+    saved = miniapp.miniapp_profile_trigger_save(
+        MiniAppTriggerSave(chatId=-100, trigger="  Привет   бот ", text="Здравствуй"),
+        x_telegram_init_data="test",
+    )
+    listed = miniapp.miniapp_profile_triggers(chat_id=-100, x_telegram_init_data="test")
+    deleted = miniapp.miniapp_profile_trigger_delete(
+        MiniAppTriggerDelete(chatId=-100, trigger="привет бот"),
+        x_telegram_init_data="test",
+    )
+    listed_after_delete = miniapp.miniapp_profile_triggers(chat_id=-100, x_telegram_init_data="test")
+
+    assert saved["trigger"]["trigger"] == "привет бот"
+    assert listed["selectedChatId"] == -100
+    assert listed["chats"][0]["title"] == "Чат"
+    assert listed["triggers"][0]["trigger"] == "привет бот"
+    assert listed["triggers"][0]["text"] == "Здравствуй"
+    assert deleted["deleted"] is True
+    assert listed_after_delete["triggers"] == []
+
+
+def test_miniapp_trigger_edit_preserves_existing_media(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-100, "Чат", "supergroup", None)
+    db.set_trigger(-100, "кот", "старый ответ", 42, "photo", "file-1")
+    db.close()
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 42})
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+
+    saved = miniapp.miniapp_profile_trigger_save(
+        MiniAppTriggerSave(chatId=-100, trigger="кот", text="новый ответ"),
+        x_telegram_init_data="test",
+    )
+    listed = miniapp.miniapp_profile_triggers(chat_id=-100, x_telegram_init_data="test")
+
+    assert saved["trigger"]["mediaType"] == "photo"
+    assert saved["trigger"]["hasMedia"] is True
+    assert listed["triggers"][0]["text"] == "новый ответ"
+    assert listed["triggers"][0]["mediaType"] == "photo"
+    assert listed["triggers"][0]["hasMedia"] is True
+
+
+def test_miniapp_trigger_management_is_owner_or_app_admin(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.set_miniapp_profile_role(8, "Админ", 42)
+
+    try:
+        assert _miniapp_can_manage_triggers(db, 42) is True
+        assert _miniapp_can_manage_triggers(db, 8) is True
+        assert _miniapp_can_manage_triggers(db, 9) is False
     finally:
         db.close()
 

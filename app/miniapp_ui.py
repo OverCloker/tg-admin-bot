@@ -110,6 +110,8 @@ MINI_APP_HTML = r"""<!doctype html>
     body[data-theme="glass"] .mini-form input,
     body[data-theme="glass"] .role-manager-form input,
     body[data-theme="glass"] .mine-admin-form input,
+    body[data-theme="glass"] .mine-admin-form textarea,
+    body[data-theme="glass"] .mine-admin-form select,
     body[data-theme="glass"] .persistent-radio {
       border: 1px solid #ffffff4a;
       box-shadow:
@@ -329,7 +331,9 @@ MINI_APP_HTML = r"""<!doctype html>
     .mine-admin-card { padding:10px; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel-2); }
     .mine-admin-card b { display:block; margin-top:4px; font-size:18px; }
     .mine-admin-form { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:8px; margin-top:10px; }
-    .mine-admin-form input {
+    .mine-admin-form input,
+    .mine-admin-form textarea,
+    .mine-admin-form select {
       width:100%;
       min-height:42px;
       padding:9px 10px;
@@ -340,6 +344,7 @@ MINI_APP_HTML = r"""<!doctype html>
       font:inherit;
       box-sizing:border-box;
     }
+    .mine-admin-form textarea { min-height:110px; resize:vertical; }
     .mine-admin-form .wide { grid-column: 1 / -1; }
     .mine-admin-screen { display:grid; gap:14px; }
     .mine-admin-row {
@@ -1217,6 +1222,14 @@ MINI_APP_HTML = r"""<!doctype html>
     return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
   }
 
+  function jsAttrString(value) {
+    return JSON.stringify(String(value ?? ""))
+      .replace(/&/g, "\\u0026")
+      .replace(/</g, "\\u003c")
+      .replace(/>/g, "\\u003e")
+      .replace(/"/g, "&quot;");
+  }
+
   function plainText(value) {
     const template = document.createElement("template");
     template.innerHTML = String(value ?? "").replace(/<br\s*\/?>/gi, "\n");
@@ -1726,7 +1739,9 @@ MINI_APP_HTML = r"""<!doctype html>
       ? `<button class="btn secondary" onclick="showRoleManager()">Открыть роли</button>`
       : section.key === "mine" && section.enabled
         ? `<button class="btn secondary" onclick="showMineAdmin()">Открыть шахту</button>`
-        : `<span class="muted">Скоро</span>`;
+        : section.key === "triggers" && section.enabled
+          ? `<button class="btn secondary" onclick="showTriggerManager()">Открыть триггеры</button>`
+          : `<span class="muted">Скоро</span>`;
     return `<div class="mine-admin-row">
       <span>
         <b>${escapeHtml(section.title || section.key)}</b><br>
@@ -1761,6 +1776,109 @@ MINI_APP_HTML = r"""<!doctype html>
       scrollToTop();
     } catch (error) {
       showError(error);
+    }
+  }
+
+  function triggerChatOptionsHtml(chats, selectedChatId) {
+    return (chats || []).map(chat => {
+      const selected = Number(chat.id) === Number(selectedChatId) ? " selected" : "";
+      const title = chat.username ? `${chat.title} (@${chat.username})` : chat.title;
+      return `<option value="${Number(chat.id)}"${selected}>${escapeHtml(title)}</option>`;
+    }).join("");
+  }
+
+  function triggerRowHtml(item) {
+    const media = item.hasMedia ? ` <span class="muted">· медиа</span>` : "";
+    return `<div class="mine-admin-row">
+      <span>
+        <b>${escapeHtml(item.trigger)}</b>${media}<br>
+        <span class="muted">${escapeHtml(item.text || "Без текста")}</span>
+      </span>
+      <span class="utility-actions" style="margin:0">
+        <button class="btn secondary" style="margin:0" onclick="showTriggerManager(${Number(item.chatId)}, { trigger: ${jsAttrString(item.trigger)}, text: ${jsAttrString(item.text || "")} })">Редактировать</button>
+        <button class="btn danger" style="margin:0" onclick="deleteMiniAppTrigger(${Number(item.chatId)}, ${jsAttrString(item.trigger)})">Удалить</button>
+      </span>
+    </div>`;
+  }
+
+  function triggerEditorHtml(chatId, editor) {
+    if (!editor) return "";
+    return `<section class="panel">
+      <h2>${editor.trigger ? "Редактировать триггер" : "Добавить триггер"}</h2>
+      <div class="mine-admin-form">
+        <input id="triggerWord" class="wide" placeholder="Слово или фраза" value="${escapeHtml(editor.trigger || "")}">
+        <textarea id="triggerText" class="wide" placeholder="Ответ бота">${escapeHtml(editor.text || "")}</textarea>
+        <button class="btn" onclick="saveMiniAppTrigger(${Number(chatId)})">Сохранить</button>
+        <button class="btn secondary" onclick="showTriggerManager(${Number(chatId)})">Отмена</button>
+      </div>
+    </section>`;
+  }
+
+  async function showTriggerManager(chatId = null, editor = null) {
+    setScreenHeader("adminPanel");
+    content.innerHTML = `<section class="panel muted">Загружаю триггеры...</section>`;
+    try {
+      const path = chatId ? `/miniapp/profile/triggers?chat_id=${encodeURIComponent(chatId)}` : "/miniapp/profile/triggers";
+      const data = await api(path);
+      const chats = data.chats || [];
+      const selectedChatId = Number(data.selectedChatId || 0);
+      const triggers = data.triggers || [];
+      const selectedChat = data.selectedChat || {};
+      const addButton = selectedChatId
+        ? `<button class="btn" style="margin:0" onclick="showTriggerManager(${selectedChatId}, { trigger: '', text: '' })">Добавить триггер</button>`
+        : "";
+      content.innerHTML = `<section class="panel">
+        <h2>Триггеры</h2>
+        <p class="muted">Выбери чат, добавь слово/фразу и ответ. Если у старого триггера было медиа, при редактировании текста оно сохранится.</p>
+        <div class="mine-admin-form">
+          <select id="triggerChatSelect" class="wide" onchange="showTriggerManager(this.value)">
+            ${triggerChatOptionsHtml(chats, selectedChatId)}
+          </select>
+          ${addButton}
+        </div>
+      </section>
+      ${selectedChatId ? triggerEditorHtml(selectedChatId, editor) : ""}
+      <section class="panel">
+        <h2>${escapeHtml(selectedChat.title || "Триггеры")}</h2>
+        <div class="role-list">${triggers.map(triggerRowHtml).join("") || `<p class="muted">В этом чате пока нет триггеров.</p>`}</div>
+      </section>
+      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
+      scrollToTop();
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function saveMiniAppTrigger(chatId) {
+    const trigger = document.getElementById("triggerWord")?.value || "";
+    const text = document.getElementById("triggerText")?.value || "";
+    if (!trigger.trim() || !text.trim()) {
+      alert("Укажи триггер и ответ.");
+      return;
+    }
+    try {
+      await api("/miniapp/profile/triggers", {
+        method: "POST",
+        body: JSON.stringify({ chatId: Number(chatId), trigger, text })
+      });
+      showNotice("Триггер сохранён.");
+      showTriggerManager(chatId);
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
+  async function deleteMiniAppTrigger(chatId, trigger) {
+    if (!confirm(`Удалить триггер «${trigger}»?`)) return;
+    try {
+      await api("/miniapp/profile/triggers/delete", {
+        method: "POST",
+        body: JSON.stringify({ chatId: Number(chatId), trigger })
+      });
+      showNotice("Триггер удалён.");
+      showTriggerManager(chatId);
+    } catch (error) {
+      alert(error.message);
     }
   }
 

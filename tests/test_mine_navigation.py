@@ -205,10 +205,20 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function showFriendsInfo()' in MINI_APP_HTML
     assert 'function showRoleManager()' in MINI_APP_HTML
     assert 'function showAdminPanel()' in MINI_APP_HTML
+    assert 'function showTriggerManager(chatId = null, editor = null)' in MINI_APP_HTML
+    assert 'function triggerRowHtml(item)' in MINI_APP_HTML
+    assert 'function saveMiniAppTrigger(chatId)' in MINI_APP_HTML
+    assert 'function deleteMiniAppTrigger(chatId, trigger)' in MINI_APP_HTML
     assert 'function adminPanelButtonHtml(viewer)' in MINI_APP_HTML
     assert 'viewer.canViewAdminPanel' in MINI_APP_HTML
     assert 'api("/miniapp/profile/admin")' in MINI_APP_HTML
+    assert 'api("/miniapp/profile/triggers"' in MINI_APP_HTML
+    assert '"/miniapp/profile/triggers/delete"' in MINI_APP_HTML
     assert '🛡️ Админ' in MINI_APP_HTML
+    assert 'Добавить триггер' in MINI_APP_HTML
+    assert 'Редактировать</button>' in MINI_APP_HTML
+    assert 'Удалить</button>' in MINI_APP_HTML
+    assert 'Открыть триггеры' in MINI_APP_HTML
     assert '${adminPanelButtonHtml(viewer)}' in MINI_APP_HTML
     assert 'group.assignable === false ? ""' in MINI_APP_HTML
     assert 'function roleGroupHtml(group)' in MINI_APP_HTML
