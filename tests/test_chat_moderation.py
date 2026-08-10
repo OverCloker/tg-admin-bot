@@ -1,10 +1,13 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from app.bot import (
     DICTIONARY_HIT_MUTE_MINUTES,
     DICTIONARY_HIT_PHOTO_PATH,
     MODERATOR_ASSIGN_COMMANDS,
     MINIAPP_ADMIN_PROFILE_LABEL,
+    actor_can_manage_moderators,
     is_miniapp_admin_user,
     moderator_can_delete_messages,
     moderator_can_stop_chat,
@@ -84,6 +87,19 @@ def test_miniapp_admin_profile_role_grants_chat_admin_power(tmp_path, monkeypatc
 
     assert is_miniapp_admin_user(2) is True
     assert is_miniapp_admin_user(3) is False
+
+
+@pytest.mark.anyio
+async def test_only_owner_can_manage_moderator_roles(tmp_path, monkeypatch) -> None:
+    from app import bot as bot_module
+
+    db = _db(tmp_path)
+    db.set_miniapp_profile_role(2, MINIAPP_ADMIN_PROFILE_LABEL, 1)
+    monkeypatch.setattr(bot_module, "db", db, raising=False)
+    monkeypatch.setattr(bot_module, "is_bot_admin", lambda user_id: user_id == 1)
+
+    assert await actor_can_manage_moderators(None, -100, 1) is True
+    assert await actor_can_manage_moderators(None, -100, 2) is False
 
 
 def test_moderator_mute_count_uses_window(tmp_path) -> None:
