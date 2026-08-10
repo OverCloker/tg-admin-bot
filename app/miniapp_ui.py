@@ -1849,6 +1849,7 @@ MINI_APP_HTML = r"""<!doctype html>
     const variants = item.variants || [];
     const mediaCount = variants.filter(variant => variant.hasMedia).length;
     const textCount = variants.filter(variant => !variant.hasMedia && (variant.text || "").trim()).length;
+    const aliasText = Number(item.aliasCount || 0) > 0 ? ` · +${Number(item.aliasCount || 0)} форм` : "";
     const summary = [
       textCount ? `${textCount} текст.` : "",
       mediaCount ? `${mediaCount} медиа` : ""
@@ -1856,7 +1857,7 @@ MINI_APP_HTML = r"""<!doctype html>
     return `<div class="admin-list-row">
       <span>
         <b>${escapeHtml(item.trigger)}</b><br>
-        <span class="muted">${escapeHtml(summary)} · ${escapeHtml(item.text || "Без текста")}</span>
+        <span class="muted">${escapeHtml(summary)}${aliasText} · ${escapeHtml(item.text || "Без текста")}</span>
       </span>
       <span class="utility-actions" style="margin:0">
         <button class="btn secondary" style="margin:0" onclick="editMiniAppTrigger(${Number(item.chatId)}, ${jsAttrString(item.trigger)})">Редактировать</button>
@@ -1899,6 +1900,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <h2>${editor.trigger ? "Редактировать триггер" : "Добавить триггер"}</h2>
       <div class="mine-admin-form">
         <input id="triggerWord" class="wide" placeholder="Слово или фраза" value="${escapeHtml(editor.trigger || "")}">
+        <textarea id="triggerAliases" class="wide" placeholder="Формы и синонимы через запятую: спать, спал, сплю">${escapeHtml((editor.aliases || []).join(", "))}</textarea>
         <div class="wide">
           <p class="muted">Добавить ответ. Максимум 10 текстовых вариантов, бот выберет случайный.</p>
           <div id="triggerAnswers" class="trigger-answer-list">${triggerVariantRows(editor)}</div>
@@ -1969,6 +1971,11 @@ MINI_APP_HTML = r"""<!doctype html>
 
   async function saveMiniAppTrigger(chatId) {
     const trigger = document.getElementById("triggerWord")?.value || "";
+    const aliases = (document.getElementById("triggerAliases")?.value || "")
+      .split(/[,\n;]/)
+      .map(item => item.trim())
+      .filter(Boolean)
+      .slice(0, 30);
     if (!trigger.trim()) {
       alert("Укажи триггер.");
       return;
@@ -2002,7 +2009,7 @@ MINI_APP_HTML = r"""<!doctype html>
       }
       await api("/miniapp/profile/triggers", {
         method: "POST",
-        body: JSON.stringify({ chatId: Number(chatId), trigger, variants })
+        body: JSON.stringify({ chatId: Number(chatId), trigger, aliases, variants })
       });
       showNotice("Триггер сохранён.");
       showTriggerManager(chatId);

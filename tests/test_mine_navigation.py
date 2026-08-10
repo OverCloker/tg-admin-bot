@@ -211,6 +211,9 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function addTriggerAnswerInput()' in MINI_APP_HTML
     assert 'function editMiniAppTrigger(chatId, trigger)' in MINI_APP_HTML
     assert 'class="triggerAnswerInput"' in MINI_APP_HTML
+    assert 'id="triggerAliases"' in MINI_APP_HTML
+    assert "+${Number(item.aliasCount || 0)} форм" in MINI_APP_HTML
+    assert ".split(/[,\\n;]/)" in MINI_APP_HTML
     assert 'triggerMediaBoxHtml(editor, "photo"' in MINI_APP_HTML
     assert 'triggerMediaBoxHtml(editor, "animation"' in MINI_APP_HTML
     assert 'triggerMediaBoxHtml(editor, "audio"' in MINI_APP_HTML

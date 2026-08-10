@@ -882,6 +882,12 @@ def has_normalized_trigger(normalized_text: str, normalized_trigger: str) -> boo
     return re.search(pattern, normalized_text, flags=re.IGNORECASE) is not None
 
 
+def trigger_item_matches(normalized_text: str, item) -> bool:
+    candidates = [getattr(item, "trigger", "")]
+    candidates.extend(getattr(item, "aliases", ()) or ())
+    return any(has_normalized_trigger(normalized_text, normalize_trigger(candidate)) for candidate in candidates)
+
+
 def split_command_payload(text: str | None) -> str:
     if not text:
         return ""
@@ -11761,7 +11767,7 @@ async def handle_auto_reply(message: Message) -> None:
     trigger_answers = [
         item
         for item in cached_triggers(message.chat.id)
-        if has_normalized_trigger(normalized_text, item.trigger)
+        if trigger_item_matches(normalized_text, item)
     ]
     if trigger_answers:
         answers.append(random.choice(trigger_answers))

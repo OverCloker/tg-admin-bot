@@ -44,6 +44,7 @@ class TriggerReply:
     media_file_id: str | None
     updated_by: int | None
     updated_at: str
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ class TriggerReplyVariant:
     position: int
     updated_by: int | None
     updated_at: str
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -457,6 +459,18 @@ class Database:
             );
             create index if not exists idx_trigger_reply_variants_lookup
                 on trigger_reply_variants(chat_id, trigger, position, id);
+
+            create table if not exists trigger_aliases (
+                chat_id integer not null,
+                trigger text not null,
+                alias text not null,
+                updated_by integer,
+                updated_at text not null,
+                primary key (chat_id, trigger, alias),
+                foreign key (chat_id, trigger) references trigger_replies(chat_id, trigger) on delete cascade
+            );
+            create index if not exists idx_trigger_aliases_lookup
+                on trigger_aliases(chat_id, alias);
 
             create table if not exists seen_users (
                 chat_id integer not null,
@@ -1703,6 +1717,10 @@ class Database:
     def delete_trigger(self, chat_id: int, trigger: str) -> bool:
         normalized = normalize_trigger(trigger)
         self._conn.execute(
+            "delete from trigger_aliases where chat_id = ? and trigger = ?",
+            (chat_id, normalized),
+        )
+        self._conn.execute(
             "delete from trigger_reply_variants where chat_id = ? and trigger = ?",
             (chat_id, normalized),
         )
@@ -1724,6 +1742,55 @@ class Database:
             (chat_id,),
         ).fetchall()
         return [TriggerReply(**dict(row)) for row in rows]
+
+    def replace_trigger_aliases(self, chat_id: int, trigger: str, aliases: list[str], updated_by: int | None) -> None:
+        normalized = normalize_trigger(trigger)
+        cleaned: list[str] = []
+        for alias in aliases:
+            normalized_alias = normalize_trigger(alias)
+            if normalized_alias and normalized_alias != normalized and normalized_alias not in cleaned:
+                cleaned.append(normalized_alias)
+        self._conn.execute(
+            "delete from trigger_aliases where chat_id = ? and trigger = ?",
+            (chat_id, normalized),
+        )
+        now = utc_now()
+        for alias in cleaned:
+            self._conn.execute(
+                """
+                insert into trigger_aliases (chat_id, trigger, alias, updated_by, updated_at)
+                values (?, ?, ?, ?, ?)
+                """,
+                (chat_id, normalized, alias, updated_by, now),
+            )
+        self._conn.commit()
+
+    def list_trigger_aliases(self, chat_id: int, trigger: str) -> list[str]:
+        rows = self._conn.execute(
+            """
+            select alias
+            from trigger_aliases
+            where chat_id = ? and trigger = ?
+            order by alias collate nocase
+            """,
+            (chat_id, normalize_trigger(trigger)),
+        ).fetchall()
+        return [str(row["alias"]) for row in rows]
+
+    def trigger_aliases_map(self, chat_id: int) -> dict[str, tuple[str, ...]]:
+        rows = self._conn.execute(
+            """
+            select trigger, alias
+            from trigger_aliases
+            where chat_id = ?
+            order by alias collate nocase
+            """,
+            (chat_id,),
+        ).fetchall()
+        result: dict[str, list[str]] = {}
+        for row in rows:
+            result.setdefault(str(row["trigger"]), []).append(str(row["alias"]))
+        return {trigger: tuple(aliases) for trigger, aliases in result.items()}
 
     def replace_trigger_variants(
         self,
@@ -1776,6 +1843,7 @@ class Database:
         return [TriggerReplyVariant(**dict(row)) for row in rows]
 
     def list_trigger_answer_options(self, chat_id: int) -> list[TriggerReplyVariant | TriggerReply]:
+        aliases = self.trigger_aliases_map(chat_id)
         variant_rows = self._conn.execute(
             """
             select id, chat_id, trigger, variant_type, text, media_type, media_file_id, position, updated_by, updated_at
@@ -1785,7 +1853,10 @@ class Database:
             """,
             (chat_id,),
         ).fetchall()
-        variants = [TriggerReplyVariant(**dict(row)) for row in variant_rows]
+        variants = [
+            TriggerReplyVariant(**dict(row), aliases=aliases.get(str(row["trigger"]), ()))
+            for row in variant_rows
+        ]
         variant_keys = {(item.chat_id, item.trigger) for item in variants}
         fallback_rows = self._conn.execute(
             """
@@ -1797,7 +1868,7 @@ class Database:
             (chat_id,),
         ).fetchall()
         fallbacks = [
-            TriggerReply(**dict(row))
+            TriggerReply(**dict(row), aliases=aliases.get(str(row["trigger"]), ()))
             for row in fallback_rows
             if (int(row["chat_id"]), str(row["trigger"])) not in variant_keys
         ]

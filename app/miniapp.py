@@ -89,6 +89,7 @@ class MiniAppTriggerVariant(BaseModel):
 class MiniAppTriggerSave(BaseModel):
     chatId: int
     trigger: str = Field(min_length=1, max_length=120)
+    aliases: list[str] = Field(default_factory=list, max_length=30)
     text: str | None = Field(default=None, max_length=4000)
     variants: list[MiniAppTriggerVariant] = Field(default_factory=list, max_length=13)
 
@@ -664,9 +665,12 @@ def _miniapp_chat_public(chat: Any) -> dict[str, Any]:
 
 def _miniapp_trigger_public(db: Database, item: Any) -> dict[str, Any]:
     variants = _miniapp_trigger_variants_public(db, item.chat_id, item.trigger)
+    aliases = db.list_trigger_aliases(item.chat_id, item.trigger)
     return {
         "chatId": int(item.chat_id),
         "trigger": item.trigger,
+        "aliases": aliases,
+        "aliasCount": len(aliases),
         "text": item.text,
         "mediaType": item.media_type or "",
         "hasMedia": bool(item.media_type and item.media_file_id),
@@ -745,6 +749,16 @@ def _clean_trigger_variants(payload: MiniAppTriggerSave) -> list[dict[str, objec
         )
     if not cleaned:
         raise HTTPException(400, "Добавь хотя бы один ответ для триггера.")
+    return cleaned
+
+
+def _clean_trigger_aliases(trigger: str, aliases: list[str]) -> list[str]:
+    normalized_trigger = normalize_trigger(trigger)
+    cleaned: list[str] = []
+    for alias in aliases:
+        normalized = normalize_trigger(alias)
+        if normalized and normalized != normalized_trigger and normalized not in cleaned:
+            cleaned.append(normalized)
     return cleaned
 
 
@@ -2212,6 +2226,7 @@ def miniapp_profile_trigger_save(
             )
         variants = _clean_trigger_variants(payload)
         db.replace_trigger_variants(payload.chatId, normalized, variants, user["id"])
+        db.replace_trigger_aliases(payload.chatId, normalized, _clean_trigger_aliases(normalized, payload.aliases), user["id"])
         saved = next((item for item in db.list_triggers(payload.chatId) if item.trigger == normalized), None)
         return {
             "ok": True,

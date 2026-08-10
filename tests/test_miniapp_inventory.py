@@ -342,6 +342,7 @@ def test_miniapp_trigger_can_store_multiple_variants(tmp_path, monkeypatch) -> N
         MiniAppTriggerSave(
             chatId=-100,
             trigger="кот",
+            aliases=["котик", "кошак", "кот"],
             variants=[
                 MiniAppTriggerVariant(variantType="text", text="мяу"),
                 MiniAppTriggerVariant(variantType="text", text="мур"),
@@ -361,8 +362,20 @@ def test_miniapp_trigger_can_store_multiple_variants(tmp_path, monkeypatch) -> N
 
     assert len(options) == 5
     assert [item.text for item in options[:2]] == ["мяу", "мур"]
+    assert options[0].aliases == ("котик", "кошак")
+    assert listed["triggers"][0]["aliases"] == ["котик", "кошак"]
+    assert listed["triggers"][0]["aliasCount"] == 2
     assert listed["triggers"][0]["variants"][2]["variantType"] == "photo"
     assert listed["triggers"][0]["variants"][4]["mediaType"] == "audio"
+
+
+def test_trigger_matching_uses_aliases() -> None:
+    item = type("TriggerItem", (), {"trigger": "сон", "aliases": ("спать", "спал", "сплю")})()
+
+    assert game.trigger_item_matches(game.normalize_trigger("хочу спать"), item) is True
+    assert game.trigger_item_matches(game.normalize_trigger("он спал днем"), item) is True
+    assert game.trigger_item_matches(game.normalize_trigger("сон пришел"), item) is True
+    assert game.trigger_item_matches(game.normalize_trigger("спальня"), item) is False
 
 
 def test_miniapp_trigger_text_variants_are_limited_to_ten(tmp_path, monkeypatch) -> None:
