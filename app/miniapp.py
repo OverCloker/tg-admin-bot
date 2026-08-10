@@ -508,6 +508,7 @@ MINIAPP_MODERATOR_ROLE_TITLES = {
     "senior": "Старший модератор",
 }
 MINIAPP_MODERATOR_ROLE_RANKS = {"assistant": 1, "moderator": 2, "senior": 3}
+MINIAPP_OWNER_PROFILE_ROLE = {"key": "owner", "label": "Владелец", "emoji": "👑"}
 MINIAPP_ASSIGNABLE_PROFILE_ROLES = (
     {"key": "admin", "label": "Админ", "emoji": "🛡️"},
     {"key": "senior", "label": "Старший модератор", "emoji": "⭐"},
@@ -526,10 +527,22 @@ def _miniapp_can_manage_roles(user_id: int) -> bool:
     return owner_id is not None and int(user_id) == int(owner_id)
 
 
+def _miniapp_is_app_admin(db: Database, user_id: int) -> bool:
+    if _miniapp_can_manage_roles(user_id):
+        return True
+    role = db.get_miniapp_profile_role(user_id)
+    return bool(role and role.label == "Админ")
+
+
+def _miniapp_can_view_admin_panel(db: Database, user_id: int) -> bool:
+    return _miniapp_is_app_admin(db, user_id)
+
+
 def _miniapp_profile_role_groups(db: Database) -> list[dict[str, Any]]:
     role_by_key = {str(role["key"]): role for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES}
-    by_label: dict[str, list[dict[str, Any]]] = {str(role["label"]): [] for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES}
-    seen_by_label: dict[str, set[int]] = {str(role["label"]): set() for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES}
+    all_roles = (MINIAPP_OWNER_PROFILE_ROLE, *MINIAPP_ASSIGNABLE_PROFILE_ROLES)
+    by_label: dict[str, list[dict[str, Any]]] = {str(role["label"]): [] for role in all_roles}
+    seen_by_label: dict[str, set[int]] = {str(role["label"]): set() for role in all_roles}
 
     def add(label: str, item: dict[str, Any]) -> None:
         user_id = int(item["user_id"])
@@ -539,15 +552,15 @@ def _miniapp_profile_role_groups(db: Database) -> list[dict[str, Any]]:
         by_label.setdefault(label, []).append(item)
 
     owner_id = _miniapp_owner_id()
-    admin_label = str(role_by_key["admin"]["label"])
+    owner_label = str(MINIAPP_OWNER_PROFILE_ROLE["label"])
     if owner_id is not None:
         known = db.get_known_user(owner_id)
         player = db.get_dig_player(0, owner_id)
         add(
-            admin_label,
+            owner_label,
             {
                 "user_id": int(owner_id),
-                "label": admin_label,
+                "label": owner_label,
                 "username": (player.username if player else None) or (known.username if known else "") or "",
                 "full_name": (player.full_name if player else None) or (known.full_name if known else str(owner_id)),
                 "source": "owner",
@@ -594,13 +607,18 @@ def _miniapp_profile_role_groups(db: Database) -> list[dict[str, Any]]:
             "label": str(role["label"]),
             "emoji": str(role["emoji"]),
             "items": by_label.get(str(role["label"]), []),
+            "assignable": role in MINIAPP_ASSIGNABLE_PROFILE_ROLES,
         }
-        for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES
+        for role in all_roles
     ]
 
 
 def _miniapp_can_view_mine_admin(db: Database, user_id: int) -> bool:
-    return _miniapp_can_manage_roles(user_id) or bool(db.list_user_moderator_roles(user_id))
+    return _miniapp_is_app_admin(db, user_id) or bool(db.list_user_moderator_roles(user_id))
+
+
+def _miniapp_can_manage_mine_admin(db: Database, user_id: int) -> bool:
+    return _miniapp_is_app_admin(db, user_id)
 
 
 def _miniapp_dig_player_public(db: Database, player: Any) -> dict[str, Any]:
@@ -683,16 +701,18 @@ def _miniapp_profile_roles(db: Database, user_id: int) -> list[dict[str, Any]]:
     roles: list[dict[str, Any]] = []
     owner_id = _miniapp_owner_id()
     if owner_id is not None and int(user_id) == int(owner_id):
-        roles.append({"key": "owner", "title": "Админ", "kind": "owner", "emoji": "🛡️"})
+        roles.append({"key": "owner", "title": "Владелец", "kind": "owner", "emoji": "👑"})
 
     custom = db.get_miniapp_profile_role(user_id)
     if custom:
+        predefined = next((role for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES if str(role["label"]) == custom.label), None)
+        role_key = str(predefined["key"]) if predefined else "custom"
         roles.append(
             {
-                "key": "custom",
+                "key": role_key,
                 "title": custom.label,
-                "kind": "custom",
-                "emoji": custom.emoji or "🏷️",
+                "kind": "admin" if custom.label == "Админ" else "custom",
+                "emoji": custom.emoji or (str(predefined["emoji"]) if predefined else "🏷️"),
                 "color": custom.color or "",
             }
         )
@@ -1888,9 +1908,11 @@ async def miniapp_profile(
             "id": viewer_id,
             "isSelf": target_id == viewer_id,
             "isOwner": _miniapp_can_manage_roles(viewer_id),
+            "isAppAdmin": _miniapp_is_app_admin(db, viewer_id),
             "canManageRoles": _miniapp_can_manage_roles(viewer_id),
+            "canViewAdminPanel": _miniapp_can_view_admin_panel(db, viewer_id),
             "canViewMineAdmin": _miniapp_can_view_mine_admin(db, viewer_id),
-            "canManageMineAdmin": _miniapp_can_manage_roles(viewer_id),
+            "canManageMineAdmin": _miniapp_can_manage_mine_admin(db, viewer_id),
         }
         profile["social"] = {
             "relation": relation.get("relation", "friend"),
@@ -1974,6 +1996,42 @@ def miniapp_profile_role_clear(
         db.close()
 
 
+@router.get("/miniapp/profile/admin")
+def miniapp_profile_admin_panel(
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not _miniapp_can_view_admin_panel(db, user["id"]):
+            raise HTTPException(403, "Админ-панель Mini App доступна владельцу и админам.")
+        is_owner = _miniapp_can_manage_roles(user["id"])
+        admins = db.list_miniapp_profile_roles_by_label(["Админ"])
+        moderators = db.list_all_chat_moderators()
+        chats = db.list_chats()
+        return {
+            "ok": True,
+            "viewerRole": "owner" if is_owner else "admin",
+            "canManageRoles": is_owner,
+            "canManageMine": _miniapp_can_manage_mine_admin(db, user["id"]),
+            "summary": {
+                "chats": len(chats),
+                "admins": len(admins) + (1 if _miniapp_owner_id() is not None else 0),
+                "moderators": len({int(row["user_id"]) for row in moderators}),
+                "minePlayers": db.count_dig_players(),
+                "triggers": sum(len(db.list_triggers(chat.chat_id)) for chat in chats),
+            },
+            "sections": [
+                {"key": "roles", "title": "Роли", "enabled": is_owner, "description": "Выдача ролей приложения."},
+                {"key": "mine", "title": "Шахта", "enabled": _miniapp_can_manage_mine_admin(db, user["id"]), "description": "Управление игроками шахты."},
+                {"key": "moderation", "title": "Модерация", "enabled": False, "description": "Права и действия перенесём следующим шагом."},
+                {"key": "triggers", "title": "Триггеры", "enabled": False, "description": "Динамические ответы перенесём после схемы вариантов."},
+            ],
+        }
+    finally:
+        db.close()
+
+
 @router.get("/miniapp/profile/mine-admin")
 def miniapp_profile_mine_admin(
     page: int = 1,
@@ -1990,9 +2048,10 @@ def miniapp_profile_mine_admin(
             raise HTTPException(403, "Панель шахты доступна владельцу и модераторам.")
         total = db.count_dig_players()
         players = db.list_dig_players_page(limit=safe_per_page, offset=offset)
+        can_manage = _miniapp_can_manage_mine_admin(db, user["id"])
         return {
-            "canManage": _miniapp_can_manage_roles(user["id"]),
-            "viewerRole": "owner" if _miniapp_can_manage_roles(user["id"]) else "moderator",
+            "canManage": can_manage,
+            "viewerRole": "admin" if can_manage else "moderator",
             "summary": {
                 "players": total,
                 "totalDepth": sum(int(player.total_depth) for player in db.list_all_dig_players()),
@@ -2020,11 +2079,11 @@ def miniapp_profile_mine_admin_grant(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    if not _miniapp_can_manage_roles(user["id"]):
-        raise HTTPException(403, "Управление шахтой доступно только владельцу.")
     with DIG_LOCK:
         db = _db()
         try:
+            if not _miniapp_can_manage_mine_admin(db, user["id"]):
+                raise HTTPException(403, "Управление шахтой доступно владельцу и админам Mini App.")
             if db.get_dig_player(0, payload.userId) is None:
                 raise HTTPException(404, "Игрок шахты с таким User ID не зарегистрирован.")
             if payload.coins is not None:
@@ -2055,11 +2114,11 @@ def miniapp_profile_mine_admin_delete(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    if not _miniapp_can_manage_roles(user["id"]):
-        raise HTTPException(403, "Управление шахтой доступно только владельцу.")
     with DIG_LOCK:
         db = _db()
         try:
+            if not _miniapp_can_manage_mine_admin(db, user["id"]):
+                raise HTTPException(403, "Управление шахтой доступно владельцу и админам Mini App.")
             deleted = db.delete_dig_player(payload.userId)
             return {"ok": True, "deleted": deleted, "message": "Игрок удалён из шахты." if deleted else "Игрока в шахте уже не было."}
         finally:
@@ -2072,11 +2131,11 @@ def miniapp_profile_mine_admin_block(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    if not _miniapp_can_manage_roles(user["id"]):
-        raise HTTPException(403, "Управление шахтой доступно только владельцу.")
     with DIG_LOCK:
         db = _db()
         try:
+            if not _miniapp_can_manage_mine_admin(db, user["id"]):
+                raise HTTPException(403, "Управление шахтой доступно владельцу и админам Mini App.")
             db.block_dig_user(payload.userId, user["id"], payload.reason)
             deleted = db.delete_dig_player(payload.userId) if payload.deletePlayer else False
             return {
@@ -2094,11 +2153,11 @@ def miniapp_profile_mine_admin_unblock(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    if not _miniapp_can_manage_roles(user["id"]):
-        raise HTTPException(403, "Управление шахтой доступно только владельцу.")
     with DIG_LOCK:
         db = _db()
         try:
+            if not _miniapp_can_manage_mine_admin(db, user["id"]):
+                raise HTTPException(403, "Управление шахтой доступно владельцу и админам Mini App.")
             removed = db.unblock_dig_user(payload.userId)
             return {"ok": True, "removed": removed, "message": "Блокировка снята." if removed else "Блокировки уже не было."}
         finally:

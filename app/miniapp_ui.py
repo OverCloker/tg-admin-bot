@@ -297,6 +297,7 @@ MINI_APP_HTML = r"""<!doctype html>
       font-weight: 850;
     }
     .profile-badge.owner { border-color:#ffd66d; background:#3a2a10; color:#fff0be; }
+    .profile-badge.admin { border-color:#89d8ff; background:#102d45; color:#e5f7ff; }
     .profile-badge.moderation { border-color:#83b7ff; background:#102947; color:#ddecff; }
     .profile-badge.custom { border-color:#b98cff; background:#271946; color:#f2e8ff; }
     .role-manager-form { display: grid; gap: 8px; margin-top: 10px; }
@@ -1132,6 +1133,9 @@ MINI_APP_HTML = r"""<!doctype html>
     } else if (view === "mineAdmin") {
       screenTitle.textContent = "⛏️ Панель шахты";
       nameNode.textContent = "Управление и просмотр";
+    } else if (view === "adminPanel") {
+      screenTitle.textContent = "🛡️ Админ";
+      nameNode.textContent = "Панель управления";
     } else if (view === "weather") {
       screenTitle.textContent = "🌦️ Погода";
       nameNode.textContent = "Город и текущая сводка";
@@ -1658,7 +1662,7 @@ MINI_APP_HTML = r"""<!doctype html>
     if (mine.rank) badges.push(mine.rank);
     (cosmetics.badges || []).slice(0, 2).forEach(item => badges.push(`${item.emoji || ""} ${item.title || ""}`.trim()));
     const roleBadges = (profile.roles || []).map(role => {
-      const kind = ["owner", "moderation", "custom"].includes(role.kind) ? role.kind : "custom";
+      const kind = ["owner", "admin", "moderation", "custom"].includes(role.kind) ? role.kind : "custom";
       const title = `${role.emoji || ""} ${role.title || ""}`.trim();
       return `<span class="profile-badge ${kind}">${escapeHtml(title)}</span>`;
     }).join("");
@@ -1670,6 +1674,12 @@ MINI_APP_HTML = r"""<!doctype html>
   function roleManagerButtonHtml(viewer) {
     return viewer && viewer.canManageRoles
       ? `<button class="btn secondary" onclick="showRoleManager()">Роли</button>`
+      : "";
+  }
+
+  function adminPanelButtonHtml(viewer) {
+    return viewer && viewer.canViewAdminPanel
+      ? `<button class="btn secondary" onclick="showAdminPanel()">🛡️ Админ</button>`
       : "";
   }
 
@@ -1699,14 +1709,59 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function roleGroupHtml(group) {
     const items = (group.items || []).map(item => roleRowHtml(item, group.label)).join("");
-    return `<details class="panel" open>
-      <summary style="cursor:pointer;font-weight:900;font-size:20px">${escapeHtml(group.emoji || "")} ${escapeHtml(group.label)} · ${(group.items || []).length}</summary>
-      <div class="role-list">${items || `<p class="muted">На этой роли пока никого нет.</p>`}</div>
+    const form = group.assignable === false ? "" : `
       <div class="role-manager-form">
         <input id="roleTarget_${escapeHtml(group.key)}" placeholder="@ник или ID">
         <button class="btn" onclick="setProfileRole('${escapeHtml(group.key)}', '${escapeHtml(group.label)}')">Добавить</button>
-      </div>
+      </div>`;
+    return `<details class="panel" open>
+      <summary style="cursor:pointer;font-weight:900;font-size:20px">${escapeHtml(group.emoji || "")} ${escapeHtml(group.label)} · ${(group.items || []).length}</summary>
+      <div class="role-list">${items || `<p class="muted">На этой роли пока никого нет.</p>`}</div>
+      ${form}
     </details>`;
+  }
+
+  function adminSectionHtml(section) {
+    const action = section.key === "roles" && section.enabled
+      ? `<button class="btn secondary" onclick="showRoleManager()">Открыть роли</button>`
+      : section.key === "mine" && section.enabled
+        ? `<button class="btn secondary" onclick="showMineAdmin()">Открыть шахту</button>`
+        : `<span class="muted">Скоро</span>`;
+    return `<div class="mine-admin-row">
+      <span>
+        <b>${escapeHtml(section.title || section.key)}</b><br>
+        <span class="muted">${escapeHtml(section.description || "")}</span>
+      </span>
+      ${action}
+    </div>`;
+  }
+
+  async function showAdminPanel() {
+    setScreenHeader("adminPanel");
+    content.innerHTML = `<section class="panel muted">Загружаю админ-панель...</section>`;
+    try {
+      const data = await api("/miniapp/profile/admin");
+      const summary = data.summary || {};
+      const sections = data.sections || [];
+      content.innerHTML = `<section class="panel">
+        <h2>Админ-панель Mini App</h2>
+        <p class="muted">Базовый перенос админки в приложение. Детальные права по разделам добавим следующим шагом.</p>
+        <div class="mine-admin-grid">
+          <div class="mine-admin-card">Чаты<b>${Number(summary.chats || 0)}</b></div>
+          <div class="mine-admin-card">Админы<b>${Number(summary.admins || 0)}</b></div>
+          <div class="mine-admin-card">Модераторы<b>${Number(summary.moderators || 0)}</b></div>
+          <div class="mine-admin-card">Игроки шахты<b>${Number(summary.minePlayers || 0)}</b></div>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>Разделы</h2>
+        <div class="role-list">${sections.map(adminSectionHtml).join("")}</div>
+      </section>
+      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showProfile()">Назад к профилю</button></section>`;
+      scrollToTop();
+    } catch (error) {
+      showError(error);
+    }
   }
 
   async function showRoleManager() {
@@ -2013,6 +2068,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <div class="profile-actions">
         <button class="btn secondary" onclick="showFriendsInfo()">${friends.length ? `Друзья: ${friends.length}` : "Друзья"}</button>
         ${isSelf ? `<button class="btn secondary" onclick="showBag()">Сумка</button>` : `<button class="btn secondary" onclick="showProfile()">Мой профиль</button>`}
+        ${adminPanelButtonHtml(viewer)}
         ${mineAdminButtonHtml(viewer)}
         ${roleManagerButtonHtml(viewer)}
       </div>

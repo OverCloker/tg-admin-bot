@@ -98,11 +98,15 @@ def test_latest_active_mute_tracks_owner_and_unmute(tmp_path) -> None:
 def test_moderator_payloads_and_limits() -> None:
     role, username, payload = parse_moderator_role_payload("+стМодератор @target неделя", MODERATOR_ASSIGN_COMMANDS)
     name, expires_at = parse_moderator_duration(payload)
+    app_role, app_username, app_payload = parse_moderator_role_payload("+админ @target_user", MODERATOR_ASSIGN_COMMANDS)
 
     assert role == "senior"
     assert username == "target"
     assert name == ""
     assert expires_at is not None
+    assert app_role == "app_admin"
+    assert app_username == "target_user"
+    assert app_payload == ""
     assert moderator_max_mute_minutes("assistant") == 10
     assert moderator_max_mute_minutes("moderator") == 30
     assert moderator_max_mute_minutes("senior") == 60

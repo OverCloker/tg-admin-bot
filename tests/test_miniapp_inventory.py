@@ -1,7 +1,20 @@
 from app.db import Database
 from app import bot as game
 from app import miniapp
-from app.miniapp import MINIAPP_ASSIGNABLE_PROFILE_ROLES, _gift_recipients, _gift_target_kind, _miniapp_can_view_mine_admin, _miniapp_profile_role_groups, _miniapp_profile_roles, _miniapp_social_people, _miniapp_social_target, _shop_catalog
+from app.miniapp import (
+    MINIAPP_ASSIGNABLE_PROFILE_ROLES,
+    MINIAPP_OWNER_PROFILE_ROLE,
+    _gift_recipients,
+    _gift_target_kind,
+    _miniapp_can_manage_mine_admin,
+    _miniapp_can_view_admin_panel,
+    _miniapp_can_view_mine_admin,
+    _miniapp_profile_role_groups,
+    _miniapp_profile_roles,
+    _miniapp_social_people,
+    _miniapp_social_target,
+    _shop_catalog,
+)
 from app.premium import PremiumService
 from app.user_profile import build_user_profile
 
@@ -229,7 +242,7 @@ def test_miniapp_profile_roles_include_owner_custom_and_moderation(tmp_path, mon
     finally:
         db.close()
 
-    assert [role["title"] for role in roles] == ["Админ", "Технарь", "Старший модератор"]
+    assert [role["title"] for role in roles] == ["Владелец", "Технарь", "Старший модератор"]
     assert roles[0]["kind"] == "owner"
     assert roles[1]["kind"] == "custom"
     assert roles[2]["chatCount"] == 1
@@ -241,13 +254,34 @@ def test_miniapp_mine_admin_access_is_owner_or_moderator(tmp_path, monkeypatch) 
     db.init()
     db.upsert_chat(-100, "Р§Р°С‚", "supergroup", None)
     db.set_chat_moderator_role(-100, 7, "assistant", 42)
+    db.set_miniapp_profile_role(8, "Админ", 42)
 
     try:
         assert _miniapp_can_view_mine_admin(db, 42) is True
         assert _miniapp_can_view_mine_admin(db, 7) is True
-        assert _miniapp_can_view_mine_admin(db, 8) is False
+        assert _miniapp_can_view_mine_admin(db, 8) is True
+        assert _miniapp_can_view_admin_panel(db, 8) is True
+        assert _miniapp_can_manage_mine_admin(db, 8) is True
+        assert _miniapp_can_manage_mine_admin(db, 7) is False
+        assert _miniapp_can_view_mine_admin(db, 9) is False
     finally:
         db.close()
+
+
+def test_miniapp_admin_profile_role_uses_admin_badge(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.set_miniapp_profile_role(8, "Админ", 42)
+
+    try:
+        roles = _miniapp_profile_roles(db, 8)
+    finally:
+        db.close()
+
+    assert roles[0]["key"] == "admin"
+    assert roles[0]["kind"] == "admin"
+    assert roles[0]["emoji"] == "🛡️"
 
 
 def test_miniapp_profile_role_groups_sync_owner_and_chat_moderators(tmp_path, monkeypatch) -> None:
@@ -258,23 +292,30 @@ def test_miniapp_profile_role_groups_sync_owner_and_chat_moderators(tmp_path, mo
     db.upsert_seen_user(-100, 42, "owner", "Owner", False)
     db.upsert_seen_user(-100, 7, "helper", "Helper", False)
     db.set_chat_moderator_role(-100, 7, "assistant", 42)
-    db.set_miniapp_profile_role(8, "Tech", 42)
+    db.set_miniapp_profile_role(8, "Админ", 42)
 
     try:
         groups = _miniapp_profile_role_groups(db)
     finally:
         db.close()
 
-    assert [group["label"] for group in groups] == [str(role["label"]) for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES]
+    assert [group["label"] for group in groups] == [
+        str(MINIAPP_OWNER_PROFILE_ROLE["label"]),
+        *[str(role["label"]) for role in MINIAPP_ASSIGNABLE_PROFILE_ROLES],
+    ]
+    owner_group = next(group for group in groups if group["key"] == "owner")
     admin_group = next(group for group in groups if group["key"] == "admin")
     assistant_group = next(group for group in groups if group["key"] == "assistant")
-    assert admin_group["items"][0]["user_id"] == 42
-    assert admin_group["items"][0]["source"] == "owner"
-    assert admin_group["items"][0]["canRemove"] is False
+    assert owner_group["items"][0]["user_id"] == 42
+    assert owner_group["items"][0]["source"] == "owner"
+    assert owner_group["items"][0]["canRemove"] is False
+    assert owner_group["assignable"] is False
+    assert admin_group["items"][0]["user_id"] == 8
+    assert admin_group["items"][0]["source"] == "miniapp"
+    assert admin_group["assignable"] is True
     assert assistant_group["items"][0]["user_id"] == 7
     assert assistant_group["items"][0]["source"] == "moderation"
     assert assistant_group["items"][0]["chatCount"] == 1
-    assert all(item["label"] != "Tech" for group in groups for item in group["items"])
 
 
 def test_dig_player_can_be_deleted_and_blocked(tmp_path) -> None:

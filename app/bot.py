@@ -139,6 +139,7 @@ MODERATOR_ROLE_SPECS = {
     "senior": {"title": "Старший модератор", "short": "Старший", "max_mute_minutes": 60, "rank": 3},
 }
 MODERATOR_ASSIGN_COMMANDS = {
+    "+админ": "app_admin",
     "+помощник": "assistant",
     "+модератор": "moderator",
     "+стмодератор": "senior",
@@ -10752,6 +10753,49 @@ async def roll_mute_top(message: Message) -> None:
         message,
         "roll",
         "Топ roll mute пока пуст. Статистика считается только для успешных <code>roll mute</code> после обновления бота.",
+    )
+
+
+@router.message(F.chat.type.in_(SUPPORTED_CHAT_TYPES), F.text.regexp(re.compile(r"^\+админ(?:\s|$)", re.IGNORECASE)))
+async def assign_miniapp_admin_role(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
+        return
+    owner_id = load_config().owner_id
+    if owner_id is None or int(message.from_user.id) != int(owner_id):
+        await safe_reply(message, "Назначать админов Mini App может только владелец.")
+        return
+
+    await remember_sender(message)
+    role, username, payload = parse_moderator_role_payload(message.text, MODERATOR_ASSIGN_COMMANDS)
+    if role != "app_admin":
+        return
+    target_hint, _expires_at = parse_moderator_duration(payload)
+    if username is None and target_hint.startswith("@"):
+        first, _, rest = target_hint.partition(" ")
+        username = normalize_username(first)
+        target_hint, _expires_at = parse_moderator_duration(rest)
+
+    target_id, target_name, error = await resolve_command_target(message, username)
+    if error:
+        await safe_reply(message, error)
+        return
+    if not target_id or not target_name:
+        return
+
+    member = await get_active_chat_member(message.bot, message.chat.id, target_id)
+    if member is None:
+        await safe_reply(message, "Не нашел этого пользователя среди активных участников чата.")
+        return
+
+    db.set_miniapp_profile_role(target_id, "Админ", message.from_user.id)
+    await safe_reply(message, f"{escape(target_name)} назначен: <b>Админ Mini App</b>.")
+    await notify_staff_moderation(
+        message.bot,
+        (
+            "🛡 <b>Назначение админа Mini App</b>\n"
+            f"Кто: {escape(render_moderation_actor(message, 'admin'))}\n"
+            f"Кому: {escape(target_name)}"
+        ),
     )
 
 

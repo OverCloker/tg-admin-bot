@@ -204,6 +204,13 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function showRadio()' in MINI_APP_HTML
     assert 'function showFriendsInfo()' in MINI_APP_HTML
     assert 'function showRoleManager()' in MINI_APP_HTML
+    assert 'function showAdminPanel()' in MINI_APP_HTML
+    assert 'function adminPanelButtonHtml(viewer)' in MINI_APP_HTML
+    assert 'viewer.canViewAdminPanel' in MINI_APP_HTML
+    assert 'api("/miniapp/profile/admin")' in MINI_APP_HTML
+    assert '🛡️ Админ' in MINI_APP_HTML
+    assert '${adminPanelButtonHtml(viewer)}' in MINI_APP_HTML
+    assert 'group.assignable === false ? ""' in MINI_APP_HTML
     assert 'function roleGroupHtml(group)' in MINI_APP_HTML
     assert 'roleTarget_${escapeHtml(group.key)}' in MINI_APP_HTML
     assert 'viewer.canManageRoles' in MINI_APP_HTML
