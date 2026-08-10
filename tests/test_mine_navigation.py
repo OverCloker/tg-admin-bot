@@ -225,9 +225,13 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert "grid-template-columns:repeat(auto-fit, minmax(94px, 1fr));" in MINI_APP_HTML
     assert ".mine-admin-row span { min-width:0; overflow-wrap:break-word; word-break:normal; }" in MINI_APP_HTML
     assert ".mine-admin-title" in MINI_APP_HTML
-    assert "gap:2px 8px;" in MINI_APP_HTML
+    assert ".mine-admin-title {\n      display:block;" in MINI_APP_HTML
+    assert ".mine-admin-username {\n      display:block;" in MINI_APP_HTML
+    assert "margin-top:3px;" in MINI_APP_HTML
     assert "function mineAdminPlayerTitleHtml(player, prefix = \"\")" in MINI_APP_HTML
+    assert 'return `<div class="mine-admin-title"><b>${escapeHtml(prefix + name)}</b>${username}</div>`;' in MINI_APP_HTML
     assert 'class="mine-admin-username"' in MINI_APP_HTML
+    assert "gap:2px 8px;" not in MINI_APP_HTML
     assert "mineAdminPlayerName" not in MINI_APP_HTML
     assert ".mine-admin-row span { overflow-wrap:anywhere; }" not in MINI_APP_HTML
     assert "background:var(--input);" not in MINI_APP_HTML

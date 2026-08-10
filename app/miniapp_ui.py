@@ -354,14 +354,18 @@ MINI_APP_HTML = r"""<!doctype html>
     .mine-admin-row b,
     .mine-admin-row span { min-width:0; overflow-wrap:break-word; word-break:normal; }
     .mine-admin-title {
-      display:flex;
-      flex-wrap:wrap;
-      gap:2px 8px;
-      align-items:baseline;
+      display:block;
       min-width:0;
     }
     .mine-admin-title b { overflow-wrap:break-word; }
-    .mine-admin-username { color:var(--text); font-weight:850; overflow-wrap:anywhere; }
+    .mine-admin-username {
+      display:block;
+      margin-top:3px;
+      color:var(--text);
+      font-weight:850;
+      line-height:1.16;
+      overflow-wrap:anywhere;
+    }
     .mine-admin-row > .btn { width:100%; margin:0; }
     .mine-admin-row > .utility-actions {
       width:100%;
@@ -1752,7 +1756,7 @@ MINI_APP_HTML = r"""<!doctype html>
   function mineAdminPlayerTitleHtml(player, prefix = "") {
     const name = player.full_name || String(player.user_id);
     const username = player.username ? `<span class="mine-admin-username">@${escapeHtml(player.username)}</span>` : "";
-    return `<span class="mine-admin-title"><b>${escapeHtml(prefix + name)}</b>${username}</span>`;
+    return `<div class="mine-admin-title"><b>${escapeHtml(prefix + name)}</b>${username}</div>`;
   }
 
   function mineAdminRowHtml(player, canManage = false) {
