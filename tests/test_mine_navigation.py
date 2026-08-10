@@ -227,8 +227,10 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert ".mine-admin-title" in MINI_APP_HTML
     assert ".mine-admin-title {\n      display:block;" in MINI_APP_HTML
     assert ".mine-admin-username {\n      display:block;" in MINI_APP_HTML
-    assert "margin-top:3px;" in MINI_APP_HTML
+    assert "margin-top:6px;" in MINI_APP_HTML
+    assert ".mine-admin-username-label" in MINI_APP_HTML
     assert "function mineAdminPlayerTitleHtml(player, prefix = \"\")" in MINI_APP_HTML
+    assert '<span class="mine-admin-username-label">Ник:</span>@${escapeHtml(player.username)}' in MINI_APP_HTML
     assert 'return `<div class="mine-admin-title"><b>${escapeHtml(prefix + name)}</b>${username}</div>`;' in MINI_APP_HTML
     assert 'class="mine-admin-username"' in MINI_APP_HTML
     assert "gap:2px 8px;" not in MINI_APP_HTML

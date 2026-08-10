@@ -360,11 +360,16 @@ MINI_APP_HTML = r"""<!doctype html>
     .mine-admin-title b { overflow-wrap:break-word; }
     .mine-admin-username {
       display:block;
-      margin-top:3px;
+      margin-top:6px;
       color:var(--text);
-      font-weight:850;
-      line-height:1.16;
+      font-weight:760;
+      line-height:1.2;
       overflow-wrap:anywhere;
+    }
+    .mine-admin-username-label {
+      color:var(--muted);
+      font-weight:650;
+      margin-right:6px;
     }
     .mine-admin-row > .btn { width:100%; margin:0; }
     .mine-admin-row > .utility-actions {
@@ -1755,7 +1760,9 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function mineAdminPlayerTitleHtml(player, prefix = "") {
     const name = player.full_name || String(player.user_id);
-    const username = player.username ? `<span class="mine-admin-username">@${escapeHtml(player.username)}</span>` : "";
+    const username = player.username
+      ? `<span class="mine-admin-username"><span class="mine-admin-username-label">Ник:</span>@${escapeHtml(player.username)}</span>`
+      : "";
     return `<div class="mine-admin-title"><b>${escapeHtml(prefix + name)}</b>${username}</div>`;
   }
 
