@@ -293,7 +293,10 @@ def test_miniapp_has_interface_themes() -> None:
     assert 'body[data-theme="material"]' in MINI_APP_HTML
     assert 'body[data-theme="glass"]' in MINI_APP_HTML
     assert "--app-bg-layer:" in MINI_APP_HTML
-    assert "body::before" in MINI_APP_HTML
+    assert 'class="app-bg" aria-hidden="true"' in MINI_APP_HTML
+    assert ".app-bg {" in MINI_APP_HTML
+    assert "main { position: relative; z-index: 1;" in MINI_APP_HTML
+    assert "body::before" not in MINI_APP_HTML
     assert "background-position: center top;" in MINI_APP_HTML
     assert "background-attachment: fixed;" not in MINI_APP_HTML
     assert "Material You" in MINI_APP_HTML

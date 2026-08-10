@@ -86,23 +86,22 @@ MINI_APP_HTML = r"""<!doctype html>
     html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
     body {
       position: relative;
-      isolation: isolate;
       font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
       padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
-      background: var(--bg);
+      background: transparent;
     }
-    body::before {
-      content: "";
+    .app-bg {
       position: fixed;
       inset: 0;
-      z-index: -1;
+      z-index: 0;
       pointer-events: none;
       background: var(--app-bg-layer);
       background-size: cover;
       background-position: center top;
+      transform: translateZ(0);
     }
     button { font: inherit; }
-    main { width: min(100%, 560px); margin: 0 auto; }
+    main { position: relative; z-index: 1; width: min(100%, 560px); margin: 0 auto; }
     .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .top-actions { display: flex; align-items: center; gap: 8px; }
     .top-profile {
@@ -1113,6 +1112,7 @@ MINI_APP_HTML = r"""<!doctype html>
   </style>
 </head>
 <body>
+<div class="app-bg" aria-hidden="true"></div>
 <main>
   <header class="top">
     <div>
