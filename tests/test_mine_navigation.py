@@ -207,6 +207,15 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function showAdminPanel()' in MINI_APP_HTML
     assert 'function showTriggerManager(chatId = null, editor = null)' in MINI_APP_HTML
     assert 'function triggerRowHtml(item)' in MINI_APP_HTML
+    assert 'function triggerMediaBoxHtml(editor, variantType, title, accept, note)' in MINI_APP_HTML
+    assert 'function addTriggerAnswerInput()' in MINI_APP_HTML
+    assert 'function editMiniAppTrigger(chatId, trigger)' in MINI_APP_HTML
+    assert 'class="triggerAnswerInput"' in MINI_APP_HTML
+    assert 'triggerMediaBoxHtml(editor, "photo"' in MINI_APP_HTML
+    assert 'triggerMediaBoxHtml(editor, "animation"' in MINI_APP_HTML
+    assert 'triggerMediaBoxHtml(editor, "audio"' in MINI_APP_HTML
+    assert 'apiForm(`/miniapp/profile/triggers/media?media_type=${encodeURIComponent(variantType)}`' in MINI_APP_HTML
+    assert "Максимум 10 текстовых ответов" in MINI_APP_HTML
     assert 'function saveMiniAppTrigger(chatId)' in MINI_APP_HTML
     assert 'function deleteMiniAppTrigger(chatId, trigger)' in MINI_APP_HTML
     assert 'function enforceMiniAppTheme()' in MINI_APP_HTML

@@ -410,6 +410,12 @@ MINI_APP_HTML = r"""<!doctype html>
       width:100%;
       grid-template-columns:repeat(auto-fit, minmax(94px, 1fr));
     }
+    .trigger-answer-list { display:grid; gap:8px; }
+    .trigger-answer-row { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:8px; align-items:start; }
+    .trigger-answer-row textarea { min-height:72px; }
+    .trigger-media-box { display:grid; gap:8px; padding:10px; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel-2); }
+    .trigger-media-box input[type="file"] { min-height:0; padding:8px; }
+    .trigger-media-status { font-size:13px; color:var(--muted); overflow-wrap:anywhere; }
     .friend-list { display: grid; gap: 8px; margin-top: 10px; }
     .friend-row {
       display: grid;
@@ -1241,6 +1247,17 @@ MINI_APP_HTML = r"""<!doctype html>
     return data;
   }
 
+  async function apiForm(path, formData) {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { "X-Telegram-Init-Data": telegram ? telegram.initData : "" },
+      body: formData
+    });
+    const data = await response.json().catch(() => ({ detail: "Сервер вернул неверный ответ." }));
+    if (!response.ok) throw new Error(data.detail || "Ошибка запроса.");
+    return data;
+  }
+
   function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, char => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -1829,16 +1846,50 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   function triggerRowHtml(item) {
-    const media = item.hasMedia ? ` <span class="muted">· медиа</span>` : "";
+    const variants = item.variants || [];
+    const mediaCount = variants.filter(variant => variant.hasMedia).length;
+    const textCount = variants.filter(variant => !variant.hasMedia && (variant.text || "").trim()).length;
+    const summary = [
+      textCount ? `${textCount} текст.` : "",
+      mediaCount ? `${mediaCount} медиа` : ""
+    ].filter(Boolean).join(" · ") || (item.hasMedia ? "медиа" : "1 ответ");
     return `<div class="admin-list-row">
       <span>
-        <b>${escapeHtml(item.trigger)}</b>${media}<br>
-        <span class="muted">${escapeHtml(item.text || "Без текста")}</span>
+        <b>${escapeHtml(item.trigger)}</b><br>
+        <span class="muted">${escapeHtml(summary)} · ${escapeHtml(item.text || "Без текста")}</span>
       </span>
       <span class="utility-actions" style="margin:0">
-        <button class="btn secondary" style="margin:0" onclick="showTriggerManager(${Number(item.chatId)}, { trigger: ${jsAttrString(item.trigger)}, text: ${jsAttrString(item.text || "")} })">Редактировать</button>
+        <button class="btn secondary" style="margin:0" onclick="editMiniAppTrigger(${Number(item.chatId)}, ${jsAttrString(item.trigger)})">Редактировать</button>
         <button class="btn danger" style="margin:0" onclick="deleteMiniAppTrigger(${Number(item.chatId)}, ${jsAttrString(item.trigger)})">Удалить</button>
       </span>
+    </div>`;
+  }
+
+  function triggerVariantRows(editor) {
+    const variants = editor && Array.isArray(editor.variants) && editor.variants.length
+      ? editor.variants
+      : (editor && editor.text ? [{ variantType: "text", text: editor.text }] : [{ variantType: "text", text: "" }]);
+    const textVariants = variants.filter(item => (item.variantType || "text") === "text").slice(0, 10);
+    return (textVariants.length ? textVariants : [{ text: "" }]).map((item, index) => `<div class="trigger-answer-row">
+      <textarea class="triggerAnswerInput" placeholder="Вариант ответа ${index + 1}">${escapeHtml(item.text || "")}</textarea>
+      <button class="btn danger" style="margin:0" onclick="this.closest('.trigger-answer-row').remove()">×</button>
+    </div>`).join("");
+  }
+
+  function triggerMediaVariant(editor, variantType) {
+    const variants = editor && Array.isArray(editor.variants) ? editor.variants : [];
+    return variants.find(item => (item.variantType || "") === variantType) || {};
+  }
+
+  function triggerMediaBoxHtml(editor, variantType, title, accept, note) {
+    const item = triggerMediaVariant(editor, variantType);
+    const mediaFileId = item.mediaFileId || "";
+    const status = mediaFileId ? "Сейчас сохранено медиа. Новый файл заменит старый." : note;
+    return `<div class="trigger-media-box" data-trigger-media="${escapeHtml(variantType)}" data-media-file-id="${escapeHtml(mediaFileId)}" data-media-type="${escapeHtml(item.mediaType || variantType)}">
+      <b>${escapeHtml(title)}</b>
+      <input class="triggerMediaFile" type="file" accept="${escapeHtml(accept)}">
+      <textarea class="triggerMediaCaption" placeholder="Подпись, необязательно">${escapeHtml(item.text || "")}</textarea>
+      <span class="trigger-media-status">${escapeHtml(status)}</span>
     </div>`;
   }
 
@@ -1848,11 +1899,36 @@ MINI_APP_HTML = r"""<!doctype html>
       <h2>${editor.trigger ? "Редактировать триггер" : "Добавить триггер"}</h2>
       <div class="mine-admin-form">
         <input id="triggerWord" class="wide" placeholder="Слово или фраза" value="${escapeHtml(editor.trigger || "")}">
-        <textarea id="triggerText" class="wide" placeholder="Ответ бота">${escapeHtml(editor.text || "")}</textarea>
+        <div class="wide">
+          <p class="muted">Добавить ответ. Максимум 10 текстовых вариантов, бот выберет случайный.</p>
+          <div id="triggerAnswers" class="trigger-answer-list">${triggerVariantRows(editor)}</div>
+          <button class="btn secondary" style="margin-top:8px" onclick="addTriggerAnswerInput()">Добавить ответ</button>
+        </div>
+        <div class="wide">${triggerMediaBoxHtml(editor, "photo", "Фото или фото с подписью", "image/*", "Можно добавить фото и подпись.")}</div>
+        <div class="wide">${triggerMediaBoxHtml(editor, "animation", "GIF или GIF с подписью", "image/gif,video/mp4", "Можно добавить GIF/анимацию и подпись.")}</div>
+        <div class="wide">${triggerMediaBoxHtml(editor, "audio", "Аудио-метка до 30 сек", "audio/*", "Загрузи короткую аудио-метку до 30 секунд.")}</div>
         <button class="btn" onclick="saveMiniAppTrigger(${Number(chatId)})">Сохранить</button>
         <button class="btn secondary" onclick="showTriggerManager(${Number(chatId)})">Отмена</button>
       </div>
     </section>`;
+  }
+
+  function addTriggerAnswerInput() {
+    const list = document.getElementById("triggerAnswers");
+    if (!list) return;
+    if (list.querySelectorAll(".triggerAnswerInput").length >= 10) {
+      alert("Максимум 10 текстовых ответов на один триггер.");
+      return;
+    }
+    const row = document.createElement("div");
+    row.className = "trigger-answer-row";
+    row.innerHTML = `<textarea class="triggerAnswerInput" placeholder="Вариант ответа"></textarea><button class="btn danger" style="margin:0" onclick="this.closest('.trigger-answer-row').remove()">×</button>`;
+    list.appendChild(row);
+  }
+
+  function editMiniAppTrigger(chatId, trigger) {
+    const item = (window.currentMiniAppTriggers || []).find(row => row.trigger === trigger);
+    showTriggerManager(chatId, item || { trigger, text: "" });
   }
 
   async function showTriggerManager(chatId = null, editor = null) {
@@ -1864,9 +1940,10 @@ MINI_APP_HTML = r"""<!doctype html>
       const chats = data.chats || [];
       const selectedChatId = Number(data.selectedChatId || 0);
       const triggers = data.triggers || [];
+      window.currentMiniAppTriggers = triggers;
       const selectedChat = data.selectedChat || {};
       const addButton = selectedChatId
-        ? `<button class="btn" style="margin:0" onclick="showTriggerManager(${selectedChatId}, { trigger: '', text: '' })">Добавить триггер</button>`
+        ? `<button class="btn" style="margin:0" onclick="showTriggerManager(${selectedChatId}, { trigger: '', variants: [{ variantType: 'text', text: '' }] })">Добавить триггер</button>`
         : "";
       content.innerHTML = `<section class="panel">
         <h2>Триггеры</h2>
@@ -1892,15 +1969,40 @@ MINI_APP_HTML = r"""<!doctype html>
 
   async function saveMiniAppTrigger(chatId) {
     const trigger = document.getElementById("triggerWord")?.value || "";
-    const text = document.getElementById("triggerText")?.value || "";
-    if (!trigger.trim() || !text.trim()) {
-      alert("Укажи триггер и ответ.");
+    if (!trigger.trim()) {
+      alert("Укажи триггер.");
       return;
     }
     try {
+      const variants = [];
+      document.querySelectorAll(".triggerAnswerInput").forEach(node => {
+        const text = node.value || "";
+        if (text.trim()) variants.push({ variantType: "text", text });
+      });
+      for (const box of document.querySelectorAll("[data-trigger-media]")) {
+        const variantType = box.dataset.triggerMedia || "";
+        const input = box.querySelector(".triggerMediaFile");
+        const caption = box.querySelector(".triggerMediaCaption")?.value || "";
+        let mediaFileId = box.dataset.mediaFileId || "";
+        let mediaType = box.dataset.mediaType || variantType;
+        if (input && input.files && input.files[0]) {
+          const form = new FormData();
+          form.append("file", input.files[0]);
+          const uploaded = await apiForm(`/miniapp/profile/triggers/media?media_type=${encodeURIComponent(variantType)}`, form);
+          mediaFileId = uploaded.mediaFileId || "";
+          mediaType = uploaded.mediaType || variantType;
+        }
+        if (mediaFileId) {
+          variants.push({ variantType, text: caption, mediaType, mediaFileId });
+        }
+      }
+      if (!variants.length) {
+        alert("Добавь хотя бы один ответ или медиа.");
+        return;
+      }
       await api("/miniapp/profile/triggers", {
         method: "POST",
-        body: JSON.stringify({ chatId: Number(chatId), trigger, text })
+        body: JSON.stringify({ chatId: Number(chatId), trigger, variants })
       });
       showNotice("Триггер сохранён.");
       showTriggerManager(chatId);

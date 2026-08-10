@@ -6,6 +6,7 @@ from app.miniapp import (
     MINIAPP_OWNER_PROFILE_ROLE,
     MiniAppTriggerDelete,
     MiniAppTriggerSave,
+    MiniAppTriggerVariant,
     _gift_recipients,
     _gift_target_kind,
     _miniapp_can_manage_mine_admin,
@@ -324,6 +325,69 @@ def test_miniapp_trigger_edit_preserves_existing_media(tmp_path, monkeypatch) ->
     assert listed["triggers"][0]["text"] == "новый ответ"
     assert listed["triggers"][0]["mediaType"] == "photo"
     assert listed["triggers"][0]["hasMedia"] is True
+    assert listed["triggers"][0]["variants"][0]["variantType"] == "photo"
+
+
+def test_miniapp_trigger_can_store_multiple_variants(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-100, "Чат", "supergroup", None)
+    db.close()
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 42})
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+
+    miniapp.miniapp_profile_trigger_save(
+        MiniAppTriggerSave(
+            chatId=-100,
+            trigger="кот",
+            variants=[
+                MiniAppTriggerVariant(variantType="text", text="мяу"),
+                MiniAppTriggerVariant(variantType="text", text="мур"),
+                MiniAppTriggerVariant(variantType="photo", text="смотри", mediaType="photo", mediaFileId="local:/tmp/cat.jpg"),
+                MiniAppTriggerVariant(variantType="animation", text="гиф", mediaType="animation", mediaFileId="local:/tmp/cat.gif"),
+                MiniAppTriggerVariant(variantType="audio", text="", mediaType="audio", mediaFileId="local:/tmp/cat.mp3"),
+            ],
+        ),
+        x_telegram_init_data="test",
+    )
+    db = Database(str(db_path))
+    try:
+        options = db.list_trigger_answer_options(-100)
+        listed = miniapp.miniapp_profile_triggers(chat_id=-100, x_telegram_init_data="test")
+    finally:
+        db.close()
+
+    assert len(options) == 5
+    assert [item.text for item in options[:2]] == ["мяу", "мур"]
+    assert listed["triggers"][0]["variants"][2]["variantType"] == "photo"
+    assert listed["triggers"][0]["variants"][4]["mediaType"] == "audio"
+
+
+def test_miniapp_trigger_text_variants_are_limited_to_ten(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-100, "Чат", "supergroup", None)
+    db.close()
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 42})
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+
+    try:
+        miniapp.miniapp_profile_trigger_save(
+            MiniAppTriggerSave(
+                chatId=-100,
+                trigger="кот",
+                variants=[MiniAppTriggerVariant(variantType="text", text=str(index)) for index in range(11)],
+            ),
+            x_telegram_init_data="test",
+        )
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 400
+    else:
+        raise AssertionError("Expected HTTP 400 for eleven text variants")
 
 
 def test_miniapp_trigger_management_is_owner_or_app_admin(tmp_path, monkeypatch) -> None:

@@ -7,6 +7,7 @@ import os
 import secrets
 import base64
 import time
+from contextlib import suppress
 from pathlib import Path
 from threading import Lock
 from datetime import datetime, timezone
@@ -15,7 +16,7 @@ from urllib.parse import parse_qsl
 import aiohttp
 from aiogram import Bot
 from aiogram.types import LabeledPrice
-from fastapi import APIRouter, Header, HTTPException, Query, Response
+from fastapi import APIRouter, File, Header, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from .config import load_config
@@ -47,6 +48,12 @@ from .user_profile import build_user_profile
 
 router = APIRouter()
 DIG_LOCK = Lock()
+TRIGGER_MEDIA_MAX_BYTES = 12 * 1024 * 1024
+TRIGGER_MEDIA_TYPES = {
+    "photo": {"image/jpeg", "image/png", "image/webp"},
+    "animation": {"image/gif", "video/mp4"},
+    "audio": {"audio/mpeg", "audio/mp3", "audio/ogg", "audio/wav", "audio/webm", "audio/mp4", "audio/x-m4a"},
+}
 
 
 class TicketPick(BaseModel):
@@ -70,10 +77,18 @@ class ProfileRoleClear(BaseModel):
     target: str = Field(min_length=1, max_length=64)
 
 
+class MiniAppTriggerVariant(BaseModel):
+    variantType: str = Field(default="text", min_length=1, max_length=32)
+    text: str = Field(default="", max_length=4000)
+    mediaType: str | None = Field(default=None, max_length=32)
+    mediaFileId: str | None = Field(default=None, max_length=1000)
+
+
 class MiniAppTriggerSave(BaseModel):
     chatId: int
     trigger: str = Field(min_length=1, max_length=120)
-    text: str = Field(min_length=1, max_length=4000)
+    text: str | None = Field(default=None, max_length=4000)
+    variants: list[MiniAppTriggerVariant] = Field(default_factory=list, max_length=13)
 
 
 class MiniAppTriggerDelete(BaseModel):
@@ -645,7 +660,8 @@ def _miniapp_chat_public(chat: Any) -> dict[str, Any]:
     }
 
 
-def _miniapp_trigger_public(item: Any) -> dict[str, Any]:
+def _miniapp_trigger_public(db: Database, item: Any) -> dict[str, Any]:
+    variants = _miniapp_trigger_variants_public(db, item.chat_id, item.trigger)
     return {
         "chatId": int(item.chat_id),
         "trigger": item.trigger,
@@ -653,7 +669,81 @@ def _miniapp_trigger_public(item: Any) -> dict[str, Any]:
         "mediaType": item.media_type or "",
         "hasMedia": bool(item.media_type and item.media_file_id),
         "updatedAt": item.updated_at,
+        "variants": variants,
     }
+
+
+def _miniapp_trigger_variant_public(item: Any) -> dict[str, Any]:
+    media_type = getattr(item, "media_type", None) or ""
+    variant_type = getattr(item, "variant_type", None) or media_type or "text"
+    return {
+        "id": int(getattr(item, "id", 0) or 0),
+        "chatId": int(item.chat_id),
+        "trigger": item.trigger,
+        "variantType": variant_type,
+        "text": getattr(item, "text", "") or "",
+        "mediaType": media_type,
+        "mediaFileId": getattr(item, "media_file_id", None) or "",
+        "hasMedia": bool(getattr(item, "media_type", None) and getattr(item, "media_file_id", None)),
+    }
+
+
+def _miniapp_trigger_variants_public(db: Database, chat_id: int, trigger: str) -> list[dict[str, Any]]:
+    variants = db.list_trigger_variants(chat_id, trigger)
+    if variants:
+        return [_miniapp_trigger_variant_public(item) for item in variants]
+    item = next((row for row in db.list_triggers(chat_id) if row.trigger == normalize_trigger(trigger)), None)
+    return [_miniapp_trigger_variant_public(item)] if item else []
+
+
+def _trigger_media_dir() -> Path:
+    root = Path(load_config().db_path).resolve().parent / "trigger_media"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _clean_trigger_variants(payload: MiniAppTriggerSave) -> list[dict[str, object]]:
+    raw_variants: list[MiniAppTriggerVariant] = list(payload.variants)
+    if not raw_variants and payload.text is not None:
+        raw_variants = [MiniAppTriggerVariant(variantType="text", text=payload.text)]
+    cleaned: list[dict[str, object]] = []
+    text_count = 0
+    media_seen: set[str] = set()
+    for item in raw_variants:
+        variant_type = (item.variantType or "text").strip().casefold()
+        if variant_type == "gif":
+            variant_type = "animation"
+        if variant_type not in {"text", "photo", "animation", "audio"}:
+            raise HTTPException(400, "Неизвестный тип ответа триггера.")
+        text = (item.text or "").strip()
+        media_type = (item.mediaType or "").strip() or None
+        media_file_id = (item.mediaFileId or "").strip() or None
+        if variant_type == "text":
+            text_count += 1
+            if text_count > 10:
+                raise HTTPException(400, "На один триггер можно добавить максимум 10 текстовых ответов.")
+            if not text:
+                continue
+            media_type = None
+            media_file_id = None
+        else:
+            if variant_type in media_seen:
+                raise HTTPException(400, "Для каждого типа медиа можно сохранить один вариант.")
+            media_seen.add(variant_type)
+            if not media_file_id:
+                continue
+            media_type = media_type or variant_type
+        cleaned.append(
+            {
+                "variant_type": variant_type,
+                "text": text,
+                "media_type": media_type,
+                "media_file_id": media_file_id,
+            }
+        )
+    if not cleaned:
+        raise HTTPException(400, "Добавь хотя бы один ответ для триггера.")
+    return cleaned
 
 
 def _miniapp_dig_player_public(db: Database, player: Any) -> dict[str, Any]:
@@ -2087,7 +2177,7 @@ def miniapp_profile_triggers(
             "selectedChatId": selected_chat_id if selected_chat else 0,
             "selectedChat": _miniapp_chat_public(selected_chat) if selected_chat else None,
             "chats": [_miniapp_chat_public(chat) for chat in chats],
-            "triggers": [_miniapp_trigger_public(item) for item in triggers],
+            "triggers": [_miniapp_trigger_public(db, item) for item in triggers],
         }
     finally:
         db.close()
@@ -2109,27 +2199,85 @@ def miniapp_profile_trigger_save(
         if not normalized:
             raise HTTPException(400, "Укажи слово или фразу для триггера.")
         existing = next((item for item in db.list_triggers(payload.chatId) if item.trigger == normalized), None)
-        db.set_trigger(
-            payload.chatId,
-            normalized,
-            payload.text,
-            user["id"],
-            existing.media_type if existing else None,
-            existing.media_file_id if existing else None,
-        )
+        if not payload.variants and payload.text is not None and existing and existing.media_type and existing.media_file_id:
+            payload.variants.append(
+                MiniAppTriggerVariant(
+                    variantType=existing.media_type,
+                    text=payload.text,
+                    mediaType=existing.media_type,
+                    mediaFileId=existing.media_file_id,
+                )
+            )
+        variants = _clean_trigger_variants(payload)
+        db.replace_trigger_variants(payload.chatId, normalized, variants, user["id"])
+        saved = next((item for item in db.list_triggers(payload.chatId) if item.trigger == normalized), None)
         return {
             "ok": True,
             "message": "Триггер сохранён.",
-            "trigger": {
-                "chatId": int(payload.chatId),
-                "trigger": normalized,
-                "text": payload.text.strip(),
-                "mediaType": existing.media_type if existing else "",
-                "hasMedia": bool(existing and existing.media_type and existing.media_file_id),
-            },
+            "trigger": _miniapp_trigger_public(db, saved) if saved else None,
         }
     finally:
         db.close()
+
+
+@router.post("/miniapp/profile/triggers/media")
+async def miniapp_profile_trigger_media_upload(
+    media_type: str,
+    file: UploadFile = File(...),
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not _miniapp_can_manage_triggers(db, user["id"]):
+            raise HTTPException(403, "Триггеры доступны владельцу и админам Mini App.")
+    finally:
+        db.close()
+    normalized_type = media_type.strip().casefold()
+    if normalized_type == "gif":
+        normalized_type = "animation"
+    if normalized_type not in TRIGGER_MEDIA_TYPES:
+        raise HTTPException(400, "Неподдерживаемый тип медиа.")
+    content_type = (file.content_type or "").split(";", 1)[0].strip().casefold()
+    allowed = TRIGGER_MEDIA_TYPES[normalized_type]
+    if content_type and content_type not in allowed:
+        raise HTTPException(400, "Файл не похож на выбранный тип медиа.")
+    suffix = Path(file.filename or "").suffix.lower()
+    if not suffix:
+        suffix = ".gif" if normalized_type == "animation" else ".mp3" if normalized_type == "audio" else ".jpg"
+    target = _trigger_media_dir() / f"{int(time.time())}_{secrets.token_hex(10)}{suffix}"
+    size = 0
+    with target.open("wb") as fh:
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > TRIGGER_MEDIA_MAX_BYTES:
+                with suppress(OSError):
+                    target.unlink()
+                raise HTTPException(400, "Файл слишком большой для триггера.")
+            fh.write(chunk)
+    if normalized_type == "audio":
+        try:
+            import av  # type: ignore
+
+            with av.open(str(target)) as container:
+                duration = float(container.duration or 0) / 1_000_000 if container.duration else 0.0
+            if duration and duration > 30.5:
+                with suppress(OSError):
+                    target.unlink()
+                raise HTTPException(400, "Аудио-метка должна быть до 30 секунд.")
+        except HTTPException:
+            raise
+        except Exception:
+            with suppress(OSError):
+                target.unlink()
+            raise HTTPException(400, "Не удалось проверить длительность аудио.")
+    return {
+        "ok": True,
+        "mediaType": normalized_type,
+        "mediaFileId": f"local:{target}",
+        "fileName": file.filename or target.name,
+        "size": size,
+    }
 
 
 @router.post("/miniapp/profile/triggers/delete")

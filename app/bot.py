@@ -643,7 +643,7 @@ def cached_triggers(chat_id: int):
     cached = TRIGGER_CACHE.get(chat_id)
     if cached and now - cached[0] < RUNTIME_CACHE_SECONDS:
         return cached[1]
-    items = db.list_triggers(chat_id)
+    items = db.list_trigger_answer_options(chat_id)
     TRIGGER_CACHE[chat_id] = (now, items)
     return items
 
@@ -3560,26 +3560,36 @@ async def send_auto_reply_item(message: Message, item) -> None:
         return
 
     caption = text or None
+    media_payload = media_file_id
+    if isinstance(media_file_id, str) and media_file_id.startswith("local:"):
+        local_path = Path(media_file_id.removeprefix("local:"))
+        if not local_path.exists():
+            if text:
+                await safe_reply(message, text, disable_web_page_preview=True)
+            return
+        media_payload = FSInputFile(local_path)
     kwargs = {
         "chat_id": message.chat.id,
         "reply_to_message_id": message.message_id,
     }
     for attempt in range(2):
         try:
-            if media_type == "animation":
-                await message.bot.send_animation(**kwargs, animation=media_file_id, caption=caption)
+            if media_type == "photo":
+                await message.bot.send_photo(**kwargs, photo=media_payload, caption=caption)
+            elif media_type == "animation":
+                await message.bot.send_animation(**kwargs, animation=media_payload, caption=caption)
             elif media_type == "voice":
-                await message.bot.send_voice(**kwargs, voice=media_file_id, caption=caption)
+                await message.bot.send_voice(**kwargs, voice=media_payload, caption=caption)
             elif media_type == "audio":
-                await message.bot.send_audio(**kwargs, audio=media_file_id, caption=caption)
+                await message.bot.send_audio(**kwargs, audio=media_payload, caption=caption)
             elif media_type == "video":
-                await message.bot.send_video(**kwargs, video=media_file_id, caption=caption)
+                await message.bot.send_video(**kwargs, video=media_payload, caption=caption)
             elif media_type == "video_note":
-                await message.bot.send_video_note(**kwargs, video_note=media_file_id)
+                await message.bot.send_video_note(**kwargs, video_note=media_payload)
                 if text:
                     await safe_reply(message, text, disable_web_page_preview=True)
             elif media_type == "document":
-                await message.bot.send_document(**kwargs, document=media_file_id, caption=caption)
+                await message.bot.send_document(**kwargs, document=media_payload, caption=caption)
             elif text:
                 await safe_reply(message, text, disable_web_page_preview=True)
             return

@@ -47,6 +47,20 @@ class TriggerReply:
 
 
 @dataclass(frozen=True)
+class TriggerReplyVariant:
+    id: int
+    chat_id: int
+    trigger: str
+    variant_type: str
+    text: str
+    media_type: str | None
+    media_file_id: str | None
+    position: int
+    updated_by: int | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class SeenUser:
     chat_id: int
     user_id: int
@@ -427,6 +441,22 @@ class Database:
                 primary key (chat_id, trigger),
                 foreign key (chat_id) references chats(chat_id) on delete cascade
             );
+
+            create table if not exists trigger_reply_variants (
+                id integer primary key autoincrement,
+                chat_id integer not null,
+                trigger text not null,
+                variant_type text not null,
+                text text not null default '',
+                media_type text,
+                media_file_id text,
+                position integer not null default 0,
+                updated_by integer,
+                updated_at text not null,
+                foreign key (chat_id, trigger) references trigger_replies(chat_id, trigger) on delete cascade
+            );
+            create index if not exists idx_trigger_reply_variants_lookup
+                on trigger_reply_variants(chat_id, trigger, position, id);
 
             create table if not exists seen_users (
                 chat_id integer not null,
@@ -1671,9 +1701,14 @@ class Database:
         self._conn.commit()
 
     def delete_trigger(self, chat_id: int, trigger: str) -> bool:
+        normalized = normalize_trigger(trigger)
+        self._conn.execute(
+            "delete from trigger_reply_variants where chat_id = ? and trigger = ?",
+            (chat_id, normalized),
+        )
         cur = self._conn.execute(
             "delete from trigger_replies where chat_id = ? and trigger = ?",
-            (chat_id, normalize_trigger(trigger)),
+            (chat_id, normalized),
         )
         self._conn.commit()
         return cur.rowcount > 0
@@ -1689,6 +1724,84 @@ class Database:
             (chat_id,),
         ).fetchall()
         return [TriggerReply(**dict(row)) for row in rows]
+
+    def replace_trigger_variants(
+        self,
+        chat_id: int,
+        trigger: str,
+        variants: list[dict[str, object]],
+        updated_by: int | None,
+    ) -> None:
+        normalized = normalize_trigger(trigger)
+        fallback_text = ""
+        fallback_media_type = None
+        fallback_media_file_id = None
+        if variants:
+            first = variants[0]
+            fallback_text = str(first.get("text") or "").strip()
+            fallback_media_type = str(first.get("media_type") or "") or None
+            fallback_media_file_id = str(first.get("media_file_id") or "") or None
+        self.set_trigger(chat_id, normalized, fallback_text, updated_by, fallback_media_type, fallback_media_file_id)
+        self._conn.execute(
+            "delete from trigger_reply_variants where chat_id = ? and trigger = ?",
+            (chat_id, normalized),
+        )
+        now = utc_now()
+        for position, variant in enumerate(variants):
+            variant_type = str(variant.get("variant_type") or "text").strip() or "text"
+            text = str(variant.get("text") or "").strip()
+            media_type = str(variant.get("media_type") or "") or None
+            media_file_id = str(variant.get("media_file_id") or "") or None
+            self._conn.execute(
+                """
+                insert into trigger_reply_variants
+                    (chat_id, trigger, variant_type, text, media_type, media_file_id, position, updated_by, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (chat_id, normalized, variant_type, text, media_type, media_file_id, position, updated_by, now),
+            )
+        self._conn.commit()
+
+    def list_trigger_variants(self, chat_id: int, trigger: str) -> list[TriggerReplyVariant]:
+        normalized = normalize_trigger(trigger)
+        rows = self._conn.execute(
+            """
+            select id, chat_id, trigger, variant_type, text, media_type, media_file_id, position, updated_by, updated_at
+            from trigger_reply_variants
+            where chat_id = ? and trigger = ?
+            order by position, id
+            """,
+            (chat_id, normalized),
+        ).fetchall()
+        return [TriggerReplyVariant(**dict(row)) for row in rows]
+
+    def list_trigger_answer_options(self, chat_id: int) -> list[TriggerReplyVariant | TriggerReply]:
+        variant_rows = self._conn.execute(
+            """
+            select id, chat_id, trigger, variant_type, text, media_type, media_file_id, position, updated_by, updated_at
+            from trigger_reply_variants
+            where chat_id = ?
+            order by trigger collate nocase, position, id
+            """,
+            (chat_id,),
+        ).fetchall()
+        variants = [TriggerReplyVariant(**dict(row)) for row in variant_rows]
+        variant_keys = {(item.chat_id, item.trigger) for item in variants}
+        fallback_rows = self._conn.execute(
+            """
+            select chat_id, trigger, text, media_type, media_file_id, updated_by, updated_at
+            from trigger_replies
+            where chat_id = ?
+            order by trigger collate nocase
+            """,
+            (chat_id,),
+        ).fetchall()
+        fallbacks = [
+            TriggerReply(**dict(row))
+            for row in fallback_rows
+            if (int(row["chat_id"]), str(row["trigger"])) not in variant_keys
+        ]
+        return [*variants, *fallbacks]
 
     def upsert_seen_user(
         self,
