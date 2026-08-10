@@ -1797,9 +1797,11 @@ MINI_APP_HTML = r"""<!doctype html>
       ? `<button class="btn secondary" onclick="showRoleManager()">Открыть роли</button>`
       : section.key === "mine" && section.enabled
         ? `<button class="btn secondary" onclick="showMineAdmin()">Открыть шахту</button>`
-        : section.key === "triggers" && section.enabled
-          ? `<button class="btn secondary" onclick="showTriggerManager()">Открыть триггеры</button>`
-          : `<span class="muted">Скоро</span>`;
+        : section.key === "moderation" && section.enabled
+          ? `<button class="btn secondary" onclick="showModerationManager()">Открыть модерацию</button>`
+          : section.key === "triggers" && section.enabled
+            ? `<button class="btn secondary" onclick="showTriggerManager()">Открыть триггеры</button>`
+            : `<span class="muted">Скоро</span>`;
     return `<div class="admin-list-row">
       <span>
         <b>${escapeHtml(section.title || section.key)}</b><br>
@@ -1818,7 +1820,7 @@ MINI_APP_HTML = r"""<!doctype html>
       const sections = data.sections || [];
       content.innerHTML = `<section class="panel">
         <h2>Админ-панель Mini App</h2>
-        <p class="muted">Базовый перенос админки в приложение. Детальные права по разделам добавим следующим шагом.</p>
+        <p class="muted">Панель управления Mini App. Доступные разделы зависят от роли: владелец управляет ролями, модерация работает по правам в выбранном чате.</p>
         <div class="mine-admin-grid">
           <div class="mine-admin-card">Чаты<b>${Number(summary.chats || 0)}</b></div>
           <div class="mine-admin-card">Админы<b>${Number(summary.admins || 0)}</b></div>
@@ -1834,6 +1836,173 @@ MINI_APP_HTML = r"""<!doctype html>
       scrollToTop();
     } catch (error) {
       showError(error);
+    }
+  }
+
+  function moderationRoleRowHtml(item, canManageRoles, chatId) {
+    const title = item.username ? `@${item.username}` : (item.full_name || String(item.user_id));
+    const expires = item.expiresAt ? ` · до ${item.expiresAt}` : "";
+    const action = canManageRoles
+      ? `<button class="btn danger" style="margin:0" onclick="clearModerationRole(${Number(chatId)}, '${Number(item.user_id)}')">Снять</button>`
+      : `<span class="muted">просмотр</span>`;
+    return `<div class="role-row">
+      <span>
+        <b>${escapeHtml(title)}</b><br>
+        <span class="muted">${escapeHtml(item.full_name || String(item.user_id))} · ID ${Number(item.user_id)} · голосов: ${Number(item.votes || 0)}${escapeHtml(expires)}</span>
+      </span>
+      ${action}
+    </div>`;
+  }
+
+  function moderationRoleGroupHtml(group, canManageRoles, chatId) {
+    const items = (group.items || []).map(item => moderationRoleRowHtml(item, canManageRoles, chatId)).join("");
+    const form = canManageRoles ? `<div class="role-manager-form">
+      <input id="modTarget_${escapeHtml(group.key)}" placeholder="@ник или ID">
+      <button class="btn" onclick="setModerationRole(${Number(chatId)}, '${escapeHtml(group.key)}')">Добавить</button>
+    </div>` : "";
+    return `<details class="panel" open>
+      <summary style="cursor:pointer;font-weight:900;font-size:20px">${escapeHtml(group.title)} · ${(group.items || []).length}</summary>
+      <p class="muted">${escapeHtml(group.limit || "")}</p>
+      <div class="role-list">${items || `<p class="muted">На этой роли пока никого нет.</p>`}</div>
+      ${form}
+    </details>`;
+  }
+
+  async function showModerationManager(chatId = null) {
+    setScreenHeader("adminPanel");
+    content.innerHTML = `<section class="panel muted">Загружаю модерацию...</section>`;
+    try {
+      const path = chatId ? `/miniapp/profile/moderation?chat_id=${encodeURIComponent(chatId)}` : "/miniapp/profile/moderation";
+      const data = await api(path);
+      const chats = data.chats || [];
+      const selectedChatId = Number(data.selectedChatId || 0);
+      const selectedChat = data.selectedChat || {};
+      const lock = data.lock || null;
+      const lockText = lock
+        ? `чат остановлен${lock.until_at ? ` до ${lock.until_at}` : " до ручного старта"}${lock.reason ? ` · ${lock.reason}` : ""}`
+        : "чат открыт";
+      const roleTools = selectedChatId ? (data.roles || []).map(group => moderationRoleGroupHtml(group, !!data.canManageRoles, selectedChatId)).join("") : "";
+      const lockLimit = data.chatLockLimitSeconds === null
+        ? "без лимита"
+        : Number(data.chatLockLimitSeconds || 0) > 0
+          ? `до ${Math.floor(Number(data.chatLockLimitSeconds) / 60)} мин`
+          : "нельзя";
+      const chatTools = selectedChatId ? `<section class="panel">
+        <h2>Режимы чата</h2>
+        <p class="muted">Твоя роль здесь: ${escapeHtml(data.viewerRoleTitle || "нет роли")} · чат-стоп: ${escapeHtml(lockLimit)}.</p>
+        <div class="mine-admin-grid">
+          <div class="mine-admin-card">Статус<b>${escapeHtml(lockText)}</b></div>
+          <div class="mine-admin-card">Slow mode<b>Telegram</b></div>
+        </div>
+        ${data.canStopChat ? `<div class="mine-admin-form">
+          <input id="modLockMinutes" placeholder="Минуты, пусто = до старта">
+          <input id="modLockReason" placeholder="Причина, необязательно">
+          <button class="btn" onclick="setModerationChatLock(${selectedChatId})">Чат стоп</button>
+          <button class="btn secondary" onclick="unlockModerationChat(${selectedChatId})">Чат старт</button>
+        </div>` : `<p class="muted">Эта роль не может останавливать чат.</p>`}
+        ${data.canSetSlowMode ? `<div class="mine-admin-form">
+          <input id="modSlowDelay" placeholder="Slow mode в секундах, 0 = выкл">
+          <button class="btn secondary" onclick="setModerationSlowMode(${selectedChatId})">Применить slow mode</button>
+        </div>` : `<p class="muted">Slow mode доступен модератору, старшему, админу и владельцу.</p>`}
+      </section>` : "";
+      content.innerHTML = `<section class="panel">
+        <h2>Модерация</h2>
+        <p class="muted">Роли и режимы чата. Логи здесь не дублируются — они уходят в staff-группу.</p>
+        <div class="mine-admin-form">
+          <select id="moderationChatSelect" class="wide" onchange="showModerationManager(this.value)">
+            ${triggerChatOptionsHtml(chats, selectedChatId)}
+          </select>
+        </div>
+      </section>
+      ${chatTools}
+      ${roleTools || `<section class="panel muted">Нет доступных чатов для модерации.</section>`}
+      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
+      scrollToTop();
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function setModerationRole(chatId, role) {
+    const target = document.getElementById(`modTarget_${role}`)?.value || "";
+    if (!target.trim()) {
+      alert("Укажи пользователя.");
+      return;
+    }
+    try {
+      await api("/miniapp/profile/moderation/roles", {
+        method: "POST",
+        body: JSON.stringify({ chatId: Number(chatId), target, role })
+      });
+      showNotice("Роль модерации выдана.");
+      showModerationManager(chatId);
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
+  async function clearModerationRole(chatId, target) {
+    if (!confirm("Снять роль модерации в этом чате?")) return;
+    try {
+      await api("/miniapp/profile/moderation/roles/clear", {
+        method: "POST",
+        body: JSON.stringify({ chatId: Number(chatId), target: String(target) })
+      });
+      showNotice("Роль модерации снята.");
+      showModerationManager(chatId);
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
+  async function setModerationChatLock(chatId) {
+    const minutesRaw = (document.getElementById("modLockMinutes")?.value || "").trim();
+    const reason = document.getElementById("modLockReason")?.value || "";
+    const seconds = minutesRaw ? Math.max(1, Math.round(Number(minutesRaw) * 60)) : null;
+    if (minutesRaw && !Number.isFinite(seconds)) {
+      alert("Минуты должны быть числом.");
+      return;
+    }
+    try {
+      await api("/miniapp/profile/moderation/chat-lock", {
+        method: "POST",
+        body: JSON.stringify({ chatId: Number(chatId), seconds, reason })
+      });
+      showNotice("Чат остановлен.");
+      showModerationManager(chatId);
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
+  async function unlockModerationChat(chatId) {
+    try {
+      await api("/miniapp/profile/moderation/chat-unlock", {
+        method: "POST",
+        body: JSON.stringify({ chatId: Number(chatId), seconds: 1, reason: "" })
+      });
+      showNotice("Чат открыт.");
+      showModerationManager(chatId);
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
+  async function setModerationSlowMode(chatId) {
+    const delay = Math.max(0, Math.round(Number(document.getElementById("modSlowDelay")?.value || 0)));
+    if (!Number.isFinite(delay)) {
+      alert("Slow mode должен быть числом секунд.");
+      return;
+    }
+    try {
+      await api("/miniapp/profile/moderation/slow-mode", {
+        method: "POST",
+        body: JSON.stringify({ chatId: Number(chatId), delay })
+      });
+      showNotice(delay ? `Slow mode: ${delay} сек.` : "Slow mode выключен.");
+      showModerationManager(chatId);
+    } catch (error) {
+      alert(error.message);
     }
   }
 

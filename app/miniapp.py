@@ -10,7 +10,7 @@ import time
 from contextlib import suppress
 from pathlib import Path
 from threading import Lock
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any
 from urllib.parse import parse_qsl
 import aiohttp
@@ -77,6 +77,28 @@ class ProfileRoleSet(BaseModel):
 
 class ProfileRoleClear(BaseModel):
     target: str = Field(min_length=1, max_length=64)
+
+
+class MiniAppModeratorRoleSet(BaseModel):
+    chatId: int
+    target: str = Field(min_length=1, max_length=64)
+    role: str = Field(min_length=1, max_length=32)
+
+
+class MiniAppModeratorRoleClear(BaseModel):
+    chatId: int
+    target: str = Field(min_length=1, max_length=64)
+
+
+class MiniAppChatLockSet(BaseModel):
+    chatId: int
+    seconds: int | None = Field(default=None, ge=1, le=7 * 24 * 60 * 60)
+    reason: str = Field(default="", max_length=500)
+
+
+class MiniAppSlowModeSet(BaseModel):
+    chatId: int
+    delay: int = Field(ge=0, le=3600)
 
 
 class MiniAppTriggerVariant(BaseModel):
@@ -565,7 +587,7 @@ def _miniapp_is_app_admin(db: Database, user_id: int) -> bool:
 
 
 def _miniapp_can_view_admin_panel(db: Database, user_id: int) -> bool:
-    return _miniapp_is_app_admin(db, user_id)
+    return _miniapp_is_app_admin(db, user_id) or bool(db.list_user_moderator_roles(user_id))
 
 
 def _miniapp_profile_role_groups(db: Database) -> list[dict[str, Any]]:
@@ -653,6 +675,73 @@ def _miniapp_can_manage_mine_admin(db: Database, user_id: int) -> bool:
 
 def _miniapp_can_manage_triggers(db: Database, user_id: int) -> bool:
     return _miniapp_is_app_admin(db, user_id)
+
+
+def _miniapp_can_view_moderation(db: Database, user_id: int) -> bool:
+    return _miniapp_is_app_admin(db, user_id) or bool(db.list_user_moderator_roles(user_id))
+
+
+def _miniapp_moderation_role_for_chat(db: Database, chat_id: int, user_id: int) -> str | None:
+    if _miniapp_is_app_admin(db, user_id):
+        return "admin"
+    row = db.get_chat_moderator_role(chat_id, user_id)
+    return str(row["role"]) if row else None
+
+
+def _miniapp_moderation_chats(db: Database, user_id: int) -> list[Any]:
+    if _miniapp_is_app_admin(db, user_id):
+        return db.list_chats()
+    roles = db.list_user_moderator_roles(user_id)
+    chats = [db.get_chat(int(row["chat_id"])) for row in roles]
+    return [chat for chat in chats if chat is not None]
+
+
+def _miniapp_moderation_role_rank(role: str | None) -> int:
+    if role == "admin":
+        return 99
+    return MINIAPP_MODERATOR_ROLE_RANKS.get(role or "", 0)
+
+
+def _miniapp_moderation_role_title(role: str | None) -> str:
+    if role == "admin":
+        return "Админ"
+    return MINIAPP_MODERATOR_ROLE_TITLES.get(role or "", "Нет роли")
+
+
+def _miniapp_chat_lock_limit_seconds(role: str | None) -> int | None:
+    if role == "admin":
+        return None
+    if role == "senior":
+        return 30 * 60
+    if role == "moderator":
+        return 10 * 60
+    return 0
+
+
+def _miniapp_can_stop_chat(role: str | None, seconds: int | None) -> bool:
+    limit = _miniapp_chat_lock_limit_seconds(role)
+    if limit is None:
+        return True
+    if limit <= 0:
+        return False
+    return seconds is not None and 1 <= seconds <= limit
+
+
+def _miniapp_can_set_slow_mode(role: str | None) -> bool:
+    return role == "admin" or _miniapp_moderation_role_rank(role) >= _miniapp_moderation_role_rank("moderator")
+
+
+def _miniapp_moderator_public(row: dict[str, Any]) -> dict[str, Any]:
+    role = str(row.get("role") or "")
+    return {
+        "user_id": int(row["user_id"]),
+        "username": row.get("username") or "",
+        "full_name": row.get("full_name") or str(row["user_id"]),
+        "role": role,
+        "roleTitle": _miniapp_moderation_role_title(role),
+        "votes": int(row.get("votes_count") or 0),
+        "expiresAt": row.get("expires_at") or "",
+    }
 
 
 def _miniapp_chat_public(chat: Any) -> dict[str, Any]:
@@ -2146,14 +2235,15 @@ def miniapp_profile_admin_panel(
     db = _db()
     try:
         if not _miniapp_can_view_admin_panel(db, user["id"]):
-            raise HTTPException(403, "Админ-панель Mini App доступна владельцу и админам.")
+            raise HTTPException(403, "Панель Mini App доступна владельцу, админам и назначенным модераторам.")
         is_owner = _miniapp_can_manage_roles(user["id"])
+        is_app_admin = _miniapp_is_app_admin(db, user["id"])
         admins = db.list_miniapp_profile_roles_by_label(["Админ"])
         moderators = db.list_all_chat_moderators()
         chats = db.list_chats()
         return {
             "ok": True,
-            "viewerRole": "owner" if is_owner else "admin",
+            "viewerRole": "owner" if is_owner else "admin" if is_app_admin else "moderator",
             "canManageRoles": is_owner,
             "canManageMine": _miniapp_can_manage_mine_admin(db, user["id"]),
             "summary": {
@@ -2165,13 +2255,183 @@ def miniapp_profile_admin_panel(
             },
             "sections": [
                 {"key": "roles", "title": "Роли", "enabled": is_owner, "description": "Выдача ролей приложения."},
-                {"key": "mine", "title": "Шахта", "enabled": _miniapp_can_manage_mine_admin(db, user["id"]), "description": "Управление игроками шахты."},
-                {"key": "moderation", "title": "Модерация", "enabled": False, "description": "Права и действия перенесём следующим шагом."},
+                {"key": "mine", "title": "Шахта", "enabled": _miniapp_can_view_mine_admin(db, user["id"]), "description": "Управление для владельца, просмотр для модераторов."},
+                {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Роли модерации и управление режимами чата."},
                 {"key": "triggers", "title": "Триггеры", "enabled": _miniapp_can_manage_triggers(db, user["id"]), "description": "Слова и фразы, на которые бот отвечает в чатах."},
             ],
         }
     finally:
         db.close()
+
+
+@router.get("/miniapp/profile/moderation")
+def miniapp_profile_moderation(
+    chat_id: int | None = Query(default=None),
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not _miniapp_can_view_moderation(db, user["id"]):
+            raise HTTPException(403, "Модерация доступна владельцу, админам и назначенным модераторам.")
+        chats = _miniapp_moderation_chats(db, user["id"])
+        selected_chat_id = int(chat_id) if chat_id is not None else (int(chats[0].chat_id) if chats else 0)
+        selected_chat = next((chat for chat in chats if int(chat.chat_id) == selected_chat_id), None)
+        viewer_role = _miniapp_moderation_role_for_chat(db, selected_chat_id, user["id"]) if selected_chat else None
+        moderators = db.list_chat_moderators(selected_chat_id) if selected_chat else []
+        lock = db.get_chat_lock(selected_chat_id, datetime.now(timezone.utc).isoformat(timespec="seconds")) if selected_chat else None
+        role_groups = []
+        for role in ("senior", "moderator", "assistant"):
+            items = [_miniapp_moderator_public(row) for row in moderators if str(row.get("role")) == role]
+            role_groups.append(
+                {
+                    "key": role,
+                    "title": _miniapp_moderation_role_title(role),
+                    "limit": "до 1 часа" if role == "senior" else "до 30 минут" if role == "moderator" else "до 10 минут",
+                    "items": items,
+                }
+            )
+        return {
+            "ok": True,
+            "viewerRole": viewer_role or "",
+            "viewerRoleTitle": _miniapp_moderation_role_title(viewer_role),
+            "canManageRoles": _miniapp_can_manage_roles(user["id"]),
+            "canStopChat": _miniapp_can_stop_chat(viewer_role, None) or _miniapp_chat_lock_limit_seconds(viewer_role) not in (0, None),
+            "canSetSlowMode": _miniapp_can_set_slow_mode(viewer_role),
+            "chatLockLimitSeconds": _miniapp_chat_lock_limit_seconds(viewer_role),
+            "selectedChatId": selected_chat_id if selected_chat else 0,
+            "selectedChat": _miniapp_chat_public(selected_chat) if selected_chat else None,
+            "chats": [_miniapp_chat_public(chat) for chat in chats],
+            "roles": role_groups,
+            "lock": lock or None,
+        }
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/moderation/roles")
+def miniapp_profile_moderation_role_set(
+    payload: MiniAppModeratorRoleSet,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    if not _miniapp_can_manage_roles(user["id"]):
+        raise HTTPException(403, "Назначать роли модерации может только владелец.")
+    role = payload.role.strip().casefold()
+    if role not in MINIAPP_MODERATOR_ROLE_RANKS:
+        raise HTTPException(400, "Можно назначить только помощника, модератора или старшего модератора.")
+    db = _db()
+    try:
+        if db.get_chat(payload.chatId) is None:
+            raise HTTPException(404, "Чат не найден.")
+        target_id, full_name, username = _resolve_profile_role_target(db, payload.target)
+        if _miniapp_can_manage_roles(target_id):
+            raise HTTPException(400, "Владельцу не нужна отдельная роль модерации.")
+        db.set_chat_moderator_role(payload.chatId, target_id, role, user["id"])
+        return {
+            "ok": True,
+            "target": {"id": target_id, "fullName": full_name, "username": username or ""},
+            "role": role,
+            "roleTitle": _miniapp_moderation_role_title(role),
+        }
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/moderation/roles/clear")
+def miniapp_profile_moderation_role_clear(
+    payload: MiniAppModeratorRoleClear,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    if not _miniapp_can_manage_roles(user["id"]):
+        raise HTTPException(403, "Снимать роли модерации может только владелец.")
+    db = _db()
+    try:
+        if db.get_chat(payload.chatId) is None:
+            raise HTTPException(404, "Чат не найден.")
+        target_id, full_name, username = _resolve_profile_role_target(db, payload.target)
+        removed = db.clear_chat_moderator_role(payload.chatId, target_id)
+        return {
+            "ok": True,
+            "removed": removed,
+            "target": {"id": target_id, "fullName": full_name, "username": username or ""},
+        }
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/moderation/chat-lock")
+def miniapp_profile_moderation_chat_lock(
+    payload: MiniAppChatLockSet,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        role = _miniapp_moderation_role_for_chat(db, payload.chatId, user["id"])
+        if not _miniapp_can_stop_chat(role, payload.seconds):
+            limit = _miniapp_chat_lock_limit_seconds(role)
+            if limit == 0:
+                raise HTTPException(403, "Эта роль не может останавливать чат.")
+            raise HTTPException(403, f"Лимит роли на остановку чата: {int(limit / 60)} минут.")
+        if db.get_chat(payload.chatId) is None:
+            raise HTTPException(404, "Чат не найден.")
+        until_at = None
+        if payload.seconds is not None:
+            until_at = (datetime.now(timezone.utc) + timedelta(seconds=payload.seconds)).isoformat(timespec="seconds")
+        db.set_chat_lock(payload.chatId, True, user["id"], payload.reason, until_at)
+        return {"ok": True, "lock": db.get_chat_lock(payload.chatId)}
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/moderation/chat-unlock")
+def miniapp_profile_moderation_chat_unlock(
+    payload: MiniAppChatLockSet,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        role = _miniapp_moderation_role_for_chat(db, payload.chatId, user["id"])
+        if not _miniapp_can_stop_chat(role, 1):
+            raise HTTPException(403, "Эта роль не может запускать остановленный чат.")
+        if db.get_chat(payload.chatId) is None:
+            raise HTTPException(404, "Чат не найден.")
+        db.set_chat_lock(payload.chatId, False, user["id"])
+        return {"ok": True, "lock": None}
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/moderation/slow-mode")
+async def miniapp_profile_moderation_slow_mode(
+    payload: MiniAppSlowModeSet,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        role = _miniapp_moderation_role_for_chat(db, payload.chatId, user["id"])
+        if not _miniapp_can_set_slow_mode(role):
+            raise HTTPException(403, "Эта роль не может менять медленный режим.")
+        if db.get_chat(payload.chatId) is None:
+            raise HTTPException(404, "Чат не найден.")
+    finally:
+        db.close()
+    token = load_config().bot_token
+    url = f"https://api.telegram.org/bot{token}/setChatSlowModeDelay"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(url, json={"chat_id": payload.chatId, "slow_mode_delay": payload.delay}, timeout=15) as response:
+                data = await response.json(content_type=None)
+        except aiohttp.ClientError as exc:
+            raise HTTPException(502, f"Telegram API недоступен: {exc}") from exc
+    if not data.get("ok"):
+        description = str(data.get("description") or "unknown error")
+        raise HTTPException(400, f"Telegram не принял slow mode: {description}")
+    return {"ok": True, "delay": payload.delay}
 
 
 @router.get("/miniapp/profile/triggers")

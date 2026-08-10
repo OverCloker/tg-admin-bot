@@ -278,6 +278,12 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert '"/miniapp/profile/mine-admin/unblock"' in MINI_APP_HTML
     assert 'onclick="showMineAdmin()">⛏️ Шахта</button>' in MINI_APP_HTML
     assert '"/miniapp/profile/roles"' in MINI_APP_HTML
+    assert 'function showModerationManager(chatId = null)' in MINI_APP_HTML
+    assert '"/miniapp/profile/moderation/roles"' in MINI_APP_HTML
+    assert '"/miniapp/profile/moderation/chat-lock"' in MINI_APP_HTML
+    assert '"/miniapp/profile/moderation/chat-unlock"' in MINI_APP_HTML
+    assert '"/miniapp/profile/moderation/slow-mode"' in MINI_APP_HTML
+    assert 'Открыть модерацию' in MINI_APP_HTML
     assert 'function profileAvatarHtml(user, cosmetics = {}, small = false)' in MINI_APP_HTML
     assert 'function friendRowHtml(friend)' in MINI_APP_HTML
     assert ".profile-avatar img { position: relative; z-index: 2;" in MINI_APP_HTML
