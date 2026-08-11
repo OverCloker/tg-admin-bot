@@ -562,6 +562,65 @@ def test_telegram_video_file_id_falls_back_to_document() -> None:
     assert message.bot.document_calls == 1
 
 
+def test_dig_command_sends_command_result_before_matching_trigger(monkeypatch) -> None:
+    calls: list[str] = []
+    trigger = type(
+        "TriggerItem",
+        (),
+        {
+            "trigger": "\u043a\u043e\u043f\u0430\u0439",
+            "aliases": (),
+            "text": "",
+            "media_type": "video",
+            "media_file_id": "telegram-video-file-id",
+        },
+    )()
+
+    class FakeDb:
+        def get_dig_block(self, _user_id):
+            return None
+
+        def get_dig_player(self, _chat_id, _user_id):
+            return object()
+
+    class FakeChat:
+        id = -100
+        type = "supergroup"
+
+    class FakeUser:
+        id = 42
+        username = "miner"
+        full_name = "Miner"
+
+    class FakeMessage:
+        chat = FakeChat()
+        from_user = FakeUser()
+        text = "\u043a\u043e\u043f\u0430\u0439"
+        caption = None
+        message_id = 77
+        bot = object()
+
+    async def fake_remember_sender(_message):
+        return None
+
+    async def fake_temporary_reply(_message, *_args, **_kwargs):
+        calls.append("command")
+
+    async def fake_send_auto_reply_item(_message, _item):
+        calls.append("trigger")
+
+    monkeypatch.setattr(game, "db", FakeDb(), raising=False)
+    monkeypatch.setattr(game, "remember_sender", fake_remember_sender)
+    monkeypatch.setattr(game, "temporary_reply", fake_temporary_reply)
+    monkeypatch.setattr(game, "send_auto_reply_item", fake_send_auto_reply_item)
+    monkeypatch.setattr(game, "cached_triggers", lambda _chat_id: [trigger])
+    game.AUTO_TRIGGER_SENT_MESSAGES.clear()
+
+    asyncio.run(game.dig_command(FakeMessage()))
+
+    assert calls == ["command", "trigger"]
+
+
 def test_miniapp_trigger_marks_missing_local_media(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("OWNER_ID", "42")
     db_path = tmp_path / "bot.sqlite3"

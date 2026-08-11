@@ -564,6 +564,8 @@ KNOWN_TOPICS: set[tuple[int, int]] = set()
 TRIGGER_CACHE: dict[int, tuple[float, list]] = {}
 REPLY_CACHE: dict[int, tuple[float, dict[str, object]]] = {}
 BLACKLIST_CACHE: dict[int, tuple[float, list]] = {}
+AUTO_TRIGGER_SENT_CACHE_SECONDS = 120
+AUTO_TRIGGER_SENT_MESSAGES: dict[tuple[int, int], float] = {}
 
 
 def get_premium_service() -> PremiumService:
@@ -887,6 +889,60 @@ def trigger_item_matches(normalized_text: str, item) -> bool:
     candidates = [getattr(item, "trigger", "")]
     candidates.extend(getattr(item, "aliases", ()) or ())
     return any(has_normalized_trigger(normalized_text, normalize_trigger(candidate)) for candidate in candidates)
+
+
+def auto_trigger_message_key(message: Message) -> tuple[int, int] | None:
+    message_id = getattr(message, "message_id", None)
+    chat = getattr(message, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    if message_id is None or chat_id is None:
+        return None
+    return int(chat_id), int(message_id)
+
+
+def auto_trigger_was_sent(message: Message) -> bool:
+    key = auto_trigger_message_key(message)
+    if key is None:
+        return False
+    now = time.monotonic()
+    stale_keys = [
+        cached_key
+        for cached_key, created_at in AUTO_TRIGGER_SENT_MESSAGES.items()
+        if now - created_at > AUTO_TRIGGER_SENT_CACHE_SECONDS
+    ]
+    for stale_key in stale_keys:
+        AUTO_TRIGGER_SENT_MESSAGES.pop(stale_key, None)
+    return key in AUTO_TRIGGER_SENT_MESSAGES
+
+
+def mark_auto_trigger_sent(message: Message) -> None:
+    key = auto_trigger_message_key(message)
+    if key is not None:
+        AUTO_TRIGGER_SENT_MESSAGES[key] = time.monotonic()
+
+
+def matching_trigger_answer(message: Message):
+    text = message.text or message.caption
+    if not text:
+        return None
+    normalized_text = normalize_trigger(text)
+    trigger_answers = [
+        item
+        for item in cached_triggers(message.chat.id)
+        if trigger_item_matches(normalized_text, item)
+    ]
+    return random.choice(trigger_answers) if trigger_answers else None
+
+
+async def send_matching_trigger_after_command(message: Message) -> bool:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or auto_trigger_was_sent(message):
+        return False
+    item = matching_trigger_answer(message)
+    if not item:
+        return False
+    await send_auto_reply_item(message, item)
+    mark_auto_trigger_sent(message)
+    return True
 
 
 def split_command_payload(text: str | None) -> str:
@@ -10203,6 +10259,7 @@ async def dig_command(message: Message) -> None:
             "Ты еще не зарегистрирован в раскопках. Нажми кнопку регистрации, потом снова напиши <code>копай</code>.",
             reply_markup=dig_register_menu(message.from_user.id),
         )
+        await send_matching_trigger_after_command(message)
         return
 
     await temporary_reply(
@@ -10212,6 +10269,7 @@ async def dig_command(message: Message) -> None:
         "• <b>Вручную</b> — Mini App: клетки, события, ресурсы и выборы по ходу вылазки. Торговец ждёт снаружи в сумке.",
         reply_markup=user_dig_mode_menu(message.chat.id, message.from_user.id),
     )
+    await send_matching_trigger_after_command(message)
     return
 
     now = datetime.now(timezone.utc)
@@ -11815,13 +11873,15 @@ async def handle_auto_reply(message: Message) -> None:
 
     answers = []
     normalized_text = normalize_trigger(text)
-    trigger_answers = [
-        item
-        for item in cached_triggers(message.chat.id)
-        if trigger_item_matches(normalized_text, item)
-    ]
-    if trigger_answers:
-        answers.append(random.choice(trigger_answers))
+    if not auto_trigger_was_sent(message):
+        trigger_answers = [
+            item
+            for item in cached_triggers(message.chat.id)
+            if trigger_item_matches(normalized_text, item)
+        ]
+        if trigger_answers:
+            answers.append(random.choice(trigger_answers))
+            mark_auto_trigger_sent(message)
 
     mentions = extract_mentions(text)
     if mentions:
