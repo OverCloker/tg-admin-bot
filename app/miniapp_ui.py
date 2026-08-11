@@ -2168,6 +2168,10 @@ MINI_APP_HTML = r"""<!doctype html>
           const uploaded = await apiForm(`/miniapp/profile/triggers/media?media_type=${encodeURIComponent(variantType)}`, form);
           mediaFileId = uploaded.mediaFileId || "";
           mediaType = uploaded.mediaType || variantType;
+          box.dataset.mediaFileId = mediaFileId;
+          box.dataset.mediaType = mediaType;
+          const status = box.querySelector(".trigger-media-status");
+          if (status) status.textContent = "Медиа загружено, сохраняю триггер...";
         }
         if (mediaFileId) {
           variants.push({ variantType, text: caption, mediaType, mediaFileId });

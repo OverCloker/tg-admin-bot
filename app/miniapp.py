@@ -1,10 +1,12 @@
 """Telegram Mini App for one-meter mine runs."""
 from __future__ import annotations
+import asyncio
 import hashlib
 import hmac
 import json
 import os
 import secrets
+import shutil
 import base64
 import time
 from contextlib import suppress
@@ -797,6 +799,48 @@ def _trigger_media_dir() -> Path:
     root = Path(load_config().db_path).resolve().parent / "trigger_media"
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _ffprobe_path() -> str | None:
+    configured_ffmpeg = os.getenv("FFMPEG_PATH", "").strip()
+    if configured_ffmpeg:
+        candidate = Path(configured_ffmpeg).with_name("ffprobe")
+        if candidate.exists():
+            return str(candidate)
+    return shutil.which("ffprobe")
+
+
+async def _media_duration_seconds(path: Path) -> float:
+    try:
+        import av  # type: ignore
+
+        with av.open(str(path)) as container:
+            return float(container.duration or 0) / 1_000_000 if container.duration else 0.0
+    except ModuleNotFoundError:
+        pass
+    except Exception:
+        pass
+
+    ffprobe = _ffprobe_path()
+    if not ffprobe:
+        raise RuntimeError("ffprobe is not available")
+    process = await asyncio.create_subprocess_exec(
+        ffprobe,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _stderr = await process.communicate()
+    if process.returncode != 0:
+        raise RuntimeError("ffprobe failed")
+    value = stdout.decode("utf-8", "ignore").strip()
+    return float(value) if value else 0.0
 
 
 def _clean_trigger_variants(payload: MiniAppTriggerSave) -> list[dict[str, object]]:
@@ -2519,7 +2563,7 @@ async def miniapp_profile_trigger_media_upload(
         raise HTTPException(400, "Неподдерживаемый тип медиа.")
     content_type = (file.content_type or "").split(";", 1)[0].strip().casefold()
     allowed = TRIGGER_MEDIA_TYPES[normalized_type]
-    if content_type and content_type not in allowed:
+    if content_type and content_type != "application/octet-stream" and content_type not in allowed:
         raise HTTPException(400, "Файл не похож на выбранный тип медиа.")
     suffix = Path(file.filename or "").suffix.lower()
     if not suffix:
@@ -2546,10 +2590,7 @@ async def miniapp_profile_trigger_media_upload(
         max_duration = 30.5 if normalized_type == "audio" else 15.5
         media_name = "Аудио-метка" if normalized_type == "audio" else "Видео"
         try:
-            import av  # type: ignore
-
-            with av.open(str(target)) as container:
-                duration = float(container.duration or 0) / 1_000_000 if container.duration else 0.0
+            duration = await _media_duration_seconds(target)
             if duration and duration > max_duration:
                 with suppress(OSError):
                     target.unlink()

@@ -1,4 +1,8 @@
+import asyncio
+from io import BytesIO
+
 import pytest
+from starlette.datastructures import Headers
 
 from app.db import Database
 from app import bot as game
@@ -375,6 +379,38 @@ def test_miniapp_trigger_can_store_multiple_variants(tmp_path, monkeypatch) -> N
     assert listed["triggers"][0]["variants"][2]["variantType"] == "photo"
     assert listed["triggers"][0]["variants"][4]["mediaType"] == "audio"
     assert listed["triggers"][0]["variants"][5]["mediaType"] == "video"
+
+
+def test_miniapp_trigger_video_upload_accepts_octet_stream(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    db = Database(str(db_path))
+    db.init()
+    db.close()
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 42})
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+
+    async def fake_duration(_path):
+        return 4.0
+
+    monkeypatch.setattr(miniapp, "_media_duration_seconds", fake_duration)
+    file = miniapp.UploadFile(
+        BytesIO(b"not a real video, duration is mocked"),
+        filename="clip.mp4",
+        headers=Headers({"content-type": "application/octet-stream"}),
+    )
+
+    result = asyncio.run(
+        miniapp.miniapp_profile_trigger_media_upload(
+            "video",
+            file=file,
+            x_telegram_init_data="test",
+        )
+    )
+
+    assert result["mediaType"] == "video"
+    assert result["mediaFileId"].startswith("local:")
 
 
 def test_trigger_matching_uses_aliases() -> None:
