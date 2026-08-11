@@ -770,6 +770,21 @@ class Database:
                 foreign key (chat_id) references chats(chat_id) on delete cascade
             );
 
+            create table if not exists chat_telegram_admins (
+                chat_id integer not null,
+                user_id integer not null,
+                username text,
+                full_name text not null,
+                status text not null default 'administrator',
+                custom_title text,
+                is_bot integer not null default 0,
+                updated_at text not null,
+                primary key (chat_id, user_id),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+            create index if not exists idx_chat_telegram_admins_user
+                on chat_telegram_admins(user_id, chat_id);
+
             create table if not exists quotes (
                 id integer primary key autoincrement,
                 chat_id integer not null,
@@ -2043,6 +2058,82 @@ class Database:
             (user_id,),
         ).fetchall()
         return {int(row["chat_id"]) for row in rows}
+
+    def user_telegram_admin_chat_ids(self, user_id: int) -> set[int]:
+        rows = self._conn.execute(
+            """
+            select distinct chat_id
+            from chat_telegram_admins
+            where user_id = ? and is_bot = 0
+            """,
+            (int(user_id),),
+        ).fetchall()
+        return {int(row["chat_id"]) for row in rows}
+
+    def replace_chat_telegram_admins(self, chat_id: int, admins: list[dict]) -> None:
+        now = utc_now()
+        with self._conn:
+            self._conn.execute("delete from chat_telegram_admins where chat_id = ?", (int(chat_id),))
+            for admin in admins:
+                user_id = int(admin["user_id"])
+                username = normalize_username(admin.get("username")) if admin.get("username") else None
+                full_name = str(admin.get("full_name") or user_id)
+                is_bot = int(bool(admin.get("is_bot")))
+                self._conn.execute(
+                    """
+                    insert into chat_telegram_admins
+                        (chat_id, user_id, username, full_name, status, custom_title, is_bot, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?)
+                    on conflict(chat_id, user_id) do update set
+                        username = excluded.username,
+                        full_name = excluded.full_name,
+                        status = excluded.status,
+                        custom_title = excluded.custom_title,
+                        is_bot = excluded.is_bot,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        int(chat_id),
+                        user_id,
+                        username,
+                        full_name,
+                        str(admin.get("status") or "administrator"),
+                        admin.get("custom_title"),
+                        is_bot,
+                        now,
+                    ),
+                )
+                self._conn.execute(
+                    """
+                    insert into seen_users (chat_id, user_id, username, full_name, is_bot, updated_at)
+                    values (?, ?, ?, ?, ?, ?)
+                    on conflict(chat_id, user_id) do update set
+                        username = excluded.username,
+                        full_name = excluded.full_name,
+                        is_bot = excluded.is_bot,
+                        updated_at = excluded.updated_at
+                    """,
+                    (int(chat_id), user_id, username, full_name, is_bot, now),
+                )
+
+    def list_chat_telegram_admins(self, chat_id: int) -> list[dict]:
+        rows = self._conn.execute(
+            """
+            select
+                chat_id,
+                user_id,
+                coalesce(username, '') as username,
+                full_name,
+                status,
+                coalesce(custom_title, '') as custom_title,
+                updated_at
+            from chat_telegram_admins
+            where chat_id = ? and is_bot = 0
+            order by case status when 'creator' then 0 else 1 end, lower(full_name)
+            """,
+            (int(chat_id),),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_seen_user_by_username(self, chat_id: int, username: str) -> SeenUser | None:
         row = self._conn.execute(
@@ -4674,21 +4765,29 @@ class Database:
     def list_miniapp_chat_admins(self) -> list[dict]:
         rows = self._conn.execute(
             """
+            with admins as (
+                select chat_id, user_id
+                from chat_admin_feature_permissions
+                where allowed = 1
+                union
+                select chat_id, user_id
+                from chat_telegram_admins
+                where is_bot = 0
+            )
             select
-                p.user_id,
-                count(distinct p.chat_id) as chat_count,
+                a.user_id,
+                count(distinct a.chat_id) as chat_count,
                 coalesce(u.username, '') as username,
-                coalesce(u.full_name, cast(p.user_id as text)) as full_name
-            from chat_admin_feature_permissions p
+                coalesce(u.full_name, cast(a.user_id as text)) as full_name
+            from admins a
             left join (
                 select user_id, max(nullif(username, '')) as username, max(nullif(full_name, '')) as full_name
                 from seen_users
                 where coalesce(is_bot, 0) = 0
                 group by user_id
-            ) u on u.user_id = p.user_id
-            where p.allowed = 1
-            group by p.user_id
-            order by lower(coalesce(u.full_name, cast(p.user_id as text)))
+            ) u on u.user_id = a.user_id
+            group by a.user_id
+            order by lower(coalesce(u.full_name, cast(a.user_id as text)))
             """
         ).fetchall()
         return [dict(row) for row in rows]

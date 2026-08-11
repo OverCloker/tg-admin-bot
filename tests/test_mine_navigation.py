@@ -203,7 +203,7 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function showWeather()' in MINI_APP_HTML
     assert 'function showRadio()' in MINI_APP_HTML
     assert 'function showFriendsInfo()' in MINI_APP_HTML
-    assert 'function showRoleManager()' in MINI_APP_HTML
+    assert 'function showRoleManager(tabKey = null)' in MINI_APP_HTML
     assert 'function showAdminPanel()' in MINI_APP_HTML
     assert 'function showTriggerManager(chatId = null, editor = null)' in MINI_APP_HTML
     assert 'function triggerRowHtml(item)' in MINI_APP_HTML
@@ -242,9 +242,12 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'Открыть триггеры' in MINI_APP_HTML
     assert '${adminPanelButtonHtml(viewer)}' in MINI_APP_HTML
     assert 'group.assignable === false ? ""' in MINI_APP_HTML
-    assert 'function roleGroupHtml(group)' in MINI_APP_HTML
+    assert 'function roleGroupHtml(group, tab = {})' in MINI_APP_HTML
+    assert 'function renderRoleManagerTab(tabKey = null)' in MINI_APP_HTML
+    assert 'class="role-tabs"' in MINI_APP_HTML
     assert 'roleTarget_${escapeHtml(group.key)}' in MINI_APP_HTML
-    assert 'item.source === "chat_admin"' in MINI_APP_HTML
+    assert 'item.source === "telegram_admin"' in MINI_APP_HTML
+    assert 'clearModerationRoleFromRoles' in MINI_APP_HTML
     assert 'data.canManageRoles' in MINI_APP_HTML
     assert 'function showMineAdmin(page = 1)' in MINI_APP_HTML
     assert 'viewer.canViewMineAdmin' in MINI_APP_HTML

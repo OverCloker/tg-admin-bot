@@ -327,6 +327,37 @@ MINI_APP_HTML = r"""<!doctype html>
       box-sizing: border-box;
     }
     .role-list { display: grid; gap: 8px; margin-top: 12px; }
+    .role-tabs {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 2px 0 8px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--accent) var(--input-bg);
+      scroll-snap-type: x proximity;
+    }
+    .role-tabs::-webkit-scrollbar { height: 6px; }
+    .role-tabs::-webkit-scrollbar-track { background: var(--input-bg); border-radius: 999px; }
+    .role-tabs::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 999px; }
+    .role-tab {
+      flex: 0 0 auto;
+      max-width: 220px;
+      min-height: 42px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--button-radius);
+      background: var(--panel-2);
+      color: var(--text);
+      font-weight: 850;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      scroll-snap-align: start;
+    }
+    .role-tab.active {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 24%, var(--panel-color));
+    }
     .role-row {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
@@ -1749,17 +1780,23 @@ MINI_APP_HTML = r"""<!doctype html>
       : "";
   }
 
-  function roleRowHtml(item, roleLabel = "") {
+  function roleRowHtml(item, group = {}, tab = {}) {
     const sourceTitle = item.source === "owner"
-      ? "\u0432\u043b\u0430\u0434\u0435\u043b\u0435\u0446"
+      ? "владелец"
       : item.source === "chat_admin"
-        ? `\u0430\u0434\u043c\u0438\u043d \u0447\u0430\u0442\u0430${item.chatCount ? ` · \u0447\u0430\u0442\u043e\u0432: ${Number(item.chatCount)}` : ""}`
+        ? `админ чата${item.chatCount ? ` · чатов: ${Number(item.chatCount)}` : ""}`
+      : item.source === "telegram_admin"
+        ? (item.sourceTitle || "админ Telegram")
+      : item.source === "delegated_admin"
+        ? (item.sourceTitle || "права админки бота")
       : item.source === "moderation"
-        ? `\u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044f${item.chatCount ? ` · \u0447\u0430\u0442\u043e\u0432: ${Number(item.chatCount)}` : ""}`
+        ? (item.sourceTitle || `модерация${item.chatCount ? ` · чатов: ${Number(item.chatCount)}` : ""}`)
         : "Mini App";
     const removeButton = item.canRemove === false
-      ? `<span class="muted">\u043d\u0435\u043b\u044c\u0437\u044f \u0443\u0434\u0430\u043b\u0438\u0442\u044c</span>`
-      : `<button class="btn secondary" style="margin:0" onclick="clearProfileRole('${Number(item.user_id)}')">\u0423\u0434\u0430\u043b\u0438\u0442\u044c</button>`;
+      ? `<span class="muted">нельзя удалить</span>`
+      : group.kind === "moderation" && tab.chatId
+        ? `<button class="btn secondary" style="margin:0" onclick="clearModerationRoleFromRoles(${Number(tab.chatId)}, '${Number(item.user_id)}')">Удалить</button>`
+        : `<button class="btn secondary" style="margin:0" onclick="clearProfileRole('${Number(item.user_id)}')">Удалить</button>`;
     return `<div class="role-row">
       <span>
         <b>${escapeHtml(item.username ? `@${item.username}` : (item.full_name || String(item.user_id)))}</b><br>
@@ -1769,18 +1806,49 @@ MINI_APP_HTML = r"""<!doctype html>
     </div>`;
   }
 
-  function roleGroupHtml(group) {
-    const items = (group.items || []).map(item => roleRowHtml(item, group.label)).join("");
-    const form = group.assignable === false ? "" : `
+  function roleGroupHtml(group, tab = {}) {
+    const items = (group.items || []).map(item => roleRowHtml(item, group, tab)).join("");
+    const form = group.assignable === false ? "" : group.kind === "moderation" && tab.chatId ? `
+      <div class="role-manager-form">
+        <input id="roleTarget_${escapeHtml(group.key)}" placeholder="@ник или ID">
+        <button class="btn" onclick="setModerationRoleFromRoles(${Number(tab.chatId)}, '${escapeHtml(group.key)}')">Добавить</button>
+      </div>` : `
       <div class="role-manager-form">
         <input id="roleTarget_${escapeHtml(group.key)}" placeholder="@ник или ID">
         <button class="btn" onclick="setProfileRole('${escapeHtml(group.key)}', '${escapeHtml(group.label)}')">Добавить</button>
       </div>`;
     return `<details class="panel" open>
       <summary style="cursor:pointer;font-weight:900;font-size:20px">${escapeHtml(group.emoji || "")} ${escapeHtml(group.label)} · ${(group.items || []).length}</summary>
+      ${group.limit ? `<p class="muted">${escapeHtml(group.limit)}</p>` : ""}
       <div class="role-list">${items || `<p class="muted">На этой роли пока никого нет.</p>`}</div>
       ${form}
     </details>`;
+  }
+
+  function roleTabsHtml(tabs, activeKey) {
+    return `<div class="role-tabs">${(tabs || []).map(tab => {
+      const active = tab.key === activeKey ? " active" : "";
+      return `<button class="role-tab${active}" onclick="renderRoleManagerTab(${jsAttrString(tab.key)})">${escapeHtml(tab.title || tab.key)}</button>`;
+    }).join("")}</div>`;
+  }
+
+  function renderRoleManagerTab(tabKey = null) {
+    const tabs = window.currentRoleTabs || [];
+    if (!tabs.length) {
+      content.innerHTML = `<section class="panel muted">Роли не найдены.</section>`;
+      return;
+    }
+    const active = tabs.find(tab => tab.key === tabKey) || tabs[0];
+    window.currentRoleTabKey = active.key;
+    content.innerHTML = `<section class="panel">
+      <h2>Роли</h2>
+      <p class="muted">Вкладки разделяют роли приложения и роли по конкретным группам: так видно, из какой группы пришёл админ или модер.</p>
+      ${roleTabsHtml(tabs, active.key)}
+      <p class="muted">${escapeHtml(active.subtitle || "")}</p>
+    </section>
+    ${(active.groups || []).map(group => roleGroupHtml(group, active)).join("")}
+    <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
+    enableHorizontalWheelScroll(".role-tabs");
   }
 
   function adminSectionHtml(section) {
@@ -1932,6 +2000,24 @@ MINI_APP_HTML = r"""<!doctype html>
     }
   }
 
+  async function setModerationRoleFromRoles(chatId, role) {
+    const target = document.getElementById(`roleTarget_${role}`)?.value || "";
+    if (!target.trim()) {
+      alert("Укажи пользователя.");
+      return;
+    }
+    try {
+      await api("/miniapp/profile/moderation/roles", {
+        method: "POST",
+        body: JSON.stringify({ chatId: Number(chatId), target, role })
+      });
+      showNotice("Роль модерации выдана.");
+      showRoleManager(window.currentRoleTabKey);
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
   async function clearModerationRole(chatId, target) {
     if (!confirm("Снять роль модерации в этом чате?")) return;
     try {
@@ -1941,6 +2027,20 @@ MINI_APP_HTML = r"""<!doctype html>
       });
       showNotice("Роль модерации снята.");
       showModerationManager(chatId);
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
+  async function clearModerationRoleFromRoles(chatId, target) {
+    if (!confirm("Снять роль модерации в этой группе?")) return;
+    try {
+      await api("/miniapp/profile/moderation/roles/clear", {
+        method: "POST",
+        body: JSON.stringify({ chatId: Number(chatId), target: String(target) })
+      });
+      showNotice("Роль модерации снята.");
+      showRoleManager(window.currentRoleTabKey);
     } catch (error) {
       alert(error.message);
     }
@@ -2197,18 +2297,13 @@ MINI_APP_HTML = r"""<!doctype html>
     }
   }
 
-  async function showRoleManager() {
+  async function showRoleManager(tabKey = null) {
     setScreenHeader("adminPanel");
     content.innerHTML = `<section class="panel muted">Загружаю роли...</section>`;
     try {
       const data = await api("/miniapp/profile/roles");
-      const groups = data.groups || [];
-      content.innerHTML = `<section class="panel">
-        <h2>Роли Mini App</h2>
-        <p class="muted">Выбери роль, раскрой список пользователей, удали лишних или добавь нового по @нику/ID.</p>
-      </section>
-      ${groups.map(roleGroupHtml).join("")}
-      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
+      window.currentRoleTabs = data.tabs || [{ key: "legacy", title: "Роли приложения", groups: data.groups || [] }];
+      renderRoleManagerTab(tabKey || window.currentRoleTabKey || "app");
     } catch (error) {
       showError(error);
     }
@@ -2226,7 +2321,7 @@ MINI_APP_HTML = r"""<!doctype html>
         body: JSON.stringify({ target, label })
       });
       showNotice(`Роль выдана: ${result.target ? result.target.fullName : target}`);
-      showRoleManager();
+      showRoleManager(window.currentRoleTabKey);
     } catch (error) {
       alert(error.message);
     }
@@ -2240,7 +2335,7 @@ MINI_APP_HTML = r"""<!doctype html>
         body: JSON.stringify({ target: String(target) })
       });
       showNotice("Роль удалена.");
-      showRoleManager();
+      showRoleManager(window.currentRoleTabKey);
     } catch (error) {
       alert(error.message);
     }

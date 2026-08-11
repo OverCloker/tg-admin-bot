@@ -24,6 +24,7 @@ from app.miniapp import (
     _miniapp_can_view_mine_admin,
     _miniapp_profile_role_groups,
     _miniapp_profile_roles,
+    _miniapp_role_tabs,
     _miniapp_social_people,
     _miniapp_social_target,
     _shop_catalog,
@@ -539,6 +540,60 @@ def test_miniapp_profile_role_groups_sync_owner_and_chat_moderators(tmp_path, mo
     assert assistant_group["items"][0]["user_id"] == 7
     assert assistant_group["items"][0]["source"] == "moderation"
     assert assistant_group["items"][0]["chatCount"] == 1
+
+
+def test_miniapp_role_tabs_split_app_roles_and_chat_roles(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.upsert_chat(-100, "Main Chat", "supergroup", None)
+    db.upsert_chat(-200, "Side Chat", "supergroup", None)
+    db.upsert_seen_user(-100, 42, "owner", "Owner", False)
+    db.set_miniapp_profile_role(8, "Админ", 42)
+    db.replace_chat_telegram_admins(
+        -100,
+        [
+            {"user_id": 9, "username": "chatadmin", "full_name": "Chat Admin", "status": "administrator", "is_bot": False},
+            {"user_id": 42, "username": "owner", "full_name": "Owner", "status": "creator", "is_bot": False},
+        ],
+    )
+    db.set_chat_moderator_role(-100, 7, "assistant", 42)
+    db.set_chat_moderator_role(-200, 11, "moderator", 42)
+
+    try:
+        tabs = _miniapp_role_tabs(db)
+    finally:
+        db.close()
+
+    app_tab = tabs[0]
+    main_tab = next(tab for tab in tabs if tab["chatId"] == -100)
+    side_tab = next(tab for tab in tabs if tab["chatId"] == -200)
+    assert app_tab["title"] == "Роли приложения"
+    assert app_tab["groups"][1]["items"][0]["user_id"] == 8
+    telegram_admin_group = next(group for group in main_tab["groups"] if group["key"] == "telegram_admin")
+    assistant_group = next(group for group in main_tab["groups"] if group["key"] == "assistant")
+    side_moderator_group = next(group for group in side_tab["groups"] if group["key"] == "moderator")
+    assert [item["user_id"] for item in telegram_admin_group["items"]] == [9]
+    assert telegram_admin_group["items"][0]["source"] == "telegram_admin"
+    assert assistant_group["items"][0]["user_id"] == 7
+    assert side_moderator_group["items"][0]["user_id"] == 11
+    assert 42 not in {item["user_id"] for item in telegram_admin_group["items"]}
+
+
+def test_miniapp_telegram_admin_cache_grants_app_admin_access(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.upsert_chat(-100, "Main Chat", "supergroup", None)
+    db.replace_chat_telegram_admins(
+        -100,
+        [{"user_id": 9, "username": "chatadmin", "full_name": "Chat Admin", "status": "administrator", "is_bot": False}],
+    )
+    try:
+        assert _miniapp_can_view_admin_panel(db, 9) is True
+        assert _miniapp_can_manage_triggers(db, 9) is True
+    finally:
+        db.close()
 
 
 def test_miniapp_moderation_roles_are_owner_managed(tmp_path, monkeypatch) -> None:

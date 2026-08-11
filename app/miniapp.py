@@ -586,7 +586,41 @@ def _miniapp_is_app_admin(db: Database, user_id: int) -> bool:
     if _miniapp_can_manage_roles(user_id):
         return True
     role = db.get_miniapp_profile_role(user_id)
-    return bool(role and role.label == MINIAPP_ADMIN_PROFILE_LABEL) or bool(db.user_admin_chat_ids(user_id))
+    return (
+        bool(role and role.label == MINIAPP_ADMIN_PROFILE_LABEL)
+        or bool(db.user_admin_chat_ids(user_id))
+        or bool(db.user_telegram_admin_chat_ids(user_id))
+    )
+
+
+async def _refresh_miniapp_telegram_admins(db: Database) -> list[dict[str, Any]]:
+    bot = Bot(token=load_config().bot_token)
+    refreshed: list[dict[str, Any]] = []
+    try:
+        for chat in db.list_chats():
+            try:
+                members = await bot.get_chat_administrators(chat.chat_id)
+            except Exception as exc:
+                refreshed.append({"chatId": int(chat.chat_id), "ok": False, "error": str(exc)})
+                continue
+            admins = []
+            for member in members:
+                tg_user = member.user
+                admins.append(
+                    {
+                        "user_id": int(tg_user.id),
+                        "username": tg_user.username or "",
+                        "full_name": tg_user.full_name or str(tg_user.id),
+                        "status": str(member.status),
+                        "custom_title": getattr(member, "custom_title", None),
+                        "is_bot": bool(tg_user.is_bot),
+                    }
+                )
+            db.replace_chat_telegram_admins(chat.chat_id, admins)
+            refreshed.append({"chatId": int(chat.chat_id), "ok": True, "count": len([item for item in admins if not item["is_bot"]])})
+    finally:
+        await bot.session.close()
+    return refreshed
 
 
 def _miniapp_can_view_admin_panel(db: Database, user_id: int) -> bool:
@@ -681,6 +715,147 @@ def _miniapp_profile_role_groups(db: Database) -> list[dict[str, Any]]:
         }
         for role in all_roles
     ]
+
+
+def _miniapp_role_tabs(db: Database) -> list[dict[str, Any]]:
+    owner_id = _miniapp_owner_id()
+    owner_label = str(MINIAPP_OWNER_PROFILE_ROLE["label"])
+    admin_label = str(MINIAPP_ASSIGNABLE_PROFILE_ROLES[0]["label"])
+
+    app_groups = [
+        {
+            "key": "owner",
+            "label": owner_label,
+            "emoji": str(MINIAPP_OWNER_PROFILE_ROLE["emoji"]),
+            "items": [],
+            "assignable": False,
+            "kind": "app",
+        },
+        {
+            "key": "admin",
+            "label": admin_label,
+            "emoji": str(MINIAPP_ASSIGNABLE_PROFILE_ROLES[0]["emoji"]),
+            "items": [],
+            "assignable": True,
+            "kind": "app",
+        },
+    ]
+    if owner_id is not None:
+        known = db.get_known_user(owner_id)
+        player = db.get_dig_player(0, owner_id)
+        app_groups[0]["items"].append(
+            {
+                "user_id": int(owner_id),
+                "label": owner_label,
+                "username": (player.username if player else None) or (known.username if known else "") or "",
+                "full_name": (player.full_name if player else None) or (known.full_name if known else str(owner_id)),
+                "source": "owner",
+                "canRemove": False,
+            }
+        )
+
+    seen_app_admins: set[int] = set()
+    for row in db.list_miniapp_profile_roles_by_label([admin_label]):
+        user_id = int(row["user_id"])
+        if owner_id is not None and user_id == int(owner_id):
+            continue
+        if user_id in seen_app_admins:
+            continue
+        seen_app_admins.add(user_id)
+        app_groups[1]["items"].append({**row, "source": "miniapp", "canRemove": True})
+
+    tabs: list[dict[str, Any]] = [
+        {
+            "key": "app",
+            "title": "Роли приложения",
+            "subtitle": "Владелец и админы Mini App.",
+            "chatId": None,
+            "groups": app_groups,
+        }
+    ]
+
+    moderator_title_by_role = {
+        "senior": "Старшие модераторы",
+        "moderator": "Модераторы",
+        "assistant": "Помощники модера",
+    }
+    moderator_limit_by_role = {
+        "senior": "мут до 1 часа, снятие всех мутов, чат стоп до 30 минут",
+        "moderator": "мут до 30 минут, удаление сообщений, чат стоп до 10 минут",
+        "assistant": "варны и мут до 10 минут, снятие только своих мутов",
+    }
+    for chat in db.list_chats():
+        telegram_admins = []
+        seen_admin_ids: set[int] = set()
+        for row in db.list_chat_telegram_admins(chat.chat_id):
+            user_id = int(row["user_id"])
+            if owner_id is not None and user_id == int(owner_id):
+                continue
+            seen_admin_ids.add(user_id)
+            title = "создатель" if str(row.get("status")) == "creator" else "админ Telegram"
+            if row.get("custom_title"):
+                title = f"{title} · {row['custom_title']}"
+            telegram_admins.append({**row, "source": "telegram_admin", "canRemove": False, "sourceTitle": title})
+
+        delegated_admins: dict[int, dict[str, Any]] = {}
+        for permission in db.list_admin_feature_permissions(chat.chat_id):
+            if not permission.allowed:
+                continue
+            user_id = int(permission.user_id)
+            if owner_id is not None and user_id == int(owner_id):
+                continue
+            if user_id in seen_admin_ids or user_id in delegated_admins:
+                continue
+            known = db.get_known_user(user_id)
+            delegated_admins[user_id] = {
+                "chat_id": int(chat.chat_id),
+                "user_id": user_id,
+                "username": known.username if known else "",
+                "full_name": known.full_name if known else str(user_id),
+                "source": "delegated_admin",
+                "canRemove": False,
+                "sourceTitle": "права админки бота",
+            }
+        telegram_admins.extend(delegated_admins.values())
+
+        moderators = db.list_chat_moderators(chat.chat_id)
+        groups = [
+            {
+                "key": "telegram_admin",
+                "label": "Админы Telegram",
+                "emoji": "🛡️",
+                "items": telegram_admins,
+                "assignable": False,
+                "kind": "chat_admins",
+                "limit": "Назначаются в Telegram или через права админки бота.",
+            }
+        ]
+        for role in ("senior", "moderator", "assistant"):
+            groups.append(
+                {
+                    "key": role,
+                    "label": moderator_title_by_role[role],
+                    "emoji": "⭐" if role == "senior" else "⚖️" if role == "moderator" else "🤝",
+                    "items": [
+                        {**_miniapp_moderator_public(row), "source": "moderation", "canRemove": True, "sourceTitle": "роль модерации"}
+                        for row in moderators
+                        if str(row.get("role")) == role
+                    ],
+                    "assignable": True,
+                    "kind": "moderation",
+                    "limit": moderator_limit_by_role[role],
+                }
+            )
+        tabs.append(
+            {
+                "key": f"chat:{int(chat.chat_id)}",
+                "title": chat.title,
+                "subtitle": f"ID {int(chat.chat_id)}",
+                "chatId": int(chat.chat_id),
+                "groups": groups,
+            }
+        )
+    return tabs
 
 
 def _miniapp_can_view_mine_admin(db: Database, user_id: int) -> bool:
@@ -2218,7 +2393,7 @@ async def miniapp_profile(
 
 
 @router.get("/miniapp/profile/roles")
-def miniapp_profile_roles(
+async def miniapp_profile_roles(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
@@ -2226,9 +2401,12 @@ def miniapp_profile_roles(
         raise HTTPException(403, "Управление ролями доступно только владельцу.")
     db = _db()
     try:
+        sync = await _refresh_miniapp_telegram_admins(db)
         return {
             "items": db.list_miniapp_profile_roles_by_label(list(MINIAPP_ASSIGNABLE_ROLE_LABELS)),
             "groups": _miniapp_profile_role_groups(db),
+            "tabs": _miniapp_role_tabs(db),
+            "sync": sync,
         }
     finally:
         db.close()
@@ -2254,6 +2432,7 @@ def miniapp_profile_role_set(
             "role": dict(role.__dict__) if role else None,
             "roles": db.list_miniapp_profile_roles_by_label(list(MINIAPP_ASSIGNABLE_ROLE_LABELS)),
             "groups": _miniapp_profile_role_groups(db),
+            "tabs": _miniapp_role_tabs(db),
         }
     finally:
         db.close()
@@ -2273,14 +2452,14 @@ def miniapp_profile_role_clear(
         if _miniapp_can_manage_roles(target_id):
             raise HTTPException(400, "Роль владельца нельзя удалить из Mini App.")
         removed_custom = db.clear_miniapp_profile_role(target_id)
-        removed_moderator_count = db.clear_all_chat_moderator_roles(target_id)
         return {
             "ok": True,
-            "removed": bool(removed_custom or removed_moderator_count),
-            "removedModeratorRoles": removed_moderator_count,
+            "removed": bool(removed_custom),
+            "removedModeratorRoles": 0,
             "target": {"id": target_id, "fullName": full_name, "username": username or ""},
             "roles": db.list_miniapp_profile_roles_by_label(list(MINIAPP_ASSIGNABLE_ROLE_LABELS)),
             "groups": _miniapp_profile_role_groups(db),
+            "tabs": _miniapp_role_tabs(db),
         }
     finally:
         db.close()
