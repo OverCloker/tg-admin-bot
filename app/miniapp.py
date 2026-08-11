@@ -965,6 +965,12 @@ def _miniapp_trigger_public(db: Database, item: Any) -> dict[str, Any]:
 def _miniapp_trigger_variant_public(item: Any) -> dict[str, Any]:
     media_type = getattr(item, "media_type", None) or ""
     variant_type = getattr(item, "variant_type", None) or media_type or "text"
+    media_file_id = getattr(item, "media_file_id", None) or ""
+    local_missing = bool(
+        isinstance(media_file_id, str)
+        and media_file_id.startswith("local:")
+        and not Path(media_file_id.removeprefix("local:")).exists()
+    )
     return {
         "id": int(getattr(item, "id", 0) or 0),
         "chatId": int(item.chat_id),
@@ -972,8 +978,9 @@ def _miniapp_trigger_variant_public(item: Any) -> dict[str, Any]:
         "variantType": variant_type,
         "text": getattr(item, "text", "") or "",
         "mediaType": media_type,
-        "mediaFileId": getattr(item, "media_file_id", None) or "",
-        "hasMedia": bool(getattr(item, "media_type", None) and getattr(item, "media_file_id", None)),
+        "mediaFileId": media_file_id,
+        "hasMedia": bool(getattr(item, "media_type", None) and media_file_id),
+        "mediaBroken": local_missing,
     }
 
 

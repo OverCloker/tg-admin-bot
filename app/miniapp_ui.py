@@ -2046,8 +2046,10 @@ MINI_APP_HTML = r"""<!doctype html>
   function triggerRowHtml(item) {
     const variants = item.variants || [];
     const mediaCount = variants.filter(variant => variant.hasMedia).length;
+    const brokenCount = variants.filter(variant => variant.mediaBroken).length;
     const textCount = variants.filter(variant => !variant.hasMedia && (variant.text || "").trim()).length;
     const aliasText = Number(item.aliasCount || 0) > 0 ? ` · +${Number(item.aliasCount || 0)} форм` : "";
+    const brokenText = brokenCount ? ` · ⚠️ битых медиа: ${brokenCount}` : "";
     const summary = [
       textCount ? `${textCount} текст.` : "",
       mediaCount ? `${mediaCount} медиа` : ""
@@ -2055,7 +2057,7 @@ MINI_APP_HTML = r"""<!doctype html>
     return `<div class="admin-list-row">
       <span>
         <b>${escapeHtml(item.trigger)}</b><br>
-        <span class="muted">${escapeHtml(summary)}${aliasText} · ${escapeHtml(item.text || "Без текста")}</span>
+        <span class="muted">${escapeHtml(summary)}${aliasText}${escapeHtml(brokenText)} · ${escapeHtml(item.text || "Без текста")}</span>
       </span>
       <span class="utility-actions" style="margin:0">
         <button class="btn secondary" style="margin:0" onclick="editMiniAppTrigger(${Number(item.chatId)}, ${jsAttrString(item.trigger)})">Редактировать</button>
@@ -2082,8 +2084,12 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function triggerMediaBoxHtml(editor, variantType, title, accept, note) {
     const item = triggerMediaVariant(editor, variantType);
-    const mediaFileId = item.mediaFileId || "";
-    const status = mediaFileId ? "Сейчас сохранено медиа. Новый файл заменит старый." : note;
+    const mediaFileId = item.mediaBroken ? "" : (item.mediaFileId || "");
+    const status = item.mediaBroken
+      ? "Старый локальный файл недоступен. Загрузите медиа заново."
+      : mediaFileId
+        ? "Сейчас сохранено медиа. Новый файл заменит старый."
+        : note;
     return `<div class="trigger-media-box" data-trigger-media="${escapeHtml(variantType)}" data-media-file-id="${escapeHtml(mediaFileId)}" data-media-type="${escapeHtml(item.mediaType || variantType)}">
       <b>${escapeHtml(title)}</b>
       <input class="triggerMediaFile" type="file" accept="${escapeHtml(accept)}">

@@ -3581,6 +3581,10 @@ async def send_auto_reply_item(message: Message, item) -> None:
     if isinstance(media_file_id, str) and media_file_id.startswith("local:"):
         local_path = Path(media_file_id.removeprefix("local:"))
         if not local_path.exists():
+            await notify_staff_autoreply_change(
+                message.bot,
+                f"Медиа-триггер «{escape(str(getattr(item, 'trigger', '')))}» не сработал: локальный файл не найден.",
+            )
             if text:
                 await safe_reply(message, text, disable_web_page_preview=True)
             return
@@ -3614,15 +3618,30 @@ async def send_auto_reply_item(message: Message, item) -> None:
             if attempt:
                 return
             await asyncio.sleep(int(getattr(exc, "retry_after", 3)) + 1)
-        except (TelegramBadRequest, TelegramForbiddenError):
-            if media_type == "video" and local_path and local_path.exists():
-                with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+        except (TelegramBadRequest, TelegramForbiddenError) as exc:
+            if media_type == "video":
+                document_payload = FSInputFile(local_path) if local_path and local_path.exists() else media_file_id
+                try:
                     await message.bot.send_document(
                         **kwargs,
-                        document=FSInputFile(local_path),
+                        document=document_payload,
                         caption=caption,
                     )
                     return
+                except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as document_exc:
+                    await notify_staff_autoreply_change(
+                        message.bot,
+                        (
+                            f"Видео-триггер «{escape(str(getattr(item, 'trigger', '')))}» не отправился ни как видео, ни как файл.\n"
+                            f"Видео: <code>{escape(str(exc))}</code>\n"
+                            f"Файл: <code>{escape(str(document_exc))}</code>"
+                        ),
+                    )
+            else:
+                await notify_staff_autoreply_change(
+                    message.bot,
+                    f"Медиа-триггер «{escape(str(getattr(item, 'trigger', '')))}» не отправился: <code>{escape(str(exc))}</code>",
+                )
             if text:
                 await safe_reply(message, text, disable_web_page_preview=True)
             return

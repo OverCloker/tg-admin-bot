@@ -522,6 +522,68 @@ def test_local_video_trigger_falls_back_to_document(tmp_path) -> None:
     assert message.bot.document_calls == 1
 
 
+def test_telegram_video_file_id_falls_back_to_document() -> None:
+    class FakeChat:
+        id = -100
+
+    class FakeBot:
+        def __init__(self) -> None:
+            self.video_calls = 0
+            self.document_calls = 0
+
+        async def send_video(self, **_kwargs):
+            self.video_calls += 1
+            raise TelegramBadRequest(method="sendVideo", message="video rejected")
+
+        async def send_document(self, **kwargs):
+            self.document_calls += 1
+            assert kwargs["document"] == "telegram-video-file-id"
+
+    class FakeMessage:
+        chat = FakeChat()
+        message_id = 77
+
+        def __init__(self) -> None:
+            self.bot = FakeBot()
+
+        async def reply(self, *_args, **_kwargs):
+            raise AssertionError("text fallback should not be used when document fallback works")
+
+    message = FakeMessage()
+    item = type(
+        "TriggerItem",
+        (),
+        {"trigger": "clip", "text": "", "media_type": "video", "media_file_id": "telegram-video-file-id"},
+    )()
+
+    asyncio.run(game.send_auto_reply_item(message, item))
+
+    assert message.bot.video_calls == 1
+    assert message.bot.document_calls == 1
+
+
+def test_miniapp_trigger_marks_missing_local_media(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-100, "Чат", "supergroup", None)
+    db.replace_trigger_variants(
+        -100,
+        "клип",
+        [{"variant_type": "video", "text": "", "media_type": "video", "media_file_id": f"local:{tmp_path / 'missing.mp4'}"}],
+        42,
+    )
+    db.close()
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 42})
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+
+    listed = miniapp.miniapp_profile_triggers(chat_id=-100, x_telegram_init_data="test")
+    variant = listed["triggers"][0]["variants"][0]
+
+    assert variant["mediaBroken"] is True
+
+
 def test_trigger_matching_uses_aliases() -> None:
     item = type("TriggerItem", (), {"trigger": "сон", "aliases": ("спать", "спал", "сплю")})()
 

@@ -219,6 +219,7 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'triggerMediaBoxHtml(editor, "audio"' in MINI_APP_HTML
     assert 'triggerMediaBoxHtml(editor, "video"' in MINI_APP_HTML
     assert "Короткое видео до 15 сек" in MINI_APP_HTML
+    assert "Старый локальный файл недоступен" in MINI_APP_HTML
     assert 'apiForm(`/miniapp/profile/triggers/media?media_type=${encodeURIComponent(variantType)}`' in MINI_APP_HTML
     assert "Максимум 10 текстовых ответов" in MINI_APP_HTML
     assert 'function saveMiniAppTrigger(chatId)' in MINI_APP_HTML
