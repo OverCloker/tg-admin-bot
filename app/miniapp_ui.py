@@ -1898,35 +1898,6 @@ MINI_APP_HTML = r"""<!doctype html>
     }
   }
 
-  function moderationRoleRowHtml(item, canManageRoles, chatId) {
-    const title = item.username ? `@${item.username}` : (item.full_name || String(item.user_id));
-    const expires = item.expiresAt ? ` · до ${item.expiresAt}` : "";
-    const action = canManageRoles
-      ? `<button class="btn danger" style="margin:0" onclick="clearModerationRole(${Number(chatId)}, '${Number(item.user_id)}')">Снять</button>`
-      : `<span class="muted">просмотр</span>`;
-    return `<div class="role-row">
-      <span>
-        <b>${escapeHtml(title)}</b><br>
-        <span class="muted">${escapeHtml(item.full_name || String(item.user_id))} · ID ${Number(item.user_id)} · голосов: ${Number(item.votes || 0)}${escapeHtml(expires)}</span>
-      </span>
-      ${action}
-    </div>`;
-  }
-
-  function moderationRoleGroupHtml(group, canManageRoles, chatId) {
-    const items = (group.items || []).map(item => moderationRoleRowHtml(item, canManageRoles, chatId)).join("");
-    const form = canManageRoles ? `<div class="role-manager-form">
-      <input id="modTarget_${escapeHtml(group.key)}" placeholder="@ник или ID">
-      <button class="btn" onclick="setModerationRole(${Number(chatId)}, '${escapeHtml(group.key)}')">Добавить</button>
-    </div>` : "";
-    return `<details class="panel" open>
-      <summary style="cursor:pointer;font-weight:900;font-size:20px">${escapeHtml(group.title)} · ${(group.items || []).length}</summary>
-      <p class="muted">${escapeHtml(group.limit || "")}</p>
-      <div class="role-list">${items || `<p class="muted">На этой роли пока никого нет.</p>`}</div>
-      ${form}
-    </details>`;
-  }
-
   async function showModerationManager(chatId = null) {
     setScreenHeader("adminPanel");
     content.innerHTML = `<section class="panel muted">Загружаю модерацию...</section>`;
@@ -1940,7 +1911,6 @@ MINI_APP_HTML = r"""<!doctype html>
       const lockText = lock
         ? `чат остановлен${lock.until_at ? ` до ${lock.until_at}` : " до ручного старта"}${lock.reason ? ` · ${lock.reason}` : ""}`
         : "чат открыт";
-      const roleTools = selectedChatId ? (data.roles || []).map(group => moderationRoleGroupHtml(group, !!data.canManageRoles, selectedChatId)).join("") : "";
       const lockLimit = data.chatLockLimitSeconds === null
         ? "без лимита"
         : Number(data.chatLockLimitSeconds || 0) > 0
@@ -1966,7 +1936,7 @@ MINI_APP_HTML = r"""<!doctype html>
       </section>` : "";
       content.innerHTML = `<section class="panel">
         <h2>Модерация</h2>
-        <p class="muted">Роли и режимы чата. Логи здесь не дублируются — они уходят в staff-группу.</p>
+        <p class="muted">Здесь только настройки модерации выбранной группы. Роли назначаются в отдельном разделе “Роли”, логи уходят в staff-группу.</p>
         <div class="mine-admin-form">
           <select id="moderationChatSelect" class="wide" onchange="showModerationManager(this.value)">
             ${triggerChatOptionsHtml(chats, selectedChatId)}
@@ -1974,29 +1944,11 @@ MINI_APP_HTML = r"""<!doctype html>
         </div>
       </section>
       ${chatTools}
-      ${roleTools || `<section class="panel muted">Нет доступных чатов для модерации.</section>`}
+      ${selectedChatId ? "" : `<section class="panel muted">Нет доступных чатов для модерации.</section>`}
       <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
       scrollToTop();
     } catch (error) {
       showError(error);
-    }
-  }
-
-  async function setModerationRole(chatId, role) {
-    const target = document.getElementById(`modTarget_${role}`)?.value || "";
-    if (!target.trim()) {
-      alert("Укажи пользователя.");
-      return;
-    }
-    try {
-      await api("/miniapp/profile/moderation/roles", {
-        method: "POST",
-        body: JSON.stringify({ chatId: Number(chatId), target, role })
-      });
-      showNotice("Роль модерации выдана.");
-      showModerationManager(chatId);
-    } catch (error) {
-      alert(error.message);
     }
   }
 
@@ -2013,20 +1965,6 @@ MINI_APP_HTML = r"""<!doctype html>
       });
       showNotice("Роль модерации выдана.");
       showRoleManager(window.currentRoleTabKey);
-    } catch (error) {
-      alert(error.message);
-    }
-  }
-
-  async function clearModerationRole(chatId, target) {
-    if (!confirm("Снять роль модерации в этом чате?")) return;
-    try {
-      await api("/miniapp/profile/moderation/roles/clear", {
-        method: "POST",
-        body: JSON.stringify({ chatId: Number(chatId), target: String(target) })
-      });
-      showNotice("Роль модерации снята.");
-      showModerationManager(chatId);
     } catch (error) {
       alert(error.message);
     }

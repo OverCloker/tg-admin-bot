@@ -2499,7 +2499,7 @@ def miniapp_profile_admin_panel(
             "sections": [
                 {"key": "roles", "title": "Роли", "enabled": is_owner, "description": "Выдача ролей приложения."},
                 {"key": "mine", "title": "Шахта", "enabled": _miniapp_can_view_mine_admin(db, user["id"]), "description": "Управление для владельца, просмотр для модераторов."},
-                {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Роли модерации и управление режимами чата."},
+                {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Настройки режимов чата: стоп/старт и slow mode."},
                 {"key": "triggers", "title": "Триггеры", "enabled": _miniapp_can_manage_triggers(db, user["id"]), "description": "Слова и фразы, на которые бот отвечает в чатах."},
             ],
         }
@@ -2521,31 +2521,17 @@ def miniapp_profile_moderation(
         selected_chat_id = int(chat_id) if chat_id is not None else (int(chats[0].chat_id) if chats else 0)
         selected_chat = next((chat for chat in chats if int(chat.chat_id) == selected_chat_id), None)
         viewer_role = _miniapp_moderation_role_for_chat(db, selected_chat_id, user["id"]) if selected_chat else None
-        moderators = db.list_chat_moderators(selected_chat_id) if selected_chat else []
         lock = db.get_chat_lock(selected_chat_id, datetime.now(timezone.utc).isoformat(timespec="seconds")) if selected_chat else None
-        role_groups = []
-        for role in ("senior", "moderator", "assistant"):
-            items = [_miniapp_moderator_public(row) for row in moderators if str(row.get("role")) == role]
-            role_groups.append(
-                {
-                    "key": role,
-                    "title": _miniapp_moderation_role_title(role),
-                    "limit": "до 1 часа" if role == "senior" else "до 30 минут" if role == "moderator" else "до 10 минут",
-                    "items": items,
-                }
-            )
         return {
             "ok": True,
             "viewerRole": viewer_role or "",
             "viewerRoleTitle": _miniapp_moderation_role_title(viewer_role),
-            "canManageRoles": _miniapp_can_manage_roles(user["id"]),
             "canStopChat": _miniapp_can_stop_chat(viewer_role, None) or _miniapp_chat_lock_limit_seconds(viewer_role) not in (0, None),
             "canSetSlowMode": _miniapp_can_set_slow_mode(viewer_role),
             "chatLockLimitSeconds": _miniapp_chat_lock_limit_seconds(viewer_role),
             "selectedChatId": selected_chat_id if selected_chat else 0,
             "selectedChat": _miniapp_chat_public(selected_chat) if selected_chat else None,
             "chats": [_miniapp_chat_public(chat) for chat in chats],
-            "roles": role_groups,
             "lock": lock or None,
         }
     finally:

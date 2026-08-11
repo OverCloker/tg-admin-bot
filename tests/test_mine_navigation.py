@@ -248,7 +248,9 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'roleTarget_${escapeHtml(group.key)}' in MINI_APP_HTML
     assert 'item.source === "telegram_admin"' in MINI_APP_HTML
     assert 'clearModerationRoleFromRoles' in MINI_APP_HTML
-    assert 'data.canManageRoles' in MINI_APP_HTML
+    assert 'function moderationRoleGroupHtml' not in MINI_APP_HTML
+    assert 'function setModerationRole(chatId, role)' not in MINI_APP_HTML
+    assert 'data.canManageRoles' not in MINI_APP_HTML
     assert 'function showMineAdmin(page = 1)' in MINI_APP_HTML
     assert 'viewer.canViewMineAdmin' in MINI_APP_HTML
     assert 'body[data-theme="glass"] .mine-admin-card::before' in MINI_APP_HTML

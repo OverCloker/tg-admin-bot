@@ -614,9 +614,16 @@ def test_miniapp_moderation_roles_are_owner_managed(tmp_path, monkeypatch) -> No
     )
     listed = miniapp.miniapp_profile_moderation(chat_id=-100, x_telegram_init_data="test")
     assert result["role"] == "moderator"
-    moderator_group = next(group for group in listed["roles"] if group["key"] == "moderator")
+    assert "roles" not in listed
+    assert "canManageRoles" not in listed
+    db_check = Database(str(db_path))
+    try:
+        tabs = _miniapp_role_tabs(db_check)
+    finally:
+        db_check.close()
+    chat_tab = next(tab for tab in tabs if tab["chatId"] == -100)
+    moderator_group = next(group for group in chat_tab["groups"] if group["key"] == "moderator")
     assert moderator_group["items"][0]["user_id"] == 7
-    assert listed["canManageRoles"] is True
 
     monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 8})
     with pytest.raises(Exception) as exc_info:
