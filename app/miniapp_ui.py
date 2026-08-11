@@ -2200,7 +2200,11 @@ MINI_APP_HTML = r"""<!doctype html>
           box.dataset.mediaFileId = mediaFileId;
           box.dataset.mediaType = mediaType;
           const status = box.querySelector(".trigger-media-status");
-          if (status) status.textContent = "Медиа загружено, сохраняю триггер...";
+          if (status) {
+            status.textContent = uploaded.storage === "telegram"
+              ? "Медиа сохранено в Telegram, сохраняю триггер..."
+              : "Медиа сохранено локально, сохраняю триггер...";
+          }
         }
         if (mediaFileId) {
           variants.push({ variantType, text: caption, mediaType, mediaFileId });

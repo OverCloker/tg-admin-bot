@@ -3577,6 +3577,7 @@ async def send_auto_reply_item(message: Message, item) -> None:
 
     caption = text or None
     media_payload = media_file_id
+    local_path: Path | None = None
     if isinstance(media_file_id, str) and media_file_id.startswith("local:"):
         local_path = Path(media_file_id.removeprefix("local:"))
         if not local_path.exists():
@@ -3614,6 +3615,14 @@ async def send_auto_reply_item(message: Message, item) -> None:
                 return
             await asyncio.sleep(int(getattr(exc, "retry_after", 3)) + 1)
         except (TelegramBadRequest, TelegramForbiddenError):
+            if media_type == "video" and local_path and local_path.exists():
+                with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+                    await message.bot.send_document(
+                        **kwargs,
+                        document=FSInputFile(local_path),
+                        caption=caption,
+                    )
+                    return
             if text:
                 await safe_reply(message, text, disable_web_page_preview=True)
             return

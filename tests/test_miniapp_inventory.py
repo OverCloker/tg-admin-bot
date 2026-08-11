@@ -2,6 +2,7 @@ import asyncio
 from io import BytesIO
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
 from starlette.datastructures import Headers
 
 from app.db import Database
@@ -413,6 +414,11 @@ def test_miniapp_trigger_video_upload_accepts_octet_stream(tmp_path, monkeypatch
         return 4.0
 
     monkeypatch.setattr(miniapp, "_media_duration_seconds", fake_duration)
+
+    async def fake_store(_user_id, _media_type, _path, _filename=None):
+        return None
+
+    monkeypatch.setattr(miniapp, "_store_trigger_media_in_telegram", fake_store)
     file = miniapp.UploadFile(
         BytesIO(b"not a real video, duration is mocked"),
         filename="clip.mp4",
@@ -429,6 +435,91 @@ def test_miniapp_trigger_video_upload_accepts_octet_stream(tmp_path, monkeypatch
 
     assert result["mediaType"] == "video"
     assert result["mediaFileId"].startswith("local:")
+    assert result["storage"] == "local"
+
+
+def test_miniapp_trigger_video_upload_prefers_telegram_file_id(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    db = Database(str(db_path))
+    db.init()
+    db.close()
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 42})
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+
+    async def fake_duration(_path):
+        return 4.0
+
+    async def fake_store(user_id, media_type, path, filename=None):
+        assert user_id == 42
+        assert media_type == "video"
+        assert path.exists()
+        assert filename == "clip.mp4"
+        return "document", "telegram-file-id"
+
+    monkeypatch.setattr(miniapp, "_media_duration_seconds", fake_duration)
+    monkeypatch.setattr(miniapp, "_store_trigger_media_in_telegram", fake_store)
+    file = miniapp.UploadFile(
+        BytesIO(b"not a real video, duration is mocked"),
+        filename="clip.mp4",
+        headers=Headers({"content-type": "application/octet-stream"}),
+    )
+
+    result = asyncio.run(
+        miniapp.miniapp_profile_trigger_media_upload(
+            "video",
+            file=file,
+            x_telegram_init_data="test",
+        )
+    )
+
+    assert result["mediaType"] == "document"
+    assert result["mediaFileId"] == "telegram-file-id"
+    assert result["storage"] == "telegram"
+
+
+def test_local_video_trigger_falls_back_to_document(tmp_path) -> None:
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"fake video payload")
+
+    class FakeChat:
+        id = -100
+
+    class FakeBot:
+        def __init__(self) -> None:
+            self.video_calls = 0
+            self.document_calls = 0
+
+        async def send_video(self, **_kwargs):
+            self.video_calls += 1
+            raise TelegramBadRequest(method="sendVideo", message="video format invalid")
+
+        async def send_document(self, **kwargs):
+            self.document_calls += 1
+            assert kwargs["caption"] == "caption"
+
+    class FakeMessage:
+        chat = FakeChat()
+        message_id = 77
+
+        def __init__(self) -> None:
+            self.bot = FakeBot()
+
+        async def reply(self, *_args, **_kwargs):
+            raise AssertionError("text fallback should not be used when document fallback works")
+
+    message = FakeMessage()
+    item = type(
+        "TriggerItem",
+        (),
+        {"text": "caption", "media_type": "video", "media_file_id": f"local:{video_path}"},
+    )()
+
+    asyncio.run(game.send_auto_reply_item(message, item))
+
+    assert message.bot.video_calls == 1
+    assert message.bot.document_calls == 1
 
 
 def test_trigger_matching_uses_aliases() -> None:

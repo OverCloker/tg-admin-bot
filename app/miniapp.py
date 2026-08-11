@@ -17,7 +17,7 @@ from typing import Any
 from urllib.parse import parse_qsl
 import aiohttp
 from aiogram import Bot
-from aiogram.types import LabeledPrice
+from aiogram.types import FSInputFile, LabeledPrice
 from fastapi import APIRouter, File, Header, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -1031,6 +1031,42 @@ async def _media_duration_seconds(path: Path) -> float:
         raise RuntimeError("ffprobe failed")
     value = stdout.decode("utf-8", "ignore").strip()
     return float(value) if value else 0.0
+
+
+async def _store_trigger_media_in_telegram(user_id: int, media_type: str, path: Path, filename: str | None = None) -> tuple[str, str] | None:
+    bot = Bot(token=load_config().bot_token)
+    sent = None
+    upload = FSInputFile(path, filename=filename or path.name)
+    try:
+        if media_type == "photo":
+            sent = await bot.send_photo(user_id, upload, caption="Медиа для триггера сохранено.")
+            if sent.photo:
+                return "photo", sent.photo[-1].file_id
+        if media_type == "animation":
+            sent = await bot.send_animation(user_id, upload, caption="Медиа для триггера сохранено.")
+            if sent.animation:
+                return "animation", sent.animation.file_id
+        if media_type == "audio":
+            sent = await bot.send_audio(user_id, upload, caption="Медиа для триггера сохранено.")
+            if sent.audio:
+                return "audio", sent.audio.file_id
+        if media_type == "video":
+            try:
+                sent = await bot.send_video(user_id, upload, caption="Видео для триггера сохранено.")
+                if sent.video:
+                    return "video", sent.video.file_id
+            except Exception:
+                sent = await bot.send_document(user_id, FSInputFile(path, filename=filename or path.name), caption="Видео для триггера сохранено как файл.")
+                if sent.document:
+                    return "document", sent.document.file_id
+        return None
+    except Exception:
+        return None
+    finally:
+        if sent:
+            with suppress(Exception):
+                await bot.delete_message(user_id, sent.message_id)
+        await bot.session.close()
 
 
 def _clean_trigger_variants(payload: MiniAppTriggerSave) -> list[dict[str, object]]:
@@ -2786,12 +2822,24 @@ async def miniapp_profile_trigger_media_upload(
             with suppress(OSError):
                 target.unlink()
             raise HTTPException(400, f"Не удалось проверить длительность: {media_name.lower()}.")
+    stored = await _store_trigger_media_in_telegram(user["id"], normalized_type, target, file.filename)
+    if stored:
+        stored_media_type, stored_file_id = stored
+        return {
+            "ok": True,
+            "mediaType": stored_media_type,
+            "mediaFileId": stored_file_id,
+            "fileName": file.filename or target.name,
+            "size": size,
+            "storage": "telegram",
+        }
     return {
         "ok": True,
         "mediaType": normalized_type,
         "mediaFileId": f"local:{target}",
         "fileName": file.filename or target.name,
         "size": size,
+        "storage": "local",
     }
 
 
