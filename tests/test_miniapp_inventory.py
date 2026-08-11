@@ -261,6 +261,23 @@ def test_miniapp_profile_roles_include_owner_custom_and_moderation(tmp_path, mon
     assert roles[2]["chatCount"] == 1
 
 
+def test_miniapp_profile_payload_does_not_include_roles(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    monkeypatch.setenv("DB_PATH", str(db_path))
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_seen_user(0, 8, "admin", "Admin", False)
+    db.set_miniapp_profile_role(8, "Админ", 42)
+    db.close()
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 8, "username": "admin", "full_name": "Admin"})
+
+    profile = asyncio.run(miniapp.miniapp_profile(user_id=None, x_telegram_init_data="test"))
+
+    assert "roles" not in profile
+    assert profile["viewer"]["isAppAdmin"] is True
+
+
 def test_miniapp_mine_admin_access_is_owner_or_moderator(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("OWNER_ID", "42")
     db = Database(str(tmp_path / "bot.sqlite3"))
@@ -451,11 +468,14 @@ def test_miniapp_trigger_management_is_owner_or_app_admin(tmp_path, monkeypatch)
     monkeypatch.setenv("OWNER_ID", "42")
     db = Database(str(tmp_path / "bot.sqlite3"))
     db.init()
+    db.upsert_chat(-100, "Chat", "supergroup", None)
     db.set_miniapp_profile_role(8, "Админ", 42)
+    db.set_admin_feature_permission(-100, 10, "triggers.manage", True, 42)
 
     try:
         assert _miniapp_can_manage_triggers(db, 42) is True
         assert _miniapp_can_manage_triggers(db, 8) is True
+        assert _miniapp_can_manage_triggers(db, 10) is True
         assert _miniapp_can_manage_triggers(db, 9) is False
     finally:
         db.close()
@@ -482,10 +502,15 @@ def test_miniapp_profile_role_groups_sync_owner_and_chat_moderators(tmp_path, mo
     db = Database(str(tmp_path / "bot.sqlite3"))
     db.init()
     db.upsert_chat(-100, "Chat", "supergroup", None)
+    db.upsert_chat(-200, "Other", "supergroup", None)
     db.upsert_seen_user(-100, 42, "owner", "Owner", False)
     db.upsert_seen_user(-100, 7, "helper", "Helper", False)
+    db.upsert_seen_user(-100, 9, "chatadmin", "Chat Admin", False)
     db.set_chat_moderator_role(-100, 7, "assistant", 42)
     db.set_miniapp_profile_role(8, "Админ", 42)
+    db.set_admin_feature_permission(-100, 9, "triggers.manage", True, 42)
+    db.set_admin_feature_permission(-200, 9, "triggers.manage", True, 42)
+    db.set_admin_feature_permission(-100, 42, "triggers.manage", True, 42)
 
     try:
         groups = _miniapp_profile_role_groups(db)
@@ -505,6 +530,11 @@ def test_miniapp_profile_role_groups_sync_owner_and_chat_moderators(tmp_path, mo
     assert owner_group["assignable"] is False
     assert admin_group["items"][0]["user_id"] == 8
     assert admin_group["items"][0]["source"] == "miniapp"
+    assert admin_group["items"][1]["user_id"] == 9
+    assert admin_group["items"][1]["source"] == "chat_admin"
+    assert admin_group["items"][1]["canRemove"] is False
+    assert admin_group["items"][1]["chatCount"] == 2
+    assert 42 not in {item["user_id"] for item in admin_group["items"]}
     assert admin_group["assignable"] is True
     assert assistant_group["items"][0]["user_id"] == 7
     assert assistant_group["items"][0]["source"] == "moderation"

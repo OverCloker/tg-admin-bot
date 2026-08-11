@@ -586,7 +586,7 @@ def _miniapp_is_app_admin(db: Database, user_id: int) -> bool:
     if _miniapp_can_manage_roles(user_id):
         return True
     role = db.get_miniapp_profile_role(user_id)
-    return bool(role and role.label == MINIAPP_ADMIN_PROFILE_LABEL)
+    return bool(role and role.label == MINIAPP_ADMIN_PROFILE_LABEL) or bool(db.user_admin_chat_ids(user_id))
 
 
 def _miniapp_can_view_admin_panel(db: Database, user_id: int) -> bool:
@@ -601,6 +601,8 @@ def _miniapp_profile_role_groups(db: Database) -> list[dict[str, Any]]:
 
     def add(label: str, item: dict[str, Any]) -> None:
         user_id = int(item["user_id"])
+        if owner_id is not None and user_id == int(owner_id) and label != owner_label:
+            return
         if user_id in seen_by_label.setdefault(label, set()):
             return
         seen_by_label[label].add(user_id)
@@ -655,6 +657,19 @@ def _miniapp_profile_role_groups(db: Database) -> list[dict[str, Any]]:
         row["canRemove"] = True
         row.setdefault("chatCount", 0)
         add(str(row["label"]), row)
+
+    admin_label = str(role_by_key["admin"]["label"])
+    for row in db.list_miniapp_chat_admins():
+        add(
+            admin_label,
+            {
+                **row,
+                "label": admin_label,
+                "source": "chat_admin",
+                "canRemove": False,
+                "chatCount": int(row.get("chat_count") or 0),
+            },
+        )
 
     return [
         {
@@ -2172,7 +2187,6 @@ async def miniapp_profile(
             target.full_name if target else (known_target.full_name if known_target else user["full_name"]),
             photo_url=photo_url,
         )
-        profile["roles"] = _miniapp_profile_roles(db, target_id)
         target_people = _miniapp_social_people(db, target_id)
         if target_id == viewer_id:
             people = target_people
@@ -2283,7 +2297,12 @@ def miniapp_profile_admin_panel(
             raise HTTPException(403, "Панель Mini App доступна владельцу, админам и назначенным модераторам.")
         is_owner = _miniapp_can_manage_roles(user["id"])
         is_app_admin = _miniapp_is_app_admin(db, user["id"])
-        admins = db.list_miniapp_profile_roles_by_label(["Админ"])
+        role_groups = _miniapp_profile_role_groups(db)
+        admin_total = sum(
+            len(group["items"])
+            for group in role_groups
+            if group["key"] in {"owner", "admin"}
+        )
         moderators = db.list_all_chat_moderators()
         chats = db.list_chats()
         return {
@@ -2293,7 +2312,7 @@ def miniapp_profile_admin_panel(
             "canManageMine": _miniapp_can_manage_mine_admin(db, user["id"]),
             "summary": {
                 "chats": len(chats),
-                "admins": len(admins) + (1 if _miniapp_owner_id() is not None else 0),
+                "admins": admin_total,
                 "moderators": len({int(row["user_id"]) for row in moderators}),
                 "minePlayers": db.count_dig_players(),
                 "triggers": sum(len(db.list_triggers(chat.chat_id)) for chat in chats),

@@ -4671,6 +4671,28 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_miniapp_chat_admins(self) -> list[dict]:
+        rows = self._conn.execute(
+            """
+            select
+                p.user_id,
+                count(distinct p.chat_id) as chat_count,
+                coalesce(u.username, '') as username,
+                coalesce(u.full_name, cast(p.user_id as text)) as full_name
+            from chat_admin_feature_permissions p
+            left join (
+                select user_id, max(nullif(username, '')) as username, max(nullif(full_name, '')) as full_name
+                from seen_users
+                where coalesce(is_bot, 0) = 0
+                group by user_id
+            ) u on u.user_id = p.user_id
+            where p.allowed = 1
+            group by p.user_id
+            order by lower(coalesce(u.full_name, cast(p.user_id as text)))
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def get_known_user_by_username(self, username: str) -> SeenUser | None:
         normalized = normalize_username(username)
         row = self._conn.execute(

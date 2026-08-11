@@ -229,6 +229,8 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'new MutationObserver' in MINI_APP_HTML
     assert 'class="admin-list-row"' in MINI_APP_HTML
     assert 'function adminPanelButtonHtml(viewer)' in MINI_APP_HTML
+    assert 'function roleManagerButtonHtml(viewer)' not in MINI_APP_HTML
+    assert '${roleManagerButtonHtml(viewer)}' not in MINI_APP_HTML
     assert 'viewer.canViewAdminPanel' in MINI_APP_HTML
     assert 'api("/miniapp/profile/admin")' in MINI_APP_HTML
     assert 'api("/miniapp/profile/triggers"' in MINI_APP_HTML
@@ -242,7 +244,8 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'group.assignable === false ? ""' in MINI_APP_HTML
     assert 'function roleGroupHtml(group)' in MINI_APP_HTML
     assert 'roleTarget_${escapeHtml(group.key)}' in MINI_APP_HTML
-    assert 'viewer.canManageRoles' in MINI_APP_HTML
+    assert 'item.source === "chat_admin"' in MINI_APP_HTML
+    assert 'data.canManageRoles' in MINI_APP_HTML
     assert 'function showMineAdmin(page = 1)' in MINI_APP_HTML
     assert 'viewer.canViewMineAdmin' in MINI_APP_HTML
     assert 'body[data-theme="glass"] .mine-admin-card::before' in MINI_APP_HTML

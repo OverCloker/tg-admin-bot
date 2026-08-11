@@ -1732,19 +1732,8 @@ MINI_APP_HTML = r"""<!doctype html>
     if (social.relation !== "self" && social.relationTitle) badges.push(social.relationTitle);
     if (mine.rank) badges.push(mine.rank);
     (cosmetics.badges || []).slice(0, 2).forEach(item => badges.push(`${item.emoji || ""} ${item.title || ""}`.trim()));
-    const roleBadges = (profile.roles || []).map(role => {
-      const kind = ["owner", "admin", "moderation", "custom"].includes(role.kind) ? role.kind : "custom";
-      const title = `${role.emoji || ""} ${role.title || ""}`.trim();
-      return `<span class="profile-badge ${kind}">${escapeHtml(title)}</span>`;
-    }).join("");
-    return badges.length || roleBadges
-      ? `<div class="profile-badges">${roleBadges}${badges.map(item => `<span class="profile-badge">${escapeHtml(item)}</span>`).join("")}</div>`
-      : "";
-  }
-
-  function roleManagerButtonHtml(viewer) {
-    return viewer && viewer.canManageRoles
-      ? `<button class="btn secondary" onclick="showRoleManager()">Роли</button>`
+    return badges.length
+      ? `<div class="profile-badges">${badges.map(item => `<span class="profile-badge">${escapeHtml(item)}</span>`).join("")}</div>`
       : "";
   }
 
@@ -1763,6 +1752,8 @@ MINI_APP_HTML = r"""<!doctype html>
   function roleRowHtml(item, roleLabel = "") {
     const sourceTitle = item.source === "owner"
       ? "\u0432\u043b\u0430\u0434\u0435\u043b\u0435\u0446"
+      : item.source === "chat_admin"
+        ? `\u0430\u0434\u043c\u0438\u043d \u0447\u0430\u0442\u0430${item.chatCount ? ` · \u0447\u0430\u0442\u043e\u0432: ${Number(item.chatCount)}` : ""}`
       : item.source === "moderation"
         ? `\u043c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044f${item.chatCount ? ` · \u0447\u0430\u0442\u043e\u0432: ${Number(item.chatCount)}` : ""}`
         : "Mini App";
@@ -2207,7 +2198,7 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   async function showRoleManager() {
-    setScreenHeader("profile");
+    setScreenHeader("adminPanel");
     content.innerHTML = `<section class="panel muted">Загружаю роли...</section>`;
     try {
       const data = await api("/miniapp/profile/roles");
@@ -2217,7 +2208,7 @@ MINI_APP_HTML = r"""<!doctype html>
         <p class="muted">Выбери роль, раскрой список пользователей, удали лишних или добавь нового по @нику/ID.</p>
       </section>
       ${groups.map(roleGroupHtml).join("")}
-      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showProfile()">Назад к профилю</button></section>`;
+      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
     } catch (error) {
       showError(error);
     }
@@ -2512,7 +2503,6 @@ MINI_APP_HTML = r"""<!doctype html>
         ${isSelf ? `<button class="btn secondary" onclick="showBag()">Сумка</button>` : `<button class="btn secondary" onclick="showProfile()">Мой профиль</button>`}
         ${adminPanelButtonHtml(viewer)}
         ${mineAdminButtonHtml(viewer)}
-        ${roleManagerButtonHtml(viewer)}
       </div>
       ${isSelf ? themeSwitcherHtml() : ""}
     </section>
