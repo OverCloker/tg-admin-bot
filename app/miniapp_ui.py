@@ -2078,6 +2078,7 @@ MINI_APP_HTML = r"""<!doctype html>
         <div class="wide">${triggerMediaBoxHtml(editor, "photo", "Фото или фото с подписью", "image/*", "Можно добавить фото и подпись.")}</div>
         <div class="wide">${triggerMediaBoxHtml(editor, "animation", "GIF или GIF с подписью", "image/gif,video/mp4", "Можно добавить GIF/анимацию и подпись.")}</div>
         <div class="wide">${triggerMediaBoxHtml(editor, "audio", "Аудио-метка до 30 сек", "audio/*", "Загрузи короткую аудио-метку до 30 секунд.")}</div>
+        <div class="wide">${triggerMediaBoxHtml(editor, "video", "Короткое видео до 15 сек", "video/*", "Можно добавить короткое видео и подпись.")}</div>
         <button class="btn" onclick="saveMiniAppTrigger(${Number(chatId)})">Сохранить</button>
         <button class="btn secondary" onclick="showTriggerManager(${Number(chatId)})">Отмена</button>
       </div>

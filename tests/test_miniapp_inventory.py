@@ -355,6 +355,7 @@ def test_miniapp_trigger_can_store_multiple_variants(tmp_path, monkeypatch) -> N
                 MiniAppTriggerVariant(variantType="photo", text="смотри", mediaType="photo", mediaFileId="local:/tmp/cat.jpg"),
                 MiniAppTriggerVariant(variantType="animation", text="гиф", mediaType="animation", mediaFileId="local:/tmp/cat.gif"),
                 MiniAppTriggerVariant(variantType="audio", text="", mediaType="audio", mediaFileId="local:/tmp/cat.mp3"),
+                MiniAppTriggerVariant(variantType="video", text="video", mediaType="video", mediaFileId="local:/tmp/cat.mp4"),
             ],
         ),
         x_telegram_init_data="test",
@@ -366,13 +367,14 @@ def test_miniapp_trigger_can_store_multiple_variants(tmp_path, monkeypatch) -> N
     finally:
         db.close()
 
-    assert len(options) == 5
+    assert len(options) == 6
     assert [item.text for item in options[:2]] == ["мяу", "мур"]
     assert options[0].aliases == ("котик", "кошак")
     assert listed["triggers"][0]["aliases"] == ["котик", "кошак"]
     assert listed["triggers"][0]["aliasCount"] == 2
     assert listed["triggers"][0]["variants"][2]["variantType"] == "photo"
     assert listed["triggers"][0]["variants"][4]["mediaType"] == "audio"
+    assert listed["triggers"][0]["variants"][5]["mediaType"] == "video"
 
 
 def test_trigger_matching_uses_aliases() -> None:

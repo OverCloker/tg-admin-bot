@@ -53,6 +53,7 @@ TRIGGER_MEDIA_TYPES = {
     "photo": {"image/jpeg", "image/png", "image/webp"},
     "animation": {"image/gif", "video/mp4"},
     "audio": {"audio/mpeg", "audio/mp3", "audio/ogg", "audio/wav", "audio/webm", "audio/mp4", "audio/x-m4a"},
+    "video": {"video/mp4", "video/webm", "video/quicktime"},
 }
 DYNAMITE_MISHAP_CHANCE = 20
 DYNAMITE_MISHAP_MESSAGE = "Из-за неосторожного обращения динамит взорвался в руках. Метр не пробит."
@@ -113,7 +114,7 @@ class MiniAppTriggerSave(BaseModel):
     trigger: str = Field(min_length=1, max_length=120)
     aliases: list[str] = Field(default_factory=list, max_length=30)
     text: str | None = Field(default=None, max_length=4000)
-    variants: list[MiniAppTriggerVariant] = Field(default_factory=list, max_length=13)
+    variants: list[MiniAppTriggerVariant] = Field(default_factory=list, max_length=14)
 
 
 class MiniAppTriggerDelete(BaseModel):
@@ -809,7 +810,7 @@ def _clean_trigger_variants(payload: MiniAppTriggerSave) -> list[dict[str, objec
         variant_type = (item.variantType or "text").strip().casefold()
         if variant_type == "gif":
             variant_type = "animation"
-        if variant_type not in {"text", "photo", "animation", "audio"}:
+        if variant_type not in {"text", "photo", "animation", "audio", "video"}:
             raise HTTPException(400, "Неизвестный тип ответа триггера.")
         text = (item.text or "").strip()
         media_type = (item.mediaType or "").strip() or None
@@ -2522,7 +2523,15 @@ async def miniapp_profile_trigger_media_upload(
         raise HTTPException(400, "Файл не похож на выбранный тип медиа.")
     suffix = Path(file.filename or "").suffix.lower()
     if not suffix:
-        suffix = ".gif" if normalized_type == "animation" else ".mp3" if normalized_type == "audio" else ".jpg"
+        suffix = (
+            ".gif"
+            if normalized_type == "animation"
+            else ".mp3"
+            if normalized_type == "audio"
+            else ".mp4"
+            if normalized_type == "video"
+            else ".jpg"
+        )
     target = _trigger_media_dir() / f"{int(time.time())}_{secrets.token_hex(10)}{suffix}"
     size = 0
     with target.open("wb") as fh:
@@ -2533,22 +2542,25 @@ async def miniapp_profile_trigger_media_upload(
                     target.unlink()
                 raise HTTPException(400, "Файл слишком большой для триггера.")
             fh.write(chunk)
-    if normalized_type == "audio":
+    if normalized_type in {"audio", "video"}:
+        max_duration = 30.5 if normalized_type == "audio" else 15.5
+        media_name = "Аудио-метка" if normalized_type == "audio" else "Видео"
         try:
             import av  # type: ignore
 
             with av.open(str(target)) as container:
                 duration = float(container.duration or 0) / 1_000_000 if container.duration else 0.0
-            if duration and duration > 30.5:
+            if duration and duration > max_duration:
                 with suppress(OSError):
                     target.unlink()
-                raise HTTPException(400, "Аудио-метка должна быть до 30 секунд.")
+                limit_text = "30 секунд" if normalized_type == "audio" else "15 секунд"
+                raise HTTPException(400, f"{media_name} должно быть до {limit_text}.")
         except HTTPException:
             raise
         except Exception:
             with suppress(OSError):
                 target.unlink()
-            raise HTTPException(400, "Не удалось проверить длительность аудио.")
+            raise HTTPException(400, f"Не удалось проверить длительность: {media_name.lower()}.")
     return {
         "ok": True,
         "mediaType": normalized_type,
