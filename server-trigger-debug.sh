@@ -52,7 +52,6 @@ chat_id = int(os.environ["DEBUG_CHAT_ID"])
 trigger = normalize_trigger(os.environ["DEBUG_TRIGGER"])
 db = Database(load_config().db_path)
 try:
-    db.init()
     print("DB:", load_config().db_path)
     print("chat_id:", chat_id)
     print("trigger:", trigger)
