@@ -58,31 +58,35 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     body[data-theme="glass"] {
       --bg: #050b13;
-      --panel: linear-gradient(145deg, #ffffff2d 0%, #c8eaff14 42%, #5d78a20f 100%);
-      --panel-color: #dceeff16;
-      --panel-2: linear-gradient(145deg, #ffffff38 0%, #bde9ff1c 100%);
-      --line: #ffffff52;
+      --panel:
+        linear-gradient(145deg, #ffffff46 0%, #e8f7ff1c 36%, #7aa4d20f 100%);
+      --panel-color: #e9f6ff18;
+      --panel-2:
+        linear-gradient(145deg, #ffffff54 0%, #d8f2ff25 48%, #7794c018 100%);
+      --line: #ffffff78;
       --text: #fbfdff;
-      --muted: #d7e2ee;
+      --muted: #e5edf6;
       --accent: #d8f1ff;
       --accent-2: #fff6bd;
       --radius: 30px;
       --radius-sm: 22px;
       --button-radius: 999px;
-      --input-bg: #203247b8;
+      --input-bg: #1d3149a8;
       --input-placeholder: #d9e7f3;
       --panel-shadow:
-        0 28px 80px #00000066,
-        0 8px 22px #9de1ff16,
-        inset 0 1px 0 #ffffff70,
-        inset 0 -1px 0 #ffffff18;
-      --surface-blur: blur(28px) saturate(1.75);
+        0 34px 90px #00000073,
+        0 12px 32px #9de1ff22,
+        inset 0 1px 0 #ffffff9e,
+        inset 0 -1px 0 #ffffff24,
+        inset 0 0 32px #ffffff10;
+      --surface-blur: blur(36px) saturate(2.05) contrast(1.04);
       --app-bg-layer:
-        radial-gradient(circle at 16% -6%, #ffffff6f, transparent 20%),
-        radial-gradient(circle at 80% 3%, #9fe9ff55, transparent 24%),
-        radial-gradient(circle at 18% 72%, #8f7dff38, transparent 28%),
-        radial-gradient(circle at 92% 88%, #ffffff24, transparent 24%),
-        linear-gradient(160deg, #08111d 0%, #0c1524 48%, #05070d 100%),
+        radial-gradient(circle at 12% -4%, #ffffff8f, transparent 18%),
+        radial-gradient(circle at 78% 2%, #9fe9ff70, transparent 23%),
+        radial-gradient(circle at 20% 74%, #8f7dff48, transparent 30%),
+        radial-gradient(circle at 94% 84%, #ffffff36, transparent 25%),
+        linear-gradient(115deg, transparent 0 18%, #ffffff10 20%, transparent 34%),
+        linear-gradient(160deg, #08111d 0%, #0d1829 45%, #05070d 100%),
         var(--bg);
     }
     * { box-sizing: border-box; }
@@ -139,13 +143,20 @@ MINI_APP_HTML = r"""<!doctype html>
       color: #07111c;
       text-shadow: 0 1px 0 #ffffff80;
       background:
-        linear-gradient(180deg, #ffffffd6 0%, #d7f2ffbc 48%, #a9d8ff9c 100%);
+        radial-gradient(circle at 28% 12%, #ffffff 0%, #ffffffc8 18%, transparent 38%),
+        linear-gradient(180deg, #ffffffee 0%, #dff5ffc8 48%, #a9d8ffa8 100%);
+      box-shadow:
+        0 14px 34px #00000045,
+        inset 0 1px 0 #ffffff,
+        inset 0 -2px 5px #6daee03d;
     }
     body[data-theme="glass"] .btn.secondary,
     body[data-theme="glass"] .top-profile {
       color: var(--text);
-      text-shadow: none;
-      background: var(--panel-2);
+      text-shadow: 0 1px 2px #001220a8;
+      background:
+        radial-gradient(circle at 18% 8%, #ffffff5c 0%, transparent 34%),
+        var(--panel-2);
     }
     body[data-theme="expressive"] .btn {
       border: 1px solid #ffffff4a;
@@ -192,11 +203,12 @@ MINI_APP_HTML = r"""<!doctype html>
       pointer-events: none;
       border-radius: inherit;
       background:
-        linear-gradient(135deg, #ffffff5e 0%, transparent 32%),
-        radial-gradient(circle at 18% 0%, #ffffff34, transparent 34%),
-        radial-gradient(circle at 86% 92%, #8ddfff18, transparent 38%);
+        linear-gradient(122deg, #ffffff78 0%, #ffffff28 17%, transparent 36%),
+        linear-gradient(292deg, transparent 0 58%, #9de6ff1c 70%, transparent 88%),
+        radial-gradient(circle at 18% 0%, #ffffff46, transparent 36%),
+        radial-gradient(circle at 86% 92%, #8ddfff24, transparent 40%);
       mix-blend-mode: screen;
-      opacity: .9;
+      opacity: .96;
     }
     body[data-theme="glass"] .panel::after,
     body[data-theme="glass"] .stat::after,
@@ -208,12 +220,15 @@ MINI_APP_HTML = r"""<!doctype html>
     body[data-theme="glass"] .mine-admin-row::after {
       content: "";
       position: absolute;
-      left: 14px;
-      right: 14px;
+      left: 12px;
+      right: 12px;
       top: 1px;
-      height: 1px;
+      height: 34%;
       border-radius: 999px;
-      background: linear-gradient(90deg, transparent, #ffffffd8, transparent);
+      background:
+        linear-gradient(180deg, #ffffff52 0%, transparent 72%),
+        linear-gradient(90deg, transparent, #ffffffd8, transparent);
+      opacity: .78;
       pointer-events: none;
     }
     .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }

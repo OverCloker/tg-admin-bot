@@ -346,9 +346,11 @@ def test_miniapp_has_interface_themes() -> None:
     assert 'body[data-theme="expressive"] .btn' in MINI_APP_HTML
     assert '"expressive"' in MINI_APP_HTML
     assert '"material"' not in MINI_APP_HTML
-    assert "--surface-blur: blur(28px) saturate(1.75)" in MINI_APP_HTML
+    assert "--surface-blur: blur(36px) saturate(2.05) contrast(1.04)" in MINI_APP_HTML
     assert 'body[data-theme="glass"] .panel::before' in MINI_APP_HTML
-    assert "inset 0 1px 0 #ffffff70" in MINI_APP_HTML
+    assert "inset 0 1px 0 #ffffff9e" in MINI_APP_HTML
+    assert "linear-gradient(122deg, #ffffff78 0%, #ffffff28 17%, transparent 36%)" in MINI_APP_HTML
+    assert "height: 34%;" in MINI_APP_HTML
     assert "function setMiniTheme(theme)" in MINI_APP_HTML
     assert "themeSwitcherHtml()" in MINI_APP_HTML
     assert 'settings.theme' in MINI_APP_HTML
