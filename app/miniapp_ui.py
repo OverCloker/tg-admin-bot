@@ -144,6 +144,16 @@ MINI_APP_HTML = r"""<!doctype html>
       text-shadow: none;
       background: var(--panel-2);
     }
+    body[data-theme="material"] .btn.secondary,
+    body[data-theme="material"] .top-profile {
+      border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
+      color: #07131e;
+      background:
+        linear-gradient(180deg, #d7ecff 0%, #b8dcf7 100%);
+      box-shadow:
+        0 8px 18px #02070b26,
+        inset 0 1px 0 #ffffffa8;
+    }
     h1, h2, p { margin-top: 0; }
     h1 { margin-bottom: 2px; font-size: 34px; letter-spacing: 0; }
     h2 { margin-bottom: 10px; font-size: 23px; letter-spacing: 0; }
