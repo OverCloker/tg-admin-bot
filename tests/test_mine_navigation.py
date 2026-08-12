@@ -319,7 +319,7 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
 
 
 def test_miniapp_has_interface_themes() -> None:
-    assert 'body[data-theme="material"]' in MINI_APP_HTML
+    assert 'body[data-theme="material"]' not in MINI_APP_HTML
     assert 'body[data-theme="expressive"]' in MINI_APP_HTML
     assert 'body[data-theme="glass"]' in MINI_APP_HTML
     assert "--app-bg-layer:" in MINI_APP_HTML
@@ -329,22 +329,23 @@ def test_miniapp_has_interface_themes() -> None:
     assert "body::before" not in MINI_APP_HTML
     assert "background-position: center top;" in MINI_APP_HTML
     assert "background-attachment: fixed;" not in MINI_APP_HTML
-    assert "Material You" in MINI_APP_HTML
+    assert "Material You" not in MINI_APP_HTML
     assert "Material 3 Expressive" in MINI_APP_HTML
     assert "M3 Expressive" in MINI_APP_HTML
     assert "Liquid Glass" in MINI_APP_HTML
     assert 'id="themeApple" value="glass"' in MINI_APP_HTML
-    assert 'id="themeAndroid" value="material"' in MINI_APP_HTML
+    assert 'id="themeAndroid" value="material"' not in MINI_APP_HTML
     assert 'id="themeExpressive" value="expressive"' in MINI_APP_HTML
     assert "setMiniTheme('expressive')" in MINI_APP_HTML
-    assert 'grid-template-columns: repeat(3, 1fr);' in MINI_APP_HTML
+    assert 'grid-template-columns: repeat(2, 1fr);' in MINI_APP_HTML
     assert '#themeExpressive:checked ~ .theme-switch-track .theme-switch-knob' in MINI_APP_HTML
     assert "theme-switch-knob" in MINI_APP_HTML
-    assert "theme-platform-icon theme-android-icon" in MINI_APP_HTML
+    assert "theme-platform-icon theme-android-icon" not in MINI_APP_HTML
     assert "theme-platform-icon theme-expressive-icon" in MINI_APP_HTML
-    assert 'body[data-theme="material"] .btn.secondary' in MINI_APP_HTML
+    assert 'body[data-theme="material"] .btn.secondary' not in MINI_APP_HTML
     assert 'body[data-theme="expressive"] .btn' in MINI_APP_HTML
-    assert "linear-gradient(180deg, #d7ecff 0%, #b8dcf7 100%)" in MINI_APP_HTML
+    assert '"expressive"' in MINI_APP_HTML
+    assert '"material"' not in MINI_APP_HTML
     assert "--surface-blur: blur(28px) saturate(1.75)" in MINI_APP_HTML
     assert 'body[data-theme="glass"] .panel::before' in MINI_APP_HTML
     assert "inset 0 1px 0 #ffffff70" in MINI_APP_HTML

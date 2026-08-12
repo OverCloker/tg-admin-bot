@@ -31,28 +31,6 @@ MINI_APP_HTML = r"""<!doctype html>
       --surface-blur: none;
       --app-bg-layer: var(--bg);
     }
-    body[data-theme="material"] {
-      --bg: #101820;
-      --panel: #1d2b36;
-      --panel-color: #1d2b36;
-      --panel-2: #263846;
-      --line: #435665;
-      --text: #f5f8fb;
-      --muted: #bdc8d1;
-      --accent: #9ed0ff;
-      --accent-2: #ffd18a;
-      --radius: 24px;
-      --radius-sm: 18px;
-      --button-radius: 999px;
-      --input-bg: #15232e;
-      --input-placeholder: #aebdcc;
-      --panel-shadow: 0 10px 28px #00000026;
-      --app-bg-layer:
-        radial-gradient(circle at 18% 0%, #3e6f9180, transparent 32%),
-        radial-gradient(circle at 88% 12%, #5f6fa555, transparent 30%),
-        linear-gradient(180deg, #12202b 0%, #0f1720 100%),
-        var(--bg);
-    }
     body[data-theme="expressive"] {
       --bg: #111423;
       --panel: linear-gradient(145deg, #27334f 0%, #1b283f 52%, #162236 100%);
@@ -168,16 +146,6 @@ MINI_APP_HTML = r"""<!doctype html>
       color: var(--text);
       text-shadow: none;
       background: var(--panel-2);
-    }
-    body[data-theme="material"] .btn.secondary,
-    body[data-theme="material"] .top-profile {
-      border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
-      color: #07131e;
-      background:
-        linear-gradient(180deg, #d7ecff 0%, #b8dcf7 100%);
-      box-shadow:
-        0 8px 18px #02070b26,
-        inset 0 1px 0 #ffffffa8;
     }
     body[data-theme="expressive"] .btn {
       border: 1px solid #ffffff4a;
@@ -591,7 +559,7 @@ MINI_APP_HTML = r"""<!doctype html>
     .theme-switcher { display:grid; gap:8px; margin-top:14px; }
     .theme-platform-switch {
       position: relative;
-      width: min(100%, 390px);
+      width: min(100%, 330px);
       margin: 0 auto;
       padding-top: 62px;
     }
@@ -603,7 +571,7 @@ MINI_APP_HTML = r"""<!doctype html>
     .theme-switch-icons,
     .theme-switch-labels {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       text-align: center;
     }
     .theme-switch-icons {
@@ -631,7 +599,7 @@ MINI_APP_HTML = r"""<!doctype html>
     .theme-switch-track {
       position: relative;
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       height: 30px;
       overflow: hidden;
       border: 1px solid color-mix(in srgb, var(--line) 72%, #ffffff);
@@ -653,7 +621,7 @@ MINI_APP_HTML = r"""<!doctype html>
       position: absolute;
       top: 3px;
       left: 3px;
-      width: calc(33.333% - 6px);
+      width: calc(50% - 6px);
       height: 22px;
       border: 1px solid #777;
       border-radius: 999px;
@@ -686,12 +654,9 @@ MINI_APP_HTML = r"""<!doctype html>
       transition: .25s ease;
     }
     #themeApple:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(0); }
-    #themeAndroid:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(calc(100% + 6px)); }
-    #themeExpressive:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(calc(200% + 12px)); }
+    #themeExpressive:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(calc(100% + 6px)); }
     #themeApple:checked ~ .theme-switch-icons .theme-apple-icon,
     #themeApple:checked ~ .theme-switch-labels .theme-apple-label,
-    #themeAndroid:checked ~ .theme-switch-icons .theme-android-icon,
-    #themeAndroid:checked ~ .theme-switch-labels .theme-android-label,
     #themeExpressive:checked ~ .theme-switch-icons .theme-expressive-icon,
     #themeExpressive:checked ~ .theme-switch-labels .theme-expressive-label {
       color: var(--text);
@@ -1524,18 +1489,17 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   const MINI_APP_THEMES = {
-    material: "Material You",
     expressive: "Material 3 Expressive",
     glass: "Liquid Glass",
   };
 
   function currentMiniTheme() {
-    const theme = loadMiniSettings().theme || "material";
-    return Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "material";
+    const theme = loadMiniSettings().theme || "expressive";
+    return Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "expressive";
   }
 
   function applyMiniTheme(theme) {
-    const safeTheme = Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "material";
+    const safeTheme = Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "expressive";
     document.documentElement.dataset.theme = safeTheme;
     document.documentElement.style.colorScheme = "dark";
     document.body.dataset.theme = safeTheme;
@@ -1547,7 +1511,7 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function setMiniTheme(theme) {
     const settings = loadMiniSettings();
-    settings.theme = Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "material";
+    settings.theme = Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "expressive";
     saveMiniSettings(settings);
     enforceMiniAppTheme();
     const block = document.getElementById("themeSwitcher");
@@ -1560,17 +1524,11 @@ MINI_APP_HTML = r"""<!doctype html>
       <div class="muted">Тема интерфейса</div>
       <div class="theme-platform-switch">
         <input type="radio" name="miniAppTheme" id="themeApple" value="glass" ${theme === "glass" ? "checked" : ""} onchange="setMiniTheme('glass')">
-        <input type="radio" name="miniAppTheme" id="themeAndroid" value="material" ${theme === "material" ? "checked" : ""} onchange="setMiniTheme('material')">
         <input type="radio" name="miniAppTheme" id="themeExpressive" value="expressive" ${theme === "expressive" ? "checked" : ""} onchange="setMiniTheme('expressive')">
         <div class="theme-switch-icons">
           <label class="theme-platform-icon theme-apple-icon" for="themeApple" aria-label="Liquid Glass">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M17.2 12.5c0-2.5 2.1-3.7 2.2-3.8-1.2-1.8-3.1-2-3.8-2-1.6-.2-3.1.9-3.9.9-.8 0-2-.9-3.3-.9-1.7 0-3.2 1-4.1 2.4-1.8 3-.5 7.5 1.3 10 .9 1.2 1.9 2.6 3.3 2.5 1.3-.1 1.8-.8 3.4-.8 1.6 0 2 .8 3.4.8 1.4 0 2.3-1.2 3.1-2.5 1-1.4 1.4-2.8 1.4-2.9-.1 0-3-.9-3-3.7zM14.6 5c.7-.8 1.2-2 1.1-3.1-1 .1-2.2.7-2.9 1.5-.6.7-1.2 1.9-1.1 3 1.1.1 2.2-.6 2.9-1.4z"/>
-            </svg>
-          </label>
-          <label class="theme-platform-icon theme-android-icon" for="themeAndroid" aria-label="Material You">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M7.2 8.1h9.6l-.8-1.5 1.2-.7-.5-.8-1.2.7A5.7 5.7 0 0 0 12 4.7a5.7 5.7 0 0 0-3.5 1.1l-1.2-.7-.5.8 1.2.7-.8 1.5zm2.2-1.5a.6.6 0 1 1 0-1.2.6.6 0 0 1 0 1.2zm5.2 0a.6.6 0 1 1 0-1.2.6.6 0 0 1 0 1.2zM6.4 9v7.6c0 .8.6 1.4 1.4 1.4h.8v2.1c0 .7.5 1.2 1.2 1.2s1.2-.5 1.2-1.2V18h2v2.1c0 .7.5 1.2 1.2 1.2s1.2-.5 1.2-1.2V18h.8c.8 0 1.4-.6 1.4-1.4V9H6.4zM4.3 9.3c-.7 0-1.2.5-1.2 1.2v5.2c0 .7.5 1.2 1.2 1.2s1.2-.5 1.2-1.2v-5.2c0-.7-.5-1.2-1.2-1.2zm15.4 0c-.7 0-1.2.5-1.2 1.2v5.2c0 .7.5 1.2 1.2 1.2s1.2-.5 1.2-1.2v-5.2c0-.7-.5-1.2-1.2-1.2z"/>
             </svg>
           </label>
           <label class="theme-platform-icon theme-expressive-icon" for="themeExpressive" aria-label="Material 3 Expressive">
@@ -1582,12 +1540,10 @@ MINI_APP_HTML = r"""<!doctype html>
         <div class="theme-switch-track">
           <span class="theme-switch-knob"></span>
           <label for="themeApple"></label>
-          <label for="themeAndroid"></label>
           <label for="themeExpressive"></label>
         </div>
         <div class="theme-switch-labels">
           <label class="theme-apple-label" for="themeApple">Liquid Glass</label>
-          <label class="theme-android-label" for="themeAndroid">Material You</label>
           <label class="theme-expressive-label" for="themeExpressive">M3 Expressive</label>
         </div>
       </div>
