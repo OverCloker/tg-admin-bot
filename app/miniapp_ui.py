@@ -203,12 +203,13 @@ MINI_APP_HTML = r"""<!doctype html>
       pointer-events: none;
       border-radius: inherit;
       background:
-        linear-gradient(122deg, #ffffff78 0%, #ffffff28 17%, transparent 36%),
-        linear-gradient(292deg, transparent 0 58%, #9de6ff1c 70%, transparent 88%),
-        radial-gradient(circle at 18% 0%, #ffffff46, transparent 36%),
-        radial-gradient(circle at 86% 92%, #8ddfff24, transparent 40%);
+        linear-gradient(128deg, transparent 0 16%, #ffffff26 21%, #ffffff0d 27%, transparent 38%),
+        linear-gradient(292deg, transparent 0 63%, #9de6ff18 72%, transparent 86%),
+        radial-gradient(ellipse 180px 58px at 34px 16px, #ffffff32 0%, transparent 74%),
+        radial-gradient(ellipse 150px 52px at calc(100% - 28px) 18px, #9de6ff1d 0%, transparent 76%);
+      background-repeat: no-repeat;
       mix-blend-mode: screen;
-      opacity: .96;
+      opacity: .74;
     }
     body[data-theme="glass"] .panel::after,
     body[data-theme="glass"] .stat::after,
@@ -220,15 +221,17 @@ MINI_APP_HTML = r"""<!doctype html>
     body[data-theme="glass"] .mine-admin-row::after {
       content: "";
       position: absolute;
-      left: 12px;
-      right: 12px;
+      left: 18px;
+      right: 18px;
       top: 1px;
-      height: 34%;
+      height: 2px;
       border-radius: 999px;
       background:
-        linear-gradient(180deg, #ffffff52 0%, transparent 72%),
-        linear-gradient(90deg, transparent, #ffffffd8, transparent);
-      opacity: .78;
+        linear-gradient(90deg, transparent 0%, #ffffffb8 18%, #ffffffec 46%, #ffffff6a 72%, transparent 100%);
+      box-shadow:
+        0 18px 38px #ffffff2e,
+        0 1px 0 #ffffff4f;
+      opacity: .82;
       pointer-events: none;
     }
     .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
