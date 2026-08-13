@@ -699,6 +699,7 @@ def stars_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Баланс звезд", callback_data="stars:balance")],
+            [InlineKeyboardButton(text="Подарки", callback_data="gift:start")],
             [InlineKeyboardButton(text="Кто платил", callback_data="stars:payers")],
             [InlineKeyboardButton(text="Назад", callback_data="ui:chats")],
         ]

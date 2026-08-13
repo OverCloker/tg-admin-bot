@@ -27,7 +27,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, InputRichBlockDetails, InputRichBlockParagraph, InputRichBlockTable, InputRichMessage, LabeledPrice, MenuButtonWebApp, Message, MessageReactionUpdated, PreCheckoutQuery, RichBlockTableCell, SuccessfulPayment, User, WebAppInfo
+from aiogram.types import CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, FSInputFile, Gift, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, InputRichBlockDetails, InputRichBlockParagraph, InputRichBlockTable, InputRichMessage, LabeledPrice, MenuButtonWebApp, Message, MessageReactionUpdated, PreCheckoutQuery, RichBlockTableCell, StarAmount, SuccessfulPayment, User, WebAppInfo
 
 from .config import load_config
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
@@ -566,6 +566,36 @@ REPLY_CACHE: dict[int, tuple[float, dict[str, object]]] = {}
 BLACKLIST_CACHE: dict[int, tuple[float, list]] = {}
 AUTO_TRIGGER_SENT_CACHE_SECONDS = 120
 AUTO_TRIGGER_SENT_MESSAGES: dict[tuple[int, int], float] = {}
+GIFT_FLOW_TTL_SECONDS = 10 * 60
+GIFT_PAGE_SIZE = 6
+GIFT_SELECTIONS: dict[str, "GiftFlow"] = {}
+GIFT_CONFIRM_IN_PROGRESS: set[str] = set()
+GIFT_COMPLETED: dict[str, float] = {}
+
+
+@dataclass
+class GiftSummary:
+    gift_id: str
+    star_count: int
+    emoji: str
+    title: str
+    sticker_file_id: str | None = None
+    remaining_count: int | None = None
+    total_count: int | None = None
+    upgrade_star_count: int | None = None
+    is_premium: bool = False
+
+
+@dataclass
+class GiftFlow:
+    token: str
+    admin_id: int
+    created_at: float
+    gifts: list[GiftSummary]
+    selected_gift_id: str | None = None
+    recipient_id: int | None = None
+    recipient_label: str | None = None
+    confirmed: bool = False
 
 
 def get_premium_service() -> PremiumService:
@@ -855,6 +885,7 @@ class AdminInput(StatesGroup):
     set_access_user = State()
     set_moderator_user = State()
     remove_moderator_user = State()
+    gift_recipient = State()
 
 
 class MediaInput(StatesGroup):
@@ -950,6 +981,236 @@ def split_command_payload(text: str | None) -> str:
         return ""
     parts = text.split(maxsplit=1)
     return parts[1].strip() if len(parts) > 1 else ""
+
+
+def cleanup_gift_flows(now: float | None = None) -> None:
+    moment = time.monotonic() if now is None else now
+    stale_tokens = [
+        token
+        for token, flow in GIFT_SELECTIONS.items()
+        if moment - flow.created_at > GIFT_FLOW_TTL_SECONDS
+    ]
+    for token in stale_tokens:
+        GIFT_SELECTIONS.pop(token, None)
+        GIFT_CONFIRM_IN_PROGRESS.discard(token)
+        GIFT_COMPLETED.pop(token, None)
+    stale_completed = [
+        token
+        for token, completed_at in GIFT_COMPLETED.items()
+        if moment - completed_at > GIFT_FLOW_TTL_SECONDS
+    ]
+    for token in stale_completed:
+        GIFT_COMPLETED.pop(token, None)
+
+
+def star_amount_text(balance: StarAmount | None) -> str:
+    if balance is None:
+        return "не удалось получить"
+    amount = int(getattr(balance, "amount", 0) or 0)
+    nanostar_amount = getattr(balance, "nanostar_amount", None)
+    extra = f" + {nanostar_amount} nanostars" if nanostar_amount else ""
+    return f"{amount} ⭐{extra}"
+
+
+async def bot_star_balance(bot: Bot) -> StarAmount | None:
+    try:
+        return await bot.get_my_star_balance()
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+        return None
+
+
+def gift_summary(gift: Gift) -> GiftSummary:
+    emoji = getattr(getattr(gift, "sticker", None), "emoji", None) or "🎁"
+    sticker_file_id = getattr(getattr(gift, "sticker", None), "file_id", None)
+    title_parts = [emoji, f"{gift.star_count} ⭐"]
+    if gift.remaining_count is not None:
+        title_parts.append(f"ост. {gift.remaining_count}")
+    if gift.is_premium:
+        title_parts.append("Premium")
+    return GiftSummary(
+        gift_id=gift.id,
+        star_count=int(gift.star_count),
+        emoji=emoji,
+        title=" · ".join(title_parts),
+        sticker_file_id=sticker_file_id,
+        remaining_count=gift.remaining_count,
+        total_count=gift.total_count,
+        upgrade_star_count=gift.upgrade_star_count,
+        is_premium=bool(gift.is_premium),
+    )
+
+
+def gift_by_id(flow: GiftFlow, gift_id: str | None = None) -> GiftSummary | None:
+    selected = gift_id or flow.selected_gift_id
+    if not selected:
+        return None
+    return next((gift for gift in flow.gifts if gift.gift_id == selected), None)
+
+
+def gift_recipient_label(user_id: int, username: str | None = None, full_name: str | None = None) -> str:
+    if username:
+        return f"@{username} / {user_id}"
+    if full_name:
+        return f"{full_name} / {user_id}"
+    return str(user_id)
+
+
+def gift_flow_expired(flow: GiftFlow) -> bool:
+    return time.monotonic() - flow.created_at > GIFT_FLOW_TTL_SECONDS
+
+
+def gift_flow_markup(flow: GiftFlow, page: int = 0) -> InlineKeyboardMarkup:
+    total_pages = max(1, math.ceil(len(flow.gifts) / GIFT_PAGE_SIZE))
+    page = max(0, min(page, total_pages - 1))
+    offset = page * GIFT_PAGE_SIZE
+    rows: list[list[InlineKeyboardButton]] = []
+    for index, gift in enumerate(flow.gifts[offset : offset + GIFT_PAGE_SIZE], start=offset):
+        rows.append([
+            InlineKeyboardButton(
+                text=gift.title,
+                callback_data=f"gift:pick:{flow.token}:{index}",
+            )
+        ])
+    if total_pages > 1:
+        rows.append([
+            InlineKeyboardButton(text="←", callback_data=f"gift:list:{flow.token}:{max(0, page - 1)}"),
+            InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data=f"gift:list:{flow.token}:{page}"),
+            InlineKeyboardButton(text="→", callback_data=f"gift:list:{flow.token}:{min(total_pages - 1, page + 1)}"),
+        ])
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data=f"gift:cancel:{flow.token}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def gift_confirm_markup(flow: GiftFlow) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Отправить", callback_data=f"gift:send:{flow.token}"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data=f"gift:cancel:{flow.token}"),
+            ],
+        ]
+    )
+
+
+def gift_list_text(flow: GiftFlow, balance: StarAmount | None = None) -> str:
+    lines = [
+        "<b>Telegram Gifts за Stars</b>",
+        f"Баланс бота: <b>{escape(star_amount_text(balance))}</b>",
+        "",
+        "Выбери подарок. Цена указана в Stars.",
+    ]
+    if flow.recipient_label:
+        lines.append(f"Получатель уже выбран: <b>{escape(flow.recipient_label)}</b>")
+    lines.append("")
+    lines.extend(
+        f"• {escape(gift.title)} · <code>{escape(gift.gift_id)}</code>"
+        for gift in flow.gifts[:10]
+    )
+    if len(flow.gifts) > 10:
+        lines.append(f"…и ещё {len(flow.gifts) - 10}")
+    return "\n".join(lines)
+
+
+def gift_confirm_text(flow: GiftFlow, balance: StarAmount | None = None) -> str:
+    gift = gift_by_id(flow)
+    if gift is None:
+        return "Подарок не найден. Начни заново: /gift"
+    return "\n".join(
+        [
+            "<b>Подтверждение Telegram Gift</b>",
+            "",
+            f"🎁 Подарок: <b>{escape(gift.emoji)}</b> <code>{escape(gift.gift_id)}</code>",
+            f"⭐ Стоимость: <b>{gift.star_count}</b>",
+            f"👤 Получатель: <b>{escape(flow.recipient_label or str(flow.recipient_id or 'не выбран'))}</b>",
+            f"💰 Баланс бота: <b>{escape(star_amount_text(balance))}</b>",
+            "",
+            "Stars будут списаны с баланса Telegram-бота только после нажатия «Отправить».",
+        ]
+    )
+
+
+def gift_done_text(flow: GiftFlow, balance: StarAmount | None = None) -> str:
+    gift = gift_by_id(flow)
+    gift_title = f"{gift.emoji} <code>{escape(gift.gift_id)}</code>" if gift else "подарок"
+    return "\n".join(
+        [
+            "<b>Подарок отправлен</b>",
+            "",
+            f"🎁 Подарок: {gift_title}",
+            f"👤 Получатель: <b>{escape(flow.recipient_label or str(flow.recipient_id or '-'))}</b>",
+            f"💰 Баланс после операции: <b>{escape(star_amount_text(balance))}</b>",
+        ]
+    )
+
+
+async def get_gift_flow_from_callback(callback: CallbackQuery, token: str) -> GiftFlow | None:
+    cleanup_gift_flows()
+    flow = GIFT_SELECTIONS.get(token)
+    if flow is None:
+        await callback.answer("Операция устарела. Запусти /gift заново.", show_alert=True)
+        return None
+    if gift_flow_expired(flow):
+        GIFT_SELECTIONS.pop(token, None)
+        GIFT_CONFIRM_IN_PROGRESS.discard(token)
+        GIFT_COMPLETED.pop(token, None)
+        await callback.answer("Операция устарела. Запусти /gift заново.", show_alert=True)
+        return None
+    if flow.admin_id != callback.from_user.id:
+        await callback.answer("Эта операция принадлежит другому администратору.", show_alert=True)
+        return None
+    if not is_bot_admin(callback.from_user.id):
+        await callback.answer("Подарки доступны только администраторам бота.", show_alert=True)
+        return None
+    return flow
+
+
+async def resolve_gift_recipient_from_message(message: Message, payload: str = "") -> tuple[int | None, str | None, str | None]:
+    target = payload.strip()
+    if target:
+        if not target.isdigit():
+            return None, None, "Укажи numeric Telegram user_id. Также можно вызвать /gift ответом на сообщение пользователя."
+        user_id = int(target)
+        return user_id, gift_recipient_label(user_id), None
+    if message.reply_to_message and message.reply_to_message.from_user:
+        user = message.reply_to_message.from_user
+        return user.id, gift_recipient_label(user.id, user.username, user.full_name), None
+    return None, None, None
+
+
+async def start_gift_flow(message: Message, state: FSMContext, payload: str = "", actor: User | None = None) -> None:
+    admin = actor or message.from_user
+    if not admin or not is_bot_admin(admin.id):
+        await message.answer("Команда /gift доступна только администраторам бота.")
+        return
+    await state.clear()
+    cleanup_gift_flows()
+    recipient_id, recipient_label, recipient_error = await resolve_gift_recipient_from_message(message, payload)
+    if recipient_error:
+        await message.answer(recipient_error)
+        return
+    try:
+        available = await message.bot.get_available_gifts()
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as exc:
+        await message.answer(f"Не получилось получить список Telegram Gifts.\n<code>{escape(str(exc))}</code>")
+        return
+    gifts = [gift_summary(gift) for gift in getattr(available, "gifts", [])]
+    gifts = [gift for gift in gifts if gift.remaining_count is None or gift.remaining_count > 0]
+    gifts.sort(key=lambda item: (item.star_count, item.gift_id))
+    if not gifts:
+        await message.answer("Сейчас нет доступных Telegram Gifts.")
+        return
+    token = secrets.token_urlsafe(8)
+    flow = GiftFlow(
+        token=token,
+        admin_id=admin.id,
+        created_at=time.monotonic(),
+        gifts=gifts,
+        recipient_id=recipient_id,
+        recipient_label=recipient_label,
+    )
+    GIFT_SELECTIONS[token] = flow
+    balance = await bot_star_balance(message.bot)
+    await message.answer(gift_list_text(flow, balance), reply_markup=gift_flow_markup(flow))
 
 
 def message_html_text(message: Message) -> str:
@@ -4617,6 +4878,11 @@ async def show_user_id(message: Message) -> None:
     await message.answer(f"Твой Telegram id: <code>{message.from_user.id}</code>")
 
 
+@router.message(Command("gift"))
+async def gift_command(message: Message, state: FSMContext) -> None:
+    await start_gift_flow(message, state, split_command_payload(message.text))
+
+
 @router.message(F.text.casefold() == "/старт")
 async def start_ru(message: Message, state: FSMContext) -> None:
     await start(message, state)
@@ -6888,6 +7154,208 @@ async def cb_stars_payers(callback: CallbackQuery) -> None:
 
     await safe_edit(callback, "\n".join(lines), reply_markup=stars_menu())
     await callback.answer()
+
+
+@router.callback_query(F.data == "gift:start")
+async def cb_gift_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message:
+        await callback.answer("Не вижу сообщение панели.", show_alert=True)
+        return
+    if not is_bot_admin(callback.from_user.id):
+        await callback.answer("Подарки доступны только администраторам бота.", show_alert=True)
+        return
+    await callback.answer("Загружаю подарки...")
+    await start_gift_flow(callback.message, state, actor=callback.from_user)
+
+
+@router.callback_query(F.data.startswith("gift:list:"))
+async def cb_gift_list(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела.", show_alert=True)
+        return
+    token = parts[2]
+    page = int(parts[3]) if parts[3].isdigit() else 0
+    flow = await get_gift_flow_from_callback(callback, token)
+    if flow is None:
+        return
+    balance = await bot_star_balance(callback.bot)
+    await safe_edit(callback, gift_list_text(flow, balance), reply_markup=gift_flow_markup(flow, page))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("gift:pick:"))
+async def cb_gift_pick(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела.", show_alert=True)
+        return
+    token = parts[2]
+    index = int(parts[3]) if parts[3].isdigit() else -1
+    flow = await get_gift_flow_from_callback(callback, token)
+    if flow is None:
+        return
+    if index < 0 or index >= len(flow.gifts):
+        await callback.answer("Подарок больше не найден. Начни заново.", show_alert=True)
+        return
+    selected_gift = flow.gifts[index]
+    flow.selected_gift_id = selected_gift.gift_id
+    if callback.message and selected_gift.sticker_file_id:
+        with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+            await callback.message.answer_sticker(selected_gift.sticker_file_id)
+    if flow.recipient_id is None:
+        await state.set_state(AdminInput.gift_recipient)
+        await state.update_data(gift_token=token)
+        await safe_edit(
+            callback,
+            "Подарок выбран.\n\n"
+            "Теперь отправь numeric Telegram user_id получателя.\n"
+            "Можно отменить операцию кнопкой ниже.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data=f"gift:cancel:{token}")]]
+            ),
+        )
+        await callback.answer()
+        return
+    balance = await bot_star_balance(callback.bot)
+    await safe_edit(callback, gift_confirm_text(flow, balance), reply_markup=gift_confirm_markup(flow))
+    await callback.answer()
+
+
+@router.message(AdminInput.gift_recipient)
+async def ui_gift_recipient(message: Message, state: FSMContext) -> None:
+    if not message.from_user or not is_bot_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("Операция отменена: подарки доступны только администраторам бота.")
+        return
+    data = await state.get_data()
+    token = data.get("gift_token")
+    if not isinstance(token, str):
+        await state.clear()
+        await message.answer("Операция устарела. Запусти /gift заново.")
+        return
+    payload = (message.text or "").strip()
+    if payload.casefold() in {"отмена", "cancel", "/cancel"}:
+        GIFT_SELECTIONS.pop(token, None)
+        GIFT_CONFIRM_IN_PROGRESS.discard(token)
+        GIFT_COMPLETED.pop(token, None)
+        await state.clear()
+        await message.answer("Операция отправки подарка отменена.", reply_markup=stars_menu())
+        return
+    cleanup_gift_flows()
+    flow = GIFT_SELECTIONS.get(token)
+    if flow is None or gift_flow_expired(flow) or flow.admin_id != message.from_user.id:
+        await state.clear()
+        await message.answer("Операция устарела. Запусти /gift заново.")
+        return
+    recipient_id, recipient_label, error = await resolve_gift_recipient_from_message(message, payload)
+    if error:
+        await message.answer(error)
+        return
+    if recipient_id is None:
+        await message.answer("Отправь numeric Telegram user_id получателя или нажми «Отмена».")
+        return
+    flow.recipient_id = recipient_id
+    flow.recipient_label = recipient_label
+    await state.clear()
+    balance = await bot_star_balance(message.bot)
+    await message.answer(gift_confirm_text(flow, balance), reply_markup=gift_confirm_markup(flow))
+
+
+@router.callback_query(F.data.startswith("gift:cancel:"))
+async def cb_gift_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = (callback.data or "").split(":", 2)
+    token = parts[2] if len(parts) == 3 else ""
+    flow = GIFT_SELECTIONS.get(token)
+    if flow is not None and flow.admin_id != callback.from_user.id:
+        await callback.answer("Эта операция принадлежит другому администратору.", show_alert=True)
+        return
+    GIFT_SELECTIONS.pop(token, None)
+    GIFT_CONFIRM_IN_PROGRESS.discard(token)
+    GIFT_COMPLETED.pop(token, None)
+    await state.clear()
+    await safe_edit(callback, "Операция отправки подарка отменена.", reply_markup=stars_menu())
+    await callback.answer("Отменено")
+
+
+@router.callback_query(F.data.startswith("gift:send:"))
+async def cb_gift_send(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3:
+        await callback.answer("Кнопка устарела.", show_alert=True)
+        return
+    token = parts[2]
+    flow = await get_gift_flow_from_callback(callback, token)
+    if flow is None:
+        return
+    if token in GIFT_COMPLETED:
+        await callback.answer("Этот подарок уже был отправлен.", show_alert=True)
+        return
+    if token in GIFT_CONFIRM_IN_PROGRESS:
+        await callback.answer("Отправка уже выполняется.", show_alert=True)
+        return
+    gift = gift_by_id(flow)
+    if gift is None or flow.recipient_id is None:
+        await callback.answer("Данные операции неполные. Начни заново.", show_alert=True)
+        return
+
+    GIFT_CONFIRM_IN_PROGRESS.add(token)
+    try:
+        fresh_gifts = await callback.bot.get_available_gifts()
+        fresh = next((gift_summary(item) for item in fresh_gifts.gifts if item.id == gift.gift_id), None)
+        if fresh is None or (fresh.remaining_count is not None and fresh.remaining_count <= 0):
+            await safe_edit(callback, "Этот подарок больше недоступен. Запусти /gift заново.", reply_markup=stars_menu())
+            GIFT_SELECTIONS.pop(token, None)
+            await callback.answer("Подарок недоступен", show_alert=True)
+            return
+        if fresh.star_count != gift.star_count:
+            gift.star_count = fresh.star_count
+            gift.remaining_count = fresh.remaining_count
+            gift.total_count = fresh.total_count
+        balance = await bot_star_balance(callback.bot)
+        if balance is not None and int(balance.amount or 0) < gift.star_count:
+            await safe_edit(
+                callback,
+                "Недостаточно Stars на балансе бота.\n\n" + gift_confirm_text(flow, balance),
+                reply_markup=gift_confirm_markup(flow),
+            )
+            await callback.answer("Не хватает Stars", show_alert=True)
+            return
+        await callback.bot.send_gift(user_id=flow.recipient_id, gift_id=gift.gift_id)
+        GIFT_COMPLETED[token] = time.monotonic()
+        flow.confirmed = True
+        balance_after = await bot_star_balance(callback.bot)
+        await state.clear()
+        await safe_edit(callback, gift_done_text(flow, balance_after), reply_markup=stars_menu())
+        await callback.answer("Подарок отправлен")
+    except TelegramForbiddenError as exc:
+        await safe_edit(
+            callback,
+            "Не получилось отправить подарок: пользователь заблокировал бота или недоступен.\n"
+            f"<code>{escape(str(exc))}</code>",
+            reply_markup=stars_menu(),
+        )
+        await callback.answer("Пользователь недоступен", show_alert=True)
+    except TelegramBadRequest as exc:
+        description = str(exc)
+        await safe_edit(
+            callback,
+            "Telegram Bot API вернул ошибку при отправке подарка.\n"
+            "Возможные причины: не хватает Stars, неверный user_id, подарок больше недоступен "
+            "или получатель не может принять подарок.\n\n"
+            f"<code>{escape(description)}</code>",
+            reply_markup=stars_menu(),
+        )
+        await callback.answer("Ошибка Telegram API", show_alert=True)
+    except TelegramRetryAfter as exc:
+        await safe_edit(
+            callback,
+            f"Telegram попросил повторить позже: {int(getattr(exc, 'retry_after', 1))} сек.",
+            reply_markup=stars_menu(),
+        )
+        await callback.answer("Flood control", show_alert=True)
+    finally:
+        GIFT_CONFIRM_IN_PROGRESS.discard(token)
 
 
 @router.callback_query(F.data.startswith("chat:"))
