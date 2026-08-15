@@ -15,6 +15,18 @@ def test_rank_discount_applies_only_to_consumable_items() -> None:
 def test_shift_contract_has_no_standard_contract_xp() -> None:
     assert bot.dig_contract_xp_reward(["Сменное задание «Смена» выполнено: +80 котоинов"]) == 0
     assert bot.dig_contract_xp_reward(["Контракт «Глубина» выполнен: +60 котоинов, +40 XP"]) == 40
+    assert bot.dig_contract_xp_reward(["Контракт «Большая добыча» выполнен: +110 котоинов, +70 XP, Железная руда x2"]) == 70
+
+
+def test_expanded_contract_progress_and_reward_text() -> None:
+    values = bot.dig_contract_progress_values(dug=7, coins=130, artifact_found=True)
+
+    assert values["depth_quick"] == 7
+    assert values["coins_big"] == 130
+    assert values["artifact_pair"] == 1
+    assert values["shift_success_3"] == 1
+    assert "Железная руда x2" in bot.dig_contract_reward_text("coins_big")
+    assert "Золотой билет" in bot.dig_contract_reward_text("shift_artifact")
 
 
 def test_dig_effects_text_does_not_duplicate_paid_special_items() -> None:

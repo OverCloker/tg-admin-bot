@@ -414,18 +414,18 @@ def _rank_shift_public(db: Database, user_id: int, game: Any, items: dict[str, i
         }
     selected = _rank_shift_contract(db, game, user_id)
     options = [
-        {"key": key, "name": name, "target": target, "reward": reward}
-        for key, (name, _, target, reward) in game.DIG_RANK_SHIFT_CONTRACTS.items()
+        {"key": key, "name": name, "target": target, "reward": game.dig_contract_reward_text(key)}
+        for key, (name, _, target, _) in game.DIG_RANK_SHIFT_CONTRACTS.items()
     ]
     selected_public = None
     if selected:
         key = selected["contract_key"]
-        name, _, target, reward = game.DIG_RANK_SHIFT_CONTRACTS[key]
+        name, _, target, _ = game.DIG_RANK_SHIFT_CONTRACTS[key]
         selected_public = {
             "key": key,
             "name": name,
             "target": int(target),
-            "reward": int(reward),
+            "reward": game.dig_contract_reward_text(key),
             "progress": int(selected["progress"]),
             "claimed": bool(selected["claimed"]),
         }
@@ -462,20 +462,12 @@ def _consume_star_dig(db: Database, items: dict[str, int], user_id: int, chat_id
 
 def _update_contracts(db: Database, game: Any, user_id: int, dug: int, coins: int, artifact_found: bool) -> list[str]:
     today, _ = _ensure_daily_contracts(db, game, user_id)
-    values = {"depth": dug, "coins": coins, "artifact": 1 if artifact_found else 0, "success": 1 if dug > 0 else 0}
-    for key, (_, progress_key, _, _) in game.DIG_RANK_SHIFT_CONTRACTS.items():
-        values[key] = values[progress_key]
+    values = game.dig_contract_progress_values(dug, coins, artifact_found)
     db.add_dig_contract_progress(user_id, today, values)
     claimed = db.claim_ready_dig_contracts(user_id, today)
     rewards = []
     for key in claimed:
-        if key in game.DIG_RANK_SHIFT_CONTRACTS:
-            reward = game.DIG_RANK_SHIFT_CONTRACTS[key][3]
-            db.add_dig_coins(0, user_id, reward)
-            rewards.append(f"Сменное задание «{game.DIG_CONTRACTS[key][0]}» выполнено: +{reward} котоинов")
-        else:
-            db.add_dig_coins(0, user_id, game.DIG_CONTRACT_REWARD_COINS)
-            rewards.append(f"Контракт «{game.DIG_CONTRACTS[key][0]}» выполнен: +{game.DIG_CONTRACT_REWARD_COINS} котоинов, +{game.DIG_CONTRACT_REWARD_XP} XP")
+        rewards.append(game.apply_dig_contract_reward(db, user_id, key))
     return rewards
 
 

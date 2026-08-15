@@ -2643,12 +2643,12 @@ MINI_APP_HTML = r"""<!doctype html>
       return `<section class="panel shift-card">
         <div class="section-title"><h2>Сменное задание</h2><span class="counter">${escapeHtml(shift.rank || "")}</span></div>
         <p><b>${escapeHtml(selected.name)}</b></p>
-        <p class="muted">Прогресс: <b>${escapeHtml(status)}</b> · награда: <b>${selected.reward}</b> котоинов.</p>
+        <p class="muted">Прогресс: <b>${escapeHtml(status)}</b> · награда: <b>${escapeHtml(selected.reward)}</b>.</p>
       </section>`;
     }
     const options = (shift.options || []).map(item => `
       <button class="btn secondary" onclick="selectShiftContract('${item.key}')">
-        ${escapeHtml(item.name)} · +${item.reward} 🪙
+        ${escapeHtml(item.name)} · ${escapeHtml(item.reward)}
       </button>`).join("");
     return `<section class="panel shift-card">
       <div class="section-title"><h2>Сменное задание</h2><span class="counter">${escapeHtml(shift.rank || "")}</span></div>

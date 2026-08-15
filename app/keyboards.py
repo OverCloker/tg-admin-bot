@@ -394,8 +394,11 @@ def user_bag_menu(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
 def user_shift_contract_menu(chat_id: int, user_id: int, contract_keys: list[str] | None = None) -> InlineKeyboardMarkup:
     labels = {
         "shift_depth_4": "Пройти 4 м",
+        "shift_depth_6": "Пройти 6 м",
         "shift_coins_60": "Добыть 60 котоинов",
+        "shift_coins_100": "Добыть 100 котоинов",
         "shift_artifact": "Найти артефакт",
+        "shift_success_3": "3 удачные раскопки",
     }
     rows = [
         [InlineKeyboardButton(text=labels[key], callback_data=f"user:shiftpick:{chat_id}:{user_id}:{key}")]
@@ -753,8 +756,11 @@ def dig_section_back_menu(user_id: int) -> InlineKeyboardMarkup:
 def dig_shift_contract_menu(user_id: int, contract_keys: list[str] | None = None) -> InlineKeyboardMarkup:
     labels = {
         "shift_depth_4": "Пройти 4 м",
+        "shift_depth_6": "Пройти 6 м",
         "shift_coins_60": "Добыть 60 котоинов",
+        "shift_coins_100": "Добыть 100 котоинов",
         "shift_artifact": "Найти артефакт",
+        "shift_success_3": "3 удачные раскопки",
     }
     rows = [
         [InlineKeyboardButton(text=labels[key], callback_data=f"dig:shiftpick:{user_id}:{key}")]

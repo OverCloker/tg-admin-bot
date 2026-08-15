@@ -228,14 +228,35 @@ DIG_ROUTES = {
 }
 DIG_STANDARD_CONTRACTS = {
     "depth": ("Прокопать 12 метров", 12),
+    "depth_quick": ("Разведать 6 метров", 6),
+    "depth_deep": ("Уйти на 18 метров", 18),
     "coins": ("Заработать 120 котоинов", 120),
+    "coins_small": ("Принести 80 котоинов", 80),
+    "coins_big": ("Намыть 220 котоинов", 220),
     "artifact": ("Найти артефакт", 1),
+    "artifact_pair": ("Найти 2 артефакта", 2),
     "success": ("Три успешные раскопки", 3),
+    "success_5": ("Пять успешных раскопок", 5),
+}
+DIG_STANDARD_CONTRACT_PROGRESS = {
+    "depth": "depth",
+    "depth_quick": "depth",
+    "depth_deep": "depth",
+    "coins": "coins",
+    "coins_small": "coins",
+    "coins_big": "coins",
+    "artifact": "artifact",
+    "artifact_pair": "artifact",
+    "success": "success",
+    "success_5": "success",
 }
 DIG_RANK_SHIFT_CONTRACTS = {
     "shift_depth_4": ("Смена: пройти 4 метра", "depth", 4, 80),
+    "shift_depth_6": ("Смена: пройти 6 метров", "depth", 6, 120),
     "shift_coins_60": ("Смена: добыть 60 котоинов", "coins", 60, 100),
+    "shift_coins_100": ("Смена: добыть 100 котоинов", "coins", 100, 150),
     "shift_artifact": ("Смена: найти артефакт", "artifact", 1, 140),
+    "shift_success_3": ("Смена: 3 удачные раскопки", "success", 3, 130),
 }
 DIG_CONTRACTS = {
     **DIG_STANDARD_CONTRACTS,
@@ -243,6 +264,24 @@ DIG_CONTRACTS = {
 }
 DIG_CONTRACT_REWARD_COINS = 60
 DIG_CONTRACT_REWARD_XP = 40
+DIG_CONTRACT_REWARDS = {
+    "depth": {"coins": 60, "xp": 40},
+    "depth_quick": {"coins": 35, "xp": 25, "items": [("res_coal", 2)]},
+    "depth_deep": {"coins": 95, "xp": 65, "items": [("scanner", 1)]},
+    "coins": {"coins": 60, "xp": 40},
+    "coins_small": {"coins": 45, "xp": 25, "items": [("tea", 1)]},
+    "coins_big": {"coins": 110, "xp": 70, "items": [("res_iron", 2)]},
+    "artifact": {"coins": 60, "xp": 40},
+    "artifact_pair": {"coins": 120, "xp": 90, "items": [("map", 1)]},
+    "success": {"coins": 60, "xp": 40},
+    "success_5": {"coins": 90, "xp": 60, "items": [("repair_kit", 1)]},
+    "shift_depth_4": {"coins": 80, "items": [("res_coal", 1)]},
+    "shift_depth_6": {"coins": 120, "items": [("insurance", 1)]},
+    "shift_coins_60": {"coins": 100, "items": [("tea", 1)]},
+    "shift_coins_100": {"coins": 150, "items": [("res_silver", 1)]},
+    "shift_artifact": {"coins": 140, "items": [("golden_ticket", 1)]},
+    "shift_success_3": {"coins": 130, "items": [("dynamite", 1)]},
+}
 DIG_EXPEDITION_TARGET = 50
 DIG_EXPEDITION_REWARD = 75
 DIG_GOLDEN_TICKET_MAX_CHANCE = 50
@@ -2091,15 +2130,15 @@ def dig_rank_shift_text(user_id: int) -> str:
     selected = dig_rank_shift_contract(user_id)
     if selected:
         key = selected["contract_key"]
-        name, _, target, reward = DIG_RANK_SHIFT_CONTRACTS[key]
+        name, _, target, _ = DIG_RANK_SHIFT_CONTRACTS[key]
         state = "выполнено" if selected["claimed"] else f"{selected['progress']}/{target}"
         return (
             f"<b>Сменное задание [{escape(rank)}]</b>\n\n"
-            f"{escape(name)}\nПрогресс: <b>{state}</b>\nНаграда: <b>{reward}</b> котоинов."
+            f"{escape(name)}\nПрогресс: <b>{state}</b>\nНаграда: <b>{escape(dig_contract_reward_text(key))}</b>."
         )
     lines = [f"<b>Сменное задание [{escape(rank)}]</b>", "Выбери одну цель на сегодня:"]
-    for key, (name, _, _, reward) in DIG_RANK_SHIFT_CONTRACTS.items():
-        lines.append(f"• {escape(name)} — <b>+{reward}</b> котоинов")
+    for key, (name, _, _, _) in DIG_RANK_SHIFT_CONTRACTS.items():
+        lines.append(f"• {escape(name)} — <b>{escape(dig_contract_reward_text(key))}</b>")
     return "\n".join(lines)
 
 
@@ -2116,43 +2155,93 @@ def select_dig_rank_shift_contract(user_id: int, contract_key: str) -> str | Non
     return None
 
 
+def dig_contract_progress_values(dug: int, coins: int, artifact_found: bool) -> dict[str, int]:
+    base_values = {
+        "depth": dug,
+        "coins": coins,
+        "artifact": 1 if artifact_found else 0,
+        "success": 1 if dug > 0 else 0,
+    }
+    values = dict(base_values)
+    for key, progress_key in DIG_STANDARD_CONTRACT_PROGRESS.items():
+        values[key] = base_values.get(progress_key, 0)
+    for key, (_, progress_key, _, _) in DIG_RANK_SHIFT_CONTRACTS.items():
+        values[key] = base_values.get(progress_key, 0)
+    return values
+
+
+def dig_contract_item_name(item_key: str) -> str:
+    if item_key in MINE_RESOURCE_CATALOG:
+        return str(MINE_RESOURCE_CATALOG[item_key]["title"])
+    return DIG_SHOP_ITEMS.get(item_key, (item_key, 0, ""))[0]
+
+
+def dig_contract_reward(contract_key: str) -> dict:
+    reward = DIG_CONTRACT_REWARDS.get(contract_key)
+    if reward is not None:
+        return reward
+    if contract_key in DIG_RANK_SHIFT_CONTRACTS:
+        return {"coins": DIG_RANK_SHIFT_CONTRACTS[contract_key][3]}
+    return {"coins": DIG_CONTRACT_REWARD_COINS, "xp": DIG_CONTRACT_REWARD_XP}
+
+
+def dig_contract_reward_text(contract_key: str) -> str:
+    reward = dig_contract_reward(contract_key)
+    parts = []
+    coins = int(reward.get("coins", 0) or 0)
+    xp = int(reward.get("xp", 0) or 0)
+    if coins:
+        parts.append(f"+{coins} котоинов")
+    if xp:
+        parts.append(f"+{xp} XP")
+    for item_key, quantity in reward.get("items", []) or []:
+        suffix = f" x{int(quantity)}" if int(quantity) != 1 else ""
+        parts.append(f"{dig_contract_item_name(str(item_key))}{suffix}")
+    return ", ".join(parts) if parts else "без награды"
+
+
+def apply_dig_contract_reward(database, user_id: int, contract_key: str) -> str:
+    reward = dig_contract_reward(contract_key)
+    coins = int(reward.get("coins", 0) or 0)
+    if coins:
+        database.add_dig_coins(0, user_id, coins)
+    for item_key, quantity in reward.get("items", []) or []:
+        database.add_dig_item(0, user_id, str(item_key), int(quantity))
+    name = DIG_CONTRACTS.get(contract_key, (contract_key, 0))[0]
+    reward_text = dig_contract_reward_text(contract_key)
+    if contract_key in DIG_RANK_SHIFT_CONTRACTS:
+        return f"Сменное задание «{name}» выполнено: {reward_text}"
+    return f"Контракт «{name}» выполнен: {reward_text}"
+
+
 def dig_contracts_text(user_id: int) -> str:
     today, contracts = ensure_daily_dig_contracts(user_id)
-    lines = [f"<b>Контракты на {today}</b>", f"Награда: <b>{DIG_CONTRACT_REWARD_COINS}</b> котоинов и <b>{DIG_CONTRACT_REWARD_XP}</b> XP за каждый.", ""]
+    lines = [f"<b>Контракты на {today}</b>", "У каждой задачи своя награда: котоины, XP, ресурсы или предметы.", ""]
     for item in contracts:
-        name = DIG_CONTRACTS[item["contract_key"]][0]
-        mark = "★" if item["contract_key"] in DIG_RANK_SHIFT_CONTRACTS else ("✓" if item["claimed"] else "•")
+        key = item["contract_key"]
+        name = DIG_CONTRACTS.get(key, (key, item["target"]))[0]
+        mark = "★" if key in DIG_RANK_SHIFT_CONTRACTS else ("✓" if item["claimed"] else "•")
         lines.append(f"{mark} {escape(name)}: <b>{item['progress']}/{item['target']}</b>")
+        lines.append(f"  Награда: {escape(dig_contract_reward_text(key))}")
     return "\n".join(lines)
 
 
 def update_dig_contracts(user_id: int, dug: int, coins: int, artifact_found: bool) -> list[str]:
     today, _ = ensure_daily_dig_contracts(user_id)
-    values = {
-        "depth": dug, "coins": coins, "artifact": 1 if artifact_found else 0, "success": 1 if dug > 0 else 0,
-    }
-    for key, (_, progress_key, _, _) in DIG_RANK_SHIFT_CONTRACTS.items():
-        values[key] = values[progress_key]
+    values = dig_contract_progress_values(dug, coins, artifact_found)
     db.add_dig_contract_progress(user_id, today, values)
     claimed = db.claim_ready_dig_contracts(user_id, today)
     rewards = []
     for key in claimed:
-        if key in DIG_RANK_SHIFT_CONTRACTS:
-            reward = DIG_RANK_SHIFT_CONTRACTS[key][3]
-            db.add_dig_coins(0, user_id, reward)
-            rewards.append(f"Сменное задание «{DIG_CONTRACTS[key][0]}» выполнено: +{reward} котоинов")
-        else:
-            db.add_dig_coins(0, user_id, DIG_CONTRACT_REWARD_COINS)
-            rewards.append(f"Контракт «{DIG_CONTRACTS[key][0]}» выполнен: +{DIG_CONTRACT_REWARD_COINS} котоинов, +{DIG_CONTRACT_REWARD_XP} XP")
+        rewards.append(apply_dig_contract_reward(db, user_id, key))
     return rewards
 
 
 def dig_contract_xp_reward(updates: list[str]) -> int:
-    return sum(
-        DIG_CONTRACT_REWARD_XP
-        for text in updates
-        if not text.startswith("Сменное задание")
-    )
+    total = 0
+    for text in updates:
+        total += sum(int(value) for value in re.findall(r"\+(\d+)\s*XP\b", text))
+    return total
 
 
 def dig_routes_text(user_id: int) -> str:
