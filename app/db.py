@@ -2416,47 +2416,6 @@ class Database:
         ).fetchone()
         return dict(row) if row else None
 
-    def set_chat_slow_mode(self, chat_id: int, delay_seconds: int, updated_by: int | None) -> None:
-        delay = max(0, min(3600, int(delay_seconds)))
-        if delay <= 0:
-            self._conn.execute("delete from chat_slow_mode_settings where chat_id = ?", (chat_id,))
-            self._conn.commit()
-            return
-        self._conn.execute(
-            """
-            insert into chat_slow_mode_settings (chat_id, delay_seconds, updated_by, updated_at)
-            values (?, ?, ?, ?)
-            on conflict(chat_id) do update set
-                delay_seconds = excluded.delay_seconds,
-                updated_by = excluded.updated_by,
-                updated_at = excluded.updated_at
-            """,
-            (chat_id, delay, updated_by, utc_now()),
-        )
-        self._conn.commit()
-
-    def get_chat_slow_mode(self, chat_id: int) -> dict | None:
-        row = self._conn.execute(
-            """
-            select chat_id, delay_seconds, updated_by, updated_at
-            from chat_slow_mode_settings
-            where chat_id = ? and delay_seconds > 0
-            """,
-            (chat_id,),
-        ).fetchone()
-        return dict(row) if row else None
-
-    def get_chat_slow_mode_state(self, chat_id: int) -> dict | None:
-        row = self._conn.execute(
-            """
-            select chat_id, delay_seconds, updated_by, updated_at
-            from chat_slow_mode_settings
-            where chat_id = ?
-            """,
-            (chat_id,),
-        ).fetchone()
-        return dict(row) if row else None
-
     @staticmethod
     def _social_pair(user1_id: int, user2_id: int) -> tuple[int, int]:
         return (user1_id, user2_id) if user1_id < user2_id else (user2_id, user1_id)

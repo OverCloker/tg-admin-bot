@@ -645,8 +645,6 @@ def get_premium_service() -> PremiumService:
     return premium_service
 ALARM_RUNTIME_CACHE: dict[int, tuple[float, object]] = {}
 CHAT_LOCK_CACHE: dict[int, tuple[float, dict | None]] = {}
-CHAT_SLOW_MODE_CACHE: dict[int, tuple[float, str | None, dict | None]] = {}
-CHAT_SLOW_MODE_LAST_MESSAGES: dict[tuple[int, int], float] = {}
 BIRTHDAY_CHECK_CACHE: dict[tuple[int, str], float] = {}
 
 
@@ -713,7 +711,6 @@ def invalidate_chat_runtime_cache(chat_id: int) -> None:
     BLACKLIST_CACHE.pop(chat_id, None)
     ALARM_RUNTIME_CACHE.pop(chat_id, None)
     CHAT_LOCK_CACHE.pop(chat_id, None)
-    invalidate_chat_slow_mode_cache(chat_id)
 
 
 def cached_triggers(chat_id: int):
@@ -776,27 +773,6 @@ def invalidate_chat_lock_cache(chat_id: int) -> None:
     CHAT_LOCK_CACHE.pop(chat_id, None)
 
 
-def cached_chat_slow_mode(chat_id: int) -> dict | None:
-    now = time.monotonic()
-    state = db.get_chat_slow_mode_state(chat_id)
-    version = f"{state.get('updated_at')}:{int(state.get('delay_seconds') or 0)}" if state else None
-    cached = CHAT_SLOW_MODE_CACHE.get(chat_id)
-    if cached and cached[1] == version and now - cached[0] < ALARM_RUNTIME_CACHE_SECONDS:
-        return cached[2]
-    if cached and cached[1] != version:
-        for key in [key for key in CHAT_SLOW_MODE_LAST_MESSAGES if key[0] == chat_id]:
-            CHAT_SLOW_MODE_LAST_MESSAGES.pop(key, None)
-    setting = state if state and int(state.get("delay_seconds") or 0) > 0 else None
-    CHAT_SLOW_MODE_CACHE[chat_id] = (now, version, setting)
-    return setting
-
-
-def invalidate_chat_slow_mode_cache(chat_id: int) -> None:
-    CHAT_SLOW_MODE_CACHE.pop(chat_id, None)
-    for key in [key for key in CHAT_SLOW_MODE_LAST_MESSAGES if key[0] == chat_id]:
-        CHAT_SLOW_MODE_LAST_MESSAGES.pop(key, None)
-
-
 class DropStaleMessagesMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         if isinstance(event, Message) and event.date < BOT_STARTED_AT:
@@ -856,35 +832,6 @@ class ChatLockMiddleware(BaseMiddleware):
 
         await delete_message_now_or_later(event)
         return None
-
-
-class ChatSlowModeMiddleware(BaseMiddleware):
-    async def __call__(self, handler, event, data):
-        if not (
-            isinstance(event, Message)
-            and event.chat.type in SUPPORTED_CHAT_TYPES
-            and event.from_user
-            and not event.from_user.is_bot
-        ):
-            return await handler(event, data)
-
-        setting = cached_chat_slow_mode(event.chat.id)
-        delay = int((setting or {}).get("delay_seconds") or 0)
-        if delay <= 0:
-            return await handler(event, data)
-
-        if await actor_moderation_role(event.bot, event.chat.id, event.from_user.id) is not None:
-            return await handler(event, data)
-
-        key = (event.chat.id, event.from_user.id)
-        now = time.monotonic()
-        last_seen = CHAT_SLOW_MODE_LAST_MESSAGES.get(key)
-        if last_seen is not None and now - last_seen < delay:
-            await delete_message_now_or_later(event)
-            return None
-
-        CHAT_SLOW_MODE_LAST_MESSAGES[key] = now
-        return await handler(event, data)
 
 
 class AlarmRestrictedMessageMiddleware(BaseMiddleware):
@@ -1785,19 +1732,6 @@ def parse_chat_stop_payload(text: str | None) -> tuple[int | None, str] | None:
     if seconds is None:
         return None, rest
     return max(1, seconds), tail.strip()
-
-
-def parse_slow_mode_payload(text: str | None) -> int | None:
-    command, payload = split_text_command(text)
-    if command != "медленно":
-        return None
-    value = payload.strip().casefold()
-    if value in {"выкл", "выключить", "off", "0", "0с"}:
-        return 0
-    seconds = parse_duration_seconds_token(value)
-    if seconds is None:
-        return None
-    return max(0, min(3600, seconds))
 
 
 def parse_quiet_manual_payload(text: str | None) -> tuple[str | None, int | None, str]:
@@ -11566,38 +11500,6 @@ async def start_chat_messages(message: Message) -> None:
     )
 
 
-@router.message(F.text.regexp(re.compile(r"^медленно\s+(.+)$", re.IGNORECASE)))
-async def set_chat_slow_mode(message: Message) -> None:
-    if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
-        return
-    actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
-    if actor_role is None:
-        return
-    if actor_role == "assistant":
-        await safe_reply(message, "Помощник не может включать медленный режим.")
-        return
-
-    await remember_sender(message)
-    delay = parse_slow_mode_payload(message.text)
-    if delay is None:
-        await safe_reply(message, "Формат: <code>медленно 30с</code>, <code>медленно 5м</code> или <code>медленно выкл</code>.")
-        return
-    db.set_chat_slow_mode(message.chat.id, delay, message.from_user.id)
-    invalidate_chat_slow_mode_cache(message.chat.id)
-
-    text = "🐢 Медленный режим выключен." if delay == 0 else f"🐢 Медленный режим бота: <b>{delay}</b> сек."
-    await safe_reply(message, text)
-    await notify_staff_moderation(
-        message.bot,
-        (
-            "🐢 <b>Медленный режим</b>\n"
-            f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
-            f"Чат: {escape(chat_title(message.chat))}\n"
-            f"Задержка: <b>{delay}</b> сек."
-        ),
-    )
-
-
 @router.message(F.text.regexp(re.compile(r"^(@[A-Za-z0-9_]{5,32}\s+)?затихни\s+админ(?:\s+\d+)?(\s+-\s+.*)?$", re.IGNORECASE)))
 async def quiet_admin_user(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
@@ -12317,7 +12219,6 @@ async def main() -> None:
     router.message.middleware(AuditAdminStateMiddleware())
     router.message.middleware(QuietAdminMiddleware())
     router.message.middleware(ChatLockMiddleware())
-    router.message.middleware(ChatSlowModeMiddleware())
     router.message.middleware(AlarmRestrictedMessageMiddleware())
     router.message.middleware(BlacklistMiddleware())
     router.callback_query.middleware(StaleCallbackQueryMiddleware())

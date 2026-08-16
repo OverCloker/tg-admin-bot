@@ -293,7 +293,7 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert '"/miniapp/profile/moderation/roles"' in MINI_APP_HTML
     assert '"/miniapp/profile/moderation/chat-lock"' in MINI_APP_HTML
     assert '"/miniapp/profile/moderation/chat-unlock"' in MINI_APP_HTML
-    assert '"/miniapp/profile/moderation/slow-mode"' in MINI_APP_HTML
+    assert '"/miniapp/profile/moderation/slow-mode"' not in MINI_APP_HTML
     assert 'Открыть модерацию' in MINI_APP_HTML
     assert 'function profileAvatarHtml(user, cosmetics = {}, small = false)' in MINI_APP_HTML
     assert 'function friendRowHtml(friend)' in MINI_APP_HTML

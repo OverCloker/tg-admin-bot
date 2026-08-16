@@ -3,11 +3,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.bot import (
-    CHAT_SLOW_MODE_CACHE,
-    CHAT_SLOW_MODE_LAST_MESSAGES,
     DICTIONARY_HIT_MUTE_MINUTES,
     DICTIONARY_HIT_PHOTO_PATH,
-    ChatSlowModeMiddleware,
     MODERATOR_ASSIGN_COMMANDS,
     MINIAPP_ADMIN_PROFILE_LABEL,
     actor_can_manage_moderators,
@@ -22,7 +19,6 @@ from app.bot import (
     parse_duration_seconds_token,
     parse_moderator_duration,
     parse_moderator_role_payload,
-    parse_slow_mode_payload,
 )
 from app.db import Database
 from app.staff import STAFF_TOPIC_KEYS
@@ -176,89 +172,12 @@ def test_chat_lock_storage_and_expiration(tmp_path) -> None:
     assert db.get_chat_lock(-100) is None
 
 
-def test_chat_slow_mode_storage(tmp_path) -> None:
-    db = _db(tmp_path)
-
-    db.set_chat_slow_mode(-100, 30, 1)
-    assert db.get_chat_slow_mode(-100)["delay_seconds"] == 30
-    assert db.get_chat_slow_mode_state(-100)["delay_seconds"] == 30
-
-    db.set_chat_slow_mode(-100, 0, 1)
-    assert db.get_chat_slow_mode(-100) is None
-    assert db.get_chat_slow_mode_state(-100) is None
-
-
-def test_chat_slow_mode_cache_notices_disable(tmp_path, monkeypatch) -> None:
-    from app import bot as bot_module
-
-    db = _db(tmp_path)
-    monkeypatch.setattr(bot_module, "db", db, raising=False)
-    bot_module.CHAT_SLOW_MODE_CACHE.clear()
-    bot_module.CHAT_SLOW_MODE_LAST_MESSAGES.clear()
-
-    db.set_chat_slow_mode(-100, 30, 1)
-    assert bot_module.cached_chat_slow_mode(-100)["delay_seconds"] == 30
-    bot_module.CHAT_SLOW_MODE_LAST_MESSAGES[(-100, 7)] = 123.0
-
-    db.set_chat_slow_mode(-100, 0, 1)
-    assert bot_module.cached_chat_slow_mode(-100) is None
-    assert (-100, 7) not in bot_module.CHAT_SLOW_MODE_LAST_MESSAGES
-
-
-@pytest.mark.anyio
-async def test_bot_enforced_slow_mode_deletes_only_regular_user_spam(tmp_path, monkeypatch) -> None:
-    from app import bot as bot_module
-
-    db = _db(tmp_path)
-    db.set_chat_slow_mode(-100, 30, 1)
-    monkeypatch.setattr(bot_module, "db", db, raising=False)
-    async def fake_actor_role(_bot, _chat_id, user_id):
-        return "senior" if user_id == 3 else None
-
-    monkeypatch.setattr(bot_module, "actor_moderation_role", fake_actor_role)
-    deleted: list[int] = []
-
-    async def fake_delete(message) -> bool:
-        deleted.append(message.message_id)
-        return True
-
-    monkeypatch.setattr(bot_module, "delete_message_now_or_later", fake_delete)
-    CHAT_SLOW_MODE_CACHE.clear()
-    CHAT_SLOW_MODE_LAST_MESSAGES.clear()
-
-    class FakeMessage:
-        def __init__(self, user_id: int, message_id: int) -> None:
-            self.chat = type("Chat", (), {"id": -100, "type": "supergroup"})()
-            self.from_user = type("User", (), {"id": user_id, "is_bot": False})()
-            self.bot = object()
-            self.message_id = message_id
-
-    monkeypatch.setattr(bot_module, "Message", FakeMessage)
-
-    handled: list[int] = []
-
-    async def handler(event, _data):
-        handled.append(event.message_id)
-        return "ok"
-
-    middleware = ChatSlowModeMiddleware()
-    await middleware(handler, FakeMessage(4, 10), {})
-    await middleware(handler, FakeMessage(4, 11), {})
-    await middleware(handler, FakeMessage(3, 12), {})
-
-    assert handled == [10, 12]
-    assert deleted == [11]
-
-
 def test_chat_control_payloads() -> None:
     assert parse_duration_seconds_token("30с") == 30
     assert parse_duration_seconds_token("5м") == 300
     assert parse_duration_seconds_token("1ч") == 3600
     assert parse_chat_stop_payload("чат стоп 5м зачистка") == (300, "зачистка")
     assert parse_chat_stop_payload("чат стоп без флуда") == (None, "без флуда")
-    assert parse_slow_mode_payload("медленно 30с") == 30
-    assert parse_slow_mode_payload("медленно 5м") == 300
-    assert parse_slow_mode_payload("медленно выкл") == 0
 
 
 def test_dictionary_hit_payload_and_asset() -> None:

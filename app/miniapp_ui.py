@@ -1948,10 +1948,6 @@ MINI_APP_HTML = r"""<!doctype html>
       const lockText = lock
         ? `чат остановлен${lock.until_at ? ` до ${lock.until_at}` : " до ручного старта"}${lock.reason ? ` · ${lock.reason}` : ""}`
         : "чат открыт";
-      const slowMode = data.slowMode || null;
-      const slowModeText = slowMode && Number(slowMode.delay_seconds || 0) > 0
-        ? `${Number(slowMode.delay_seconds)} сек`
-        : "выключен";
       const lockLimit = data.chatLockLimitSeconds === null
         ? "без лимита"
         : Number(data.chatLockLimitSeconds || 0) > 0
@@ -1962,7 +1958,6 @@ MINI_APP_HTML = r"""<!doctype html>
         <p class="muted">Твоя роль: ${escapeHtml(data.viewerRoleTitle || "нет роли")}. Лимит чат-стопа: ${escapeHtml(lockLimit)}.</p>
         <div class="mine-admin-grid">
           <div class="mine-admin-card">Чат<b>${escapeHtml(lockText)}</b></div>
-          <div class="mine-admin-card">Медленный режим<b>${escapeHtml(slowModeText)}</b></div>
         </div>
         ${data.canStopChat ? `<div class="mine-admin-form wide">
           <p class="muted wide">Закрывает чат для обычных участников. Пустой срок — до команды “Чат старт”.</p>
@@ -1971,12 +1966,6 @@ MINI_APP_HTML = r"""<!doctype html>
           <button class="btn" onclick="setModerationChatLock(${selectedChatId})">Чат стоп</button>
           <button class="btn secondary" onclick="unlockModerationChat(${selectedChatId})">Чат старт</button>
         </div>` : `<p class="muted">Эта роль не может останавливать чат.</p>`}
-        ${data.canSetSlowMode ? `<div class="mine-admin-form wide">
-          <p class="muted wide">Бот удаляет слишком частые сообщения обычных участников. Модераторы и админы не ограничиваются.</p>
-          <input id="modSlowDelay" value="${slowMode && Number(slowMode.delay_seconds || 0) > 0 ? Number(slowMode.delay_seconds) : ""}" placeholder="Пауза между сообщениями, сек">
-          <button class="btn secondary" onclick="setModerationSlowMode(${selectedChatId})">Применить</button>
-          <button class="btn secondary" onclick="clearModerationSlowMode(${selectedChatId})">Выключить</button>
-        </div>` : `<p class="muted">Медленный режим доступен модератору, старшему, админу и владельцу.</p>`}
       </section>` : "";
       content.innerHTML = `<section class="panel">
         <h2>Модерация</h2>
@@ -2055,41 +2044,6 @@ MINI_APP_HTML = r"""<!doctype html>
         body: JSON.stringify({ chatId: Number(chatId), seconds: 1, reason: "" })
       });
       showNotice("Чат открыт.");
-      showModerationManager(chatId);
-    } catch (error) {
-      alert(error.message);
-    }
-  }
-
-  async function setModerationSlowMode(chatId) {
-    const rawDelay = (document.getElementById("modSlowDelay")?.value ?? "").trim();
-    const normalizedDelay = rawDelay.toLowerCase();
-    const delay = rawDelay === "" || ["0", "выкл", "выключить", "off"].includes(normalizedDelay)
-      ? 0
-      : Math.max(0, Math.round(Number(rawDelay)));
-    if (!Number.isFinite(delay)) {
-      alert("Пауза должна быть числом секунд.");
-      return;
-    }
-    try {
-      await api("/miniapp/profile/moderation/slow-mode", {
-        method: "POST",
-        body: JSON.stringify({ chatId: Number(chatId), delay })
-      });
-      showNotice(delay ? `Медленный режим: ${delay} сек.` : "Медленный режим выключен.");
-      showModerationManager(chatId);
-    } catch (error) {
-      alert(error.message);
-    }
-  }
-
-  async function clearModerationSlowMode(chatId) {
-    try {
-      await api("/miniapp/profile/moderation/slow-mode", {
-        method: "POST",
-        body: JSON.stringify({ chatId: Number(chatId), delay: 0 })
-      });
-      showNotice("Медленный режим выключен.");
       showModerationManager(chatId);
     } catch (error) {
       alert(error.message);

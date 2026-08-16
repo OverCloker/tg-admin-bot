@@ -99,11 +99,6 @@ class MiniAppChatLockSet(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
-class MiniAppSlowModeSet(BaseModel):
-    chatId: int
-    delay: int = Field(ge=0, le=3600)
-
-
 class MiniAppTriggerVariant(BaseModel):
     variantType: str = Field(default="text", min_length=1, max_length=32)
     text: str = Field(default="", max_length=4000)
@@ -910,10 +905,6 @@ def _miniapp_can_stop_chat(role: str | None, seconds: int | None) -> bool:
     if limit <= 0:
         return False
     return seconds is not None and 1 <= seconds <= limit
-
-
-def _miniapp_can_set_slow_mode(role: str | None) -> bool:
-    return role == "admin" or _miniapp_moderation_role_rank(role) >= _miniapp_moderation_role_rank("moderator")
 
 
 def _miniapp_moderator_public(row: dict[str, Any]) -> dict[str, Any]:
@@ -2534,7 +2525,7 @@ def miniapp_profile_admin_panel(
             "sections": [
                 {"key": "roles", "title": "Роли", "enabled": is_owner, "description": "Выдача ролей приложения."},
                 {"key": "mine", "title": "Шахта", "enabled": _miniapp_can_view_mine_admin(db, user["id"]), "description": "Управление для владельца, просмотр для модераторов."},
-                {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Настройки режимов чата: стоп/старт и slow mode."},
+                {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Настройки режимов чата: стоп/старт."},
                 {"key": "triggers", "title": "Триггеры", "enabled": _miniapp_can_manage_triggers(db, user["id"]), "description": "Слова и фразы, на которые бот отвечает в чатах."},
             ],
         }
@@ -2557,19 +2548,16 @@ def miniapp_profile_moderation(
         selected_chat = next((chat for chat in chats if int(chat.chat_id) == selected_chat_id), None)
         viewer_role = _miniapp_moderation_role_for_chat(db, selected_chat_id, user["id"]) if selected_chat else None
         lock = db.get_chat_lock(selected_chat_id, datetime.now(timezone.utc).isoformat(timespec="seconds")) if selected_chat else None
-        slow_mode = db.get_chat_slow_mode(selected_chat_id) if selected_chat else None
         return {
             "ok": True,
             "viewerRole": viewer_role or "",
             "viewerRoleTitle": _miniapp_moderation_role_title(viewer_role),
             "canStopChat": _miniapp_can_stop_chat(viewer_role, None) or _miniapp_chat_lock_limit_seconds(viewer_role) not in (0, None),
-            "canSetSlowMode": _miniapp_can_set_slow_mode(viewer_role),
             "chatLockLimitSeconds": _miniapp_chat_lock_limit_seconds(viewer_role),
             "selectedChatId": selected_chat_id if selected_chat else 0,
             "selectedChat": _miniapp_chat_public(selected_chat) if selected_chat else None,
             "chats": [_miniapp_chat_public(chat) for chat in chats],
             "lock": lock or None,
-            "slowMode": slow_mode or None,
         }
     finally:
         db.close()
@@ -2669,25 +2657,6 @@ def miniapp_profile_moderation_chat_unlock(
         return {"ok": True, "lock": None}
     finally:
         db.close()
-
-
-@router.post("/miniapp/profile/moderation/slow-mode")
-async def miniapp_profile_moderation_slow_mode(
-    payload: MiniAppSlowModeSet,
-    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
-) -> dict[str, Any]:
-    user = _telegram_user(x_telegram_init_data)
-    db = _db()
-    try:
-        role = _miniapp_moderation_role_for_chat(db, payload.chatId, user["id"])
-        if not _miniapp_can_set_slow_mode(role):
-            raise HTTPException(403, "Эта роль не может менять медленный режим.")
-        if db.get_chat(payload.chatId) is None:
-            raise HTTPException(404, "Чат не найден.")
-        db.set_chat_slow_mode(payload.chatId, payload.delay, user["id"])
-    finally:
-        db.close()
-    return {"ok": True, "delay": payload.delay}
 
 
 @router.get("/miniapp/profile/triggers")
