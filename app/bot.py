@@ -645,7 +645,7 @@ def get_premium_service() -> PremiumService:
     return premium_service
 ALARM_RUNTIME_CACHE: dict[int, tuple[float, object]] = {}
 CHAT_LOCK_CACHE: dict[int, tuple[float, dict | None]] = {}
-CHAT_SLOW_MODE_CACHE: dict[int, tuple[float, dict | None]] = {}
+CHAT_SLOW_MODE_CACHE: dict[int, tuple[float, str | None, dict | None]] = {}
 CHAT_SLOW_MODE_LAST_MESSAGES: dict[tuple[int, int], float] = {}
 BIRTHDAY_CHECK_CACHE: dict[tuple[int, str], float] = {}
 
@@ -778,11 +778,16 @@ def invalidate_chat_lock_cache(chat_id: int) -> None:
 
 def cached_chat_slow_mode(chat_id: int) -> dict | None:
     now = time.monotonic()
+    state = db.get_chat_slow_mode_state(chat_id)
+    version = f"{state.get('updated_at')}:{int(state.get('delay_seconds') or 0)}" if state else None
     cached = CHAT_SLOW_MODE_CACHE.get(chat_id)
-    if cached and now - cached[0] < ALARM_RUNTIME_CACHE_SECONDS:
-        return cached[1]
-    setting = db.get_chat_slow_mode(chat_id)
-    CHAT_SLOW_MODE_CACHE[chat_id] = (now, setting)
+    if cached and cached[1] == version and now - cached[0] < ALARM_RUNTIME_CACHE_SECONDS:
+        return cached[2]
+    if cached and cached[1] != version:
+        for key in [key for key in CHAT_SLOW_MODE_LAST_MESSAGES if key[0] == chat_id]:
+            CHAT_SLOW_MODE_LAST_MESSAGES.pop(key, None)
+    setting = state if state and int(state.get("delay_seconds") or 0) > 0 else None
+    CHAT_SLOW_MODE_CACHE[chat_id] = (now, version, setting)
     return setting
 
 

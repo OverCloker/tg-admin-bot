@@ -2442,6 +2442,17 @@ class Database:
         ).fetchone()
         return dict(row) if row else None
 
+    def get_chat_slow_mode_state(self, chat_id: int) -> dict | None:
+        row = self._conn.execute(
+            """
+            select chat_id, delay_seconds, updated_by, updated_at
+            from chat_slow_mode_settings
+            where chat_id = ?
+            """,
+            (chat_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
     @staticmethod
     def _social_pair(user1_id: int, user2_id: int) -> tuple[int, int]:
         return (user1_id, user2_id) if user1_id < user2_id else (user2_id, user1_id)
