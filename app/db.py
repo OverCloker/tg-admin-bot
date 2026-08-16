@@ -2418,6 +2418,10 @@ class Database:
 
     def set_chat_slow_mode(self, chat_id: int, delay_seconds: int, updated_by: int | None) -> None:
         delay = max(0, min(3600, int(delay_seconds)))
+        if delay <= 0:
+            self._conn.execute("delete from chat_slow_mode_settings where chat_id = ?", (chat_id,))
+            self._conn.commit()
+            return
         self._conn.execute(
             """
             insert into chat_slow_mode_settings (chat_id, delay_seconds, updated_by, updated_at)

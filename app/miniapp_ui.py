@@ -2063,7 +2063,10 @@ MINI_APP_HTML = r"""<!doctype html>
 
   async function setModerationSlowMode(chatId) {
     const rawDelay = (document.getElementById("modSlowDelay")?.value ?? "").trim();
-    const delay = rawDelay === "" ? 0 : Math.max(0, Math.round(Number(rawDelay)));
+    const normalizedDelay = rawDelay.toLowerCase();
+    const delay = rawDelay === "" || ["0", "выкл", "выключить", "off"].includes(normalizedDelay)
+      ? 0
+      : Math.max(0, Math.round(Number(rawDelay)));
     if (!Number.isFinite(delay)) {
       alert("Пауза должна быть числом секунд.");
       return;

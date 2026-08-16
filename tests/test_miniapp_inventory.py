@@ -14,6 +14,7 @@ from app.miniapp import (
     MiniAppChatLockSet,
     MiniAppModeratorRoleClear,
     MiniAppModeratorRoleSet,
+    MiniAppSlowModeSet,
     MiniAppTriggerDelete,
     MiniAppTriggerSave,
     MiniAppTriggerVariant,
@@ -884,6 +885,44 @@ def test_miniapp_moderation_chat_lock_respects_role_limits(tmp_path, monkeypatch
             x_telegram_init_data="test",
         )
     assert getattr(exc_info.value, "status_code", None) == 403
+
+
+def test_miniapp_moderation_slow_mode_can_be_disabled(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-100, "Chat", "supergroup", None)
+    db.close()
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 42})
+
+    enabled = asyncio.run(
+        miniapp.miniapp_profile_moderation_slow_mode(
+            MiniAppSlowModeSet(chatId=-100, delay=30),
+            x_telegram_init_data="test",
+        )
+    )
+    assert enabled["delay"] == 30
+    db_check = Database(str(db_path))
+    try:
+        assert db_check.get_chat_slow_mode(-100)["delay_seconds"] == 30
+    finally:
+        db_check.close()
+
+    disabled = asyncio.run(
+        miniapp.miniapp_profile_moderation_slow_mode(
+            MiniAppSlowModeSet(chatId=-100, delay=0),
+            x_telegram_init_data="test",
+        )
+    )
+    assert disabled["delay"] == 0
+    db_check = Database(str(db_path))
+    try:
+        assert db_check.get_chat_slow_mode(-100) is None
+        assert db_check.get_chat_slow_mode_state(-100) is None
+    finally:
+        db_check.close()
 
 
 def test_dig_player_can_be_deleted_and_blocked(tmp_path) -> None:

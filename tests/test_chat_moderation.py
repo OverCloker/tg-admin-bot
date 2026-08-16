@@ -185,7 +185,7 @@ def test_chat_slow_mode_storage(tmp_path) -> None:
 
     db.set_chat_slow_mode(-100, 0, 1)
     assert db.get_chat_slow_mode(-100) is None
-    assert db.get_chat_slow_mode_state(-100)["delay_seconds"] == 0
+    assert db.get_chat_slow_mode_state(-100) is None
 
 
 def test_chat_slow_mode_cache_notices_disable(tmp_path, monkeypatch) -> None:
