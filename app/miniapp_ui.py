@@ -1958,7 +1958,7 @@ MINI_APP_HTML = r"""<!doctype html>
         <p class="muted">Твоя роль здесь: ${escapeHtml(data.viewerRoleTitle || "нет роли")} · чат-стоп: ${escapeHtml(lockLimit)}.</p>
         <div class="mine-admin-grid">
           <div class="mine-admin-card">Статус<b>${escapeHtml(lockText)}</b></div>
-          <div class="mine-admin-card">Slow mode<b>Telegram</b></div>
+          <div class="mine-admin-card">Slow mode<b>бот</b></div>
         </div>
         ${data.canStopChat ? `<div class="mine-admin-form">
           <input id="modLockMinutes" placeholder="Минуты, пусто = до старта">

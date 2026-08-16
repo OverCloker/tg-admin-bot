@@ -974,6 +974,14 @@ class Database:
                 foreign key (chat_id) references chats(chat_id) on delete cascade
             );
 
+            create table if not exists chat_slow_mode_settings (
+                chat_id integer primary key,
+                delay_seconds integer not null default 0,
+                updated_by integer,
+                updated_at text not null,
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
             create table if not exists dig_players (
                 chat_id integer not null,
                 user_id integer not null,
@@ -2405,6 +2413,32 @@ class Database:
               and (until_at is null or until_at > ?)
             """,
             (chat_id, check_at),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def set_chat_slow_mode(self, chat_id: int, delay_seconds: int, updated_by: int | None) -> None:
+        delay = max(0, min(3600, int(delay_seconds)))
+        self._conn.execute(
+            """
+            insert into chat_slow_mode_settings (chat_id, delay_seconds, updated_by, updated_at)
+            values (?, ?, ?, ?)
+            on conflict(chat_id) do update set
+                delay_seconds = excluded.delay_seconds,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (chat_id, delay, updated_by, utc_now()),
+        )
+        self._conn.commit()
+
+    def get_chat_slow_mode(self, chat_id: int) -> dict | None:
+        row = self._conn.execute(
+            """
+            select chat_id, delay_seconds, updated_by, updated_at
+            from chat_slow_mode_settings
+            where chat_id = ? and delay_seconds > 0
+            """,
+            (chat_id,),
         ).fetchone()
         return dict(row) if row else None
 

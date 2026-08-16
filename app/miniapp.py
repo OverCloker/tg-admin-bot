@@ -2682,19 +2682,9 @@ async def miniapp_profile_moderation_slow_mode(
             raise HTTPException(403, "Эта роль не может менять медленный режим.")
         if db.get_chat(payload.chatId) is None:
             raise HTTPException(404, "Чат не найден.")
+        db.set_chat_slow_mode(payload.chatId, payload.delay, user["id"])
     finally:
         db.close()
-    token = load_config().bot_token
-    url = f"https://api.telegram.org/bot{token}/setChatSlowModeDelay"
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(url, json={"chat_id": payload.chatId, "slow_mode_delay": payload.delay}, timeout=15) as response:
-                data = await response.json(content_type=None)
-        except aiohttp.ClientError as exc:
-            raise HTTPException(502, f"Telegram API недоступен: {exc}") from exc
-    if not data.get("ok"):
-        description = str(data.get("description") or "unknown error")
-        raise HTTPException(400, f"Telegram не принял slow mode: {description}")
     return {"ok": True, "delay": payload.delay}
 
 

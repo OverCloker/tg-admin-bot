@@ -645,6 +645,8 @@ def get_premium_service() -> PremiumService:
     return premium_service
 ALARM_RUNTIME_CACHE: dict[int, tuple[float, object]] = {}
 CHAT_LOCK_CACHE: dict[int, tuple[float, dict | None]] = {}
+CHAT_SLOW_MODE_CACHE: dict[int, tuple[float, dict | None]] = {}
+CHAT_SLOW_MODE_LAST_MESSAGES: dict[tuple[int, int], float] = {}
 BIRTHDAY_CHECK_CACHE: dict[tuple[int, str], float] = {}
 
 
@@ -710,6 +712,8 @@ def invalidate_chat_runtime_cache(chat_id: int) -> None:
     REPLY_CACHE.pop(chat_id, None)
     BLACKLIST_CACHE.pop(chat_id, None)
     ALARM_RUNTIME_CACHE.pop(chat_id, None)
+    CHAT_LOCK_CACHE.pop(chat_id, None)
+    invalidate_chat_slow_mode_cache(chat_id)
 
 
 def cached_triggers(chat_id: int):
@@ -772,6 +776,22 @@ def invalidate_chat_lock_cache(chat_id: int) -> None:
     CHAT_LOCK_CACHE.pop(chat_id, None)
 
 
+def cached_chat_slow_mode(chat_id: int) -> dict | None:
+    now = time.monotonic()
+    cached = CHAT_SLOW_MODE_CACHE.get(chat_id)
+    if cached and now - cached[0] < ALARM_RUNTIME_CACHE_SECONDS:
+        return cached[1]
+    setting = db.get_chat_slow_mode(chat_id)
+    CHAT_SLOW_MODE_CACHE[chat_id] = (now, setting)
+    return setting
+
+
+def invalidate_chat_slow_mode_cache(chat_id: int) -> None:
+    CHAT_SLOW_MODE_CACHE.pop(chat_id, None)
+    for key in [key for key in CHAT_SLOW_MODE_LAST_MESSAGES if key[0] == chat_id]:
+        CHAT_SLOW_MODE_LAST_MESSAGES.pop(key, None)
+
+
 class DropStaleMessagesMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         if isinstance(event, Message) and event.date < BOT_STARTED_AT:
@@ -831,6 +851,35 @@ class ChatLockMiddleware(BaseMiddleware):
 
         await delete_message_now_or_later(event)
         return None
+
+
+class ChatSlowModeMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        if not (
+            isinstance(event, Message)
+            and event.chat.type in SUPPORTED_CHAT_TYPES
+            and event.from_user
+            and not event.from_user.is_bot
+        ):
+            return await handler(event, data)
+
+        setting = cached_chat_slow_mode(event.chat.id)
+        delay = int((setting or {}).get("delay_seconds") or 0)
+        if delay <= 0:
+            return await handler(event, data)
+
+        if await actor_moderation_role(event.bot, event.chat.id, event.from_user.id) is not None:
+            return await handler(event, data)
+
+        key = (event.chat.id, event.from_user.id)
+        now = time.monotonic()
+        last_seen = CHAT_SLOW_MODE_LAST_MESSAGES.get(key)
+        if last_seen is not None and now - last_seen < delay:
+            await delete_message_now_or_later(event)
+            return None
+
+        CHAT_SLOW_MODE_LAST_MESSAGES[key] = now
+        return await handler(event, data)
 
 
 class AlarmRestrictedMessageMiddleware(BaseMiddleware):
@@ -11528,17 +11577,10 @@ async def set_chat_slow_mode(message: Message) -> None:
     if delay is None:
         await safe_reply(message, "Формат: <code>медленно 30с</code>, <code>медленно 5м</code> или <code>медленно выкл</code>.")
         return
-    try:
-        await telegram_api_call(message.bot, "setChatSlowModeDelay", {"chat_id": message.chat.id, "slow_mode_delay": delay})
-    except (TelegramBadRequest, TelegramForbiddenError) as exc:
-        await safe_reply(
-            message,
-            "Не получилось изменить медленный режим. Проверь, что бот админ и может управлять группой.\n"
-            f"<code>{escape(str(exc))}</code>",
-        )
-        return
+    db.set_chat_slow_mode(message.chat.id, delay, message.from_user.id)
+    invalidate_chat_slow_mode_cache(message.chat.id)
 
-    text = "🐢 Медленный режим выключен." if delay == 0 else f"🐢 Медленный режим: <b>{delay}</b> сек."
+    text = "🐢 Медленный режим выключен." if delay == 0 else f"🐢 Медленный режим бота: <b>{delay}</b> сек."
     await safe_reply(message, text)
     await notify_staff_moderation(
         message.bot,
@@ -12270,6 +12312,7 @@ async def main() -> None:
     router.message.middleware(AuditAdminStateMiddleware())
     router.message.middleware(QuietAdminMiddleware())
     router.message.middleware(ChatLockMiddleware())
+    router.message.middleware(ChatSlowModeMiddleware())
     router.message.middleware(AlarmRestrictedMessageMiddleware())
     router.message.middleware(BlacklistMiddleware())
     router.callback_query.middleware(StaleCallbackQueryMiddleware())
