@@ -2557,6 +2557,7 @@ def miniapp_profile_moderation(
         selected_chat = next((chat for chat in chats if int(chat.chat_id) == selected_chat_id), None)
         viewer_role = _miniapp_moderation_role_for_chat(db, selected_chat_id, user["id"]) if selected_chat else None
         lock = db.get_chat_lock(selected_chat_id, datetime.now(timezone.utc).isoformat(timespec="seconds")) if selected_chat else None
+        slow_mode = db.get_chat_slow_mode(selected_chat_id) if selected_chat else None
         return {
             "ok": True,
             "viewerRole": viewer_role or "",
@@ -2568,6 +2569,7 @@ def miniapp_profile_moderation(
             "selectedChat": _miniapp_chat_public(selected_chat) if selected_chat else None,
             "chats": [_miniapp_chat_public(chat) for chat in chats],
             "lock": lock or None,
+            "slowMode": slow_mode or None,
         }
     finally:
         db.close()
