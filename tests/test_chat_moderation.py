@@ -173,33 +173,32 @@ def test_chat_lock_storage_and_expiration(tmp_path) -> None:
     assert db.get_chat_lock(-100) is None
 
 
-def test_blacklist_replies_storage_and_delete(tmp_path) -> None:
+def test_blacklist_variants_storage_and_delete(tmp_path) -> None:
     db = _db(tmp_path)
 
-    db.replace_blacklist_replies(-100, "Плохое слово", ["нельзя", "остынь", "нельзя"], 1)
+    db.replace_blacklist_variants(-100, "Плохое слово", ["плохие слова", "плохое слово", "плохиш"], 1)
     rules = db.list_blacklist_rules(-100)
     assert rules[0].word == "плохое слово"
-    assert rules[0].replies == ("нельзя", "остынь")
-    assert [reply.text for reply in db.list_blacklist_replies(-100, "плохое слово")] == ["нельзя", "остынь"]
+    assert rules[0].variants == ("плохие слова", "плохиш")
+    assert [variant.variant for variant in db.list_blacklist_variants(-100, "плохое слово")] == ["плохие слова", "плохиш"]
 
     assert db.delete_blacklist_word(-100, "плохое слово") is True
     assert db.list_blacklist_rules(-100) == []
-    assert db.list_blacklist_replies(-100, "плохое слово") == []
+    assert db.list_blacklist_variants(-100, "плохое слово") == []
 
 
 @pytest.mark.anyio
-async def test_blacklist_uses_random_reply_variant(tmp_path, monkeypatch) -> None:
+async def test_blacklist_matches_word_variants(tmp_path, monkeypatch) -> None:
     from app import bot as bot_module
 
     db = _db(tmp_path)
-    db.replace_blacklist_replies(-100, "банан", ["Первый ответ", "Второй ответ"], 1)
+    db.replace_blacklist_variants(-100, "банан", ["бананы", "банановый"], 1)
     monkeypatch.setattr(bot_module, "db", db, raising=False)
     bot_module.BLACKLIST_CACHE.clear()
-    monkeypatch.setattr(bot_module.random, "choice", lambda items: items[-1])
 
     class FakeMessage:
         def __init__(self) -> None:
-            self.text = "Тут банан"
+            self.text = "Тут банановый след"
             self.caption = None
             self.chat = type("Chat", (), {"id": -100})()
             self.deleted = False
@@ -214,7 +213,7 @@ async def test_blacklist_uses_random_reply_variant(tmp_path, monkeypatch) -> Non
     message = FakeMessage()
     assert await handle_blacklist(message) is True
     assert message.deleted is True
-    assert message.answers == ["Второй ответ"]
+    assert message.answers == ["Данные выражения запрещены в чате."]
 
 
 def test_chat_control_payloads() -> None:

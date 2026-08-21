@@ -2062,13 +2062,13 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   function blacklistRowHtml(item) {
-    const replyText = Number(item.replyCount || 0) > 0
-      ? `${Number(item.replyCount || 0)} вариантов ответа`
-      : "стандартная фраза";
+    const variantText = Number(item.variantCount || 0) > 0
+      ? `${Number(item.variantCount || 0)} вариантов слова`
+      : "только основное слово";
     return `<div class="admin-list-row">
       <span>
         <b>${escapeHtml(item.word)}</b><br>
-        <span class="muted">${escapeHtml(replyText)}</span>
+        <span class="muted">${escapeHtml(variantText)}</span>
       </span>
       <span class="utility-actions" style="margin:0">
         <button class="btn secondary" style="margin:0" onclick="editMiniAppBlacklist(${Number(item.chatId)}, ${jsAttrString(item.word)})">Редактировать</button>
@@ -2077,12 +2077,12 @@ MINI_APP_HTML = r"""<!doctype html>
     </div>`;
   }
 
-  function blacklistReplyRows(editor) {
-    const replies = editor && Array.isArray(editor.replies) && editor.replies.length
-      ? editor.replies
+  function blacklistVariantRows(editor) {
+    const variants = editor && Array.isArray(editor.variants) && editor.variants.length
+      ? editor.variants
       : [""];
-    return replies.slice(0, 10).map((text, index) => `<div class="trigger-answer-row">
-      <textarea class="blacklistReplyInput" placeholder="Вариант ответа ${index + 1}">${escapeHtml(text || "")}</textarea>
+    return variants.slice(0, 10).map((text, index) => `<div class="trigger-answer-row">
+      <input class="blacklistVariantInput" placeholder="Вариант слова ${index + 1}" value="${escapeHtml(text || "")}">
       <button class="btn danger" style="margin:0" onclick="this.closest('.trigger-answer-row').remove()">×</button>
     </div>`).join("");
   }
@@ -2094,9 +2094,9 @@ MINI_APP_HTML = r"""<!doctype html>
       <div class="mine-admin-form">
         <input id="blacklistWord" class="wide" placeholder="Слово или выражение" value="${escapeHtml(editor.word || "")}" ${editor.word ? "readonly" : ""}>
         <div class="wide">
-          <p class="muted">Ответы необязательны. Если оставить пусто, бот напишет стандартную фразу. Максимум 10 вариантов, выбирается случайный.</p>
-          <div id="blacklistReplies" class="trigger-answer-list">${blacklistReplyRows(editor)}</div>
-          <button class="btn secondary" style="margin-top:8px" onclick="addBlacklistReplyInput()">Добавить ответ</button>
+          <p class="muted">Варианты необязательны. Добавь до 10 форм или синонимов этого запрета: например “спам”, “спамить”, “спамер”.</p>
+          <div id="blacklistVariants" class="trigger-answer-list">${blacklistVariantRows(editor)}</div>
+          <button class="btn secondary" style="margin-top:8px" onclick="addBlacklistVariantInput()">Добавить вариант</button>
         </div>
         <button class="btn" onclick="saveMiniAppBlacklist(${Number(chatId)})">Сохранить</button>
         <button class="btn secondary" onclick="showBlacklistManager(${Number(chatId)})">Отмена</button>
@@ -2104,22 +2104,22 @@ MINI_APP_HTML = r"""<!doctype html>
     </section>`;
   }
 
-  function addBlacklistReplyInput() {
-    const list = document.getElementById("blacklistReplies");
+  function addBlacklistVariantInput() {
+    const list = document.getElementById("blacklistVariants");
     if (!list) return;
-    if (list.querySelectorAll(".blacklistReplyInput").length >= 10) {
-      alert("Максимум 10 вариантов ответа на одно правило.");
+    if (list.querySelectorAll(".blacklistVariantInput").length >= 10) {
+      alert("Максимум 10 вариантов слова на одно правило.");
       return;
     }
     const row = document.createElement("div");
     row.className = "trigger-answer-row";
-    row.innerHTML = `<textarea class="blacklistReplyInput" placeholder="Вариант ответа"></textarea><button class="btn danger" style="margin:0" onclick="this.closest('.trigger-answer-row').remove()">×</button>`;
+    row.innerHTML = `<input class="blacklistVariantInput" placeholder="Вариант слова"><button class="btn danger" style="margin:0" onclick="this.closest('.trigger-answer-row').remove()">×</button>`;
     list.appendChild(row);
   }
 
   function editMiniAppBlacklist(chatId, word) {
     const item = (window.currentMiniAppBlacklist || []).find(row => row.word === word);
-    showBlacklistManager(chatId, item || { word, replies: [] });
+    showBlacklistManager(chatId, item || { word, variants: [] });
   }
 
   async function showBlacklistManager(chatId = null, editor = null) {
@@ -2134,11 +2134,11 @@ MINI_APP_HTML = r"""<!doctype html>
       window.currentMiniAppBlacklist = items;
       const selectedChat = data.selectedChat || {};
       const addButton = selectedChatId
-        ? `<button class="btn" style="margin:0" onclick="showBlacklistManager(${selectedChatId}, { word: '', replies: [''] })">Добавить запрет</button>`
+        ? `<button class="btn" style="margin:0" onclick="showBlacklistManager(${selectedChatId}, { word: '', variants: [''] })">Добавить запрет</button>`
         : "";
       content.innerHTML = `<section class="panel">
         <h2>Чёрный список</h2>
-        <p class="muted">Выбери чат, добавь слово/фразу и варианты ответа. При совпадении бот удалит сообщение и ответит случайной фразой.</p>
+        <p class="muted">Выбери чат, добавь запрет и до 10 его форм/синонимов. При совпадении бот удалит сообщение и напишет стандартное предупреждение.</p>
         <div class="mine-admin-form">
           <select id="blacklistChatSelect" class="wide" onchange="showBlacklistManager(this.value)">
             ${triggerChatOptionsHtml(chats, selectedChatId)}
@@ -2160,10 +2160,10 @@ MINI_APP_HTML = r"""<!doctype html>
 
   async function saveMiniAppBlacklist(chatId) {
     const word = document.getElementById("blacklistWord")?.value || "";
-    const replies = [];
-    document.querySelectorAll(".blacklistReplyInput").forEach(node => {
+    const variants = [];
+    document.querySelectorAll(".blacklistVariantInput").forEach(node => {
       const text = node.value || "";
-      if (text.trim()) replies.push(text);
+      if (text.trim()) variants.push(text);
     });
     if (!word.trim()) {
       alert("Укажи слово или выражение.");
@@ -2172,7 +2172,7 @@ MINI_APP_HTML = r"""<!doctype html>
     try {
       await api("/miniapp/profile/blacklist", {
         method: "POST",
-        body: JSON.stringify({ chatId: Number(chatId), word, replies: replies.slice(0, 10) })
+        body: JSON.stringify({ chatId: Number(chatId), word, variants: variants.slice(0, 10) })
       });
       showNotice("Правило чёрного списка сохранено.");
       showBlacklistManager(chatId);

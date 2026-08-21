@@ -899,15 +899,15 @@ def test_miniapp_blacklist_save_list_and_delete(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 42})
 
     saved = miniapp.miniapp_profile_blacklist_save(
-        MiniAppBlacklistSave(chatId=-100, word="Банан", replies=["нельзя", "остынь"]),
+        MiniAppBlacklistSave(chatId=-100, word="Банан", variants=["бананы", "банановый"]),
         x_telegram_init_data="test",
     )
     assert saved["item"]["word"] == "банан"
-    assert saved["item"]["replies"] == ["нельзя", "остынь"]
+    assert saved["item"]["variants"] == ["бананы", "банановый"]
 
     listed = miniapp.miniapp_profile_blacklist(chat_id=-100, x_telegram_init_data="test")
-    assert listed["items"][0]["replyCount"] == 2
-    assert listed["items"][0]["replies"] == ["нельзя", "остынь"]
+    assert listed["items"][0]["variantCount"] == 2
+    assert listed["items"][0]["variants"] == ["бананы", "банановый"]
 
     deleted = miniapp.miniapp_profile_blacklist_delete(
         MiniAppBlacklistDelete(chatId=-100, word="банан"),

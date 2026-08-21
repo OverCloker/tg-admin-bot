@@ -10323,15 +10323,14 @@ async def handle_blacklist(message: Message) -> bool:
 
     text = normalize_trigger(content)
     for item in cached_blacklist_words(message.chat.id):
-        if has_trigger(text, item.word):
+        words = (item.word, *tuple(getattr(item, "variants", ()) or ()))
+        if any(has_trigger(text, word) for word in words):
             try:
                 await message.delete()
             except (TelegramBadRequest, TelegramForbiddenError):
                 pass
 
-            replies = tuple(getattr(item, "replies", ()) or ())
-            text = random.choice(replies) if replies else "Данные выражения запрещены в чате."
-            await message.answer(text)
+            await message.answer("Данные выражения запрещены в чате.")
             return True
 
     return False

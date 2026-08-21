@@ -323,11 +323,11 @@ class BlacklistWord:
 
 
 @dataclass(frozen=True)
-class BlacklistReplyVariant:
+class BlacklistWordVariant:
     id: int
     chat_id: int
     word: str
-    text: str
+    variant: str
     position: int
     updated_by: int | None
     updated_at: str
@@ -339,7 +339,7 @@ class BlacklistRule:
     word: str
     added_by: int | None
     created_at: str
-    replies: tuple[str, ...] = ()
+    variants: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -4259,11 +4259,11 @@ class Database:
         ).fetchall()
         return [BlacklistWord(**dict(row)) for row in rows]
 
-    def replace_blacklist_replies(
+    def replace_blacklist_variants(
         self,
         chat_id: int,
         word: str,
-        replies: list[str],
+        variants: list[str],
         updated_by: int | None,
     ) -> None:
         normalized = normalize_trigger(word)
@@ -4274,10 +4274,10 @@ class Database:
         )
         now = utc_now()
         cleaned: list[str] = []
-        for reply in replies:
-            text = str(reply or "").strip()
-            if text and text not in cleaned:
-                cleaned.append(text[:1000])
+        for variant in variants:
+            text = normalize_trigger(str(variant or ""))
+            if text and text != normalized and text not in cleaned:
+                cleaned.append(text[:120])
             if len(cleaned) >= 10:
                 break
         for position, text in enumerate(cleaned):
@@ -4290,18 +4290,18 @@ class Database:
             )
         self._conn.commit()
 
-    def list_blacklist_replies(self, chat_id: int, word: str) -> list[BlacklistReplyVariant]:
+    def list_blacklist_variants(self, chat_id: int, word: str) -> list[BlacklistWordVariant]:
         normalized = normalize_trigger(word)
         rows = self._conn.execute(
             """
-            select id, chat_id, word, text, position, updated_by, updated_at
+            select id, chat_id, word, text as variant, position, updated_by, updated_at
             from blacklist_reply_variants
             where chat_id = ? and word = ?
             order by position, id
             """,
             (chat_id, normalized),
         ).fetchall()
-        return [BlacklistReplyVariant(**dict(row)) for row in rows]
+        return [BlacklistWordVariant(**dict(row)) for row in rows]
 
     def list_blacklist_rules(self, chat_id: int) -> list[BlacklistRule]:
         words = self.list_blacklist_words(chat_id)
@@ -4316,16 +4316,16 @@ class Database:
             """,
             (chat_id,),
         ).fetchall()
-        replies: dict[str, list[str]] = {}
+        variants: dict[str, list[str]] = {}
         for row in rows:
-            replies.setdefault(str(row["word"]), []).append(str(row["text"]))
+            variants.setdefault(str(row["word"]), []).append(str(row["text"]))
         return [
             BlacklistRule(
                 chat_id=item.chat_id,
                 word=item.word,
                 added_by=item.added_by,
                 created_at=item.created_at,
-                replies=tuple(replies.get(item.word, ())),
+                variants=tuple(variants.get(item.word, ())),
             )
             for item in words
         ]

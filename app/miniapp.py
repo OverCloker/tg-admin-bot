@@ -96,6 +96,7 @@ class MiniAppModeratorRoleClear(BaseModel):
 class MiniAppBlacklistSave(BaseModel):
     chatId: int
     word: str = Field(min_length=1, max_length=120)
+    variants: list[str] = Field(default_factory=list, max_length=10)
     replies: list[str] = Field(default_factory=list, max_length=10)
 
 
@@ -961,13 +962,13 @@ def _miniapp_trigger_public(db: Database, item: Any) -> dict[str, Any]:
 
 
 def _miniapp_blacklist_public(db: Database, item: Any) -> dict[str, Any]:
-    replies = db.list_blacklist_replies(item.chat_id, item.word)
+    variants = db.list_blacklist_variants(item.chat_id, item.word)
     return {
         "chatId": int(item.chat_id),
         "word": item.word,
         "createdAt": item.created_at,
-        "replies": [reply.text for reply in replies],
-        "replyCount": len(replies),
+        "variants": [variant.variant for variant in variants],
+        "variantCount": len(variants),
     }
 
 
@@ -1139,12 +1140,13 @@ def _clean_trigger_aliases(trigger: str, aliases: list[str]) -> list[str]:
     return cleaned
 
 
-def _clean_blacklist_replies(replies: list[str]) -> list[str]:
+def _clean_blacklist_variants(word: str, variants: list[str]) -> list[str]:
+    normalized_word = normalize_trigger(word)
     cleaned: list[str] = []
-    for reply in replies:
-        text = str(reply or "").strip()
-        if text and text not in cleaned:
-            cleaned.append(text[:1000])
+    for variant in variants:
+        text = normalize_trigger(str(variant or ""))
+        if text and text != normalized_word and text not in cleaned:
+            cleaned.append(text[:120])
         if len(cleaned) >= 10:
             break
     return cleaned
@@ -2564,7 +2566,7 @@ def miniapp_profile_admin_panel(
                 {"key": "roles", "title": "Роли", "enabled": is_owner, "description": "Выдача ролей приложения."},
                 {"key": "mine", "title": "Шахта", "enabled": _miniapp_can_view_mine_admin(db, user["id"]), "description": "Управление для владельца, просмотр для модераторов."},
                 {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Настройки режимов чата: стоп/старт."},
-                {"key": "blacklist", "title": "Чёрный список", "enabled": _miniapp_can_manage_blacklist(db, user["id"]), "description": "Запрещённые слова и варианты ответа."},
+                {"key": "blacklist", "title": "Чёрный список", "enabled": _miniapp_can_manage_blacklist(db, user["id"]), "description": "Запрещённые слова, формы и синонимы."},
                 {"key": "triggers", "title": "Триггеры", "enabled": _miniapp_can_manage_triggers(db, user["id"]), "description": "Слова и фразы, на которые бот отвечает в чатах."},
             ],
         }
@@ -2738,8 +2740,9 @@ def miniapp_profile_blacklist_save(
         word = normalize_trigger(payload.word)
         if not word:
             raise HTTPException(400, "Укажи слово или выражение.")
-        replies = _clean_blacklist_replies(payload.replies)
-        db.replace_blacklist_replies(payload.chatId, word, replies, user["id"])
+        raw_variants = payload.variants or payload.replies
+        variants = _clean_blacklist_variants(word, raw_variants)
+        db.replace_blacklist_variants(payload.chatId, word, variants, user["id"])
         saved = next((item for item in db.list_blacklist_words(payload.chatId) if item.word == word), None)
         return {
             "ok": True,
