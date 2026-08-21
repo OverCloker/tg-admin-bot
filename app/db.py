@@ -323,6 +323,26 @@ class BlacklistWord:
 
 
 @dataclass(frozen=True)
+class BlacklistReplyVariant:
+    id: int
+    chat_id: int
+    word: str
+    text: str
+    position: int
+    updated_by: int | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class BlacklistRule:
+    chat_id: int
+    word: str
+    added_by: int | None
+    created_at: str
+    replies: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class RollMuteSettings:
     chat_id: int
     mute_minutes: int
@@ -864,6 +884,20 @@ class Database:
                 primary key (chat_id, word),
                 foreign key (chat_id) references chats(chat_id) on delete cascade
             );
+
+            create table if not exists blacklist_reply_variants (
+                id integer primary key autoincrement,
+                chat_id integer not null,
+                word text not null,
+                text text not null,
+                position integer not null default 0,
+                updated_by integer,
+                updated_at text not null,
+                foreign key (chat_id, word) references blacklist_words(chat_id, word) on delete cascade
+            );
+
+            create index if not exists idx_blacklist_reply_variants_word
+                on blacklist_reply_variants(chat_id, word, position);
 
             create table if not exists roll_mute_settings (
                 chat_id integer primary key,
@@ -4201,9 +4235,14 @@ class Database:
         self._conn.commit()
 
     def delete_blacklist_word(self, chat_id: int, word: str) -> bool:
+        normalized = normalize_trigger(word)
+        self._conn.execute(
+            "delete from blacklist_reply_variants where chat_id = ? and word = ?",
+            (chat_id, normalized),
+        )
         cur = self._conn.execute(
             "delete from blacklist_words where chat_id = ? and word = ?",
-            (chat_id, normalize_trigger(word)),
+            (chat_id, normalized),
         )
         self._conn.commit()
         return cur.rowcount > 0
@@ -4219,6 +4258,77 @@ class Database:
             (chat_id,),
         ).fetchall()
         return [BlacklistWord(**dict(row)) for row in rows]
+
+    def replace_blacklist_replies(
+        self,
+        chat_id: int,
+        word: str,
+        replies: list[str],
+        updated_by: int | None,
+    ) -> None:
+        normalized = normalize_trigger(word)
+        self.add_blacklist_word(chat_id, normalized, updated_by)
+        self._conn.execute(
+            "delete from blacklist_reply_variants where chat_id = ? and word = ?",
+            (chat_id, normalized),
+        )
+        now = utc_now()
+        cleaned: list[str] = []
+        for reply in replies:
+            text = str(reply or "").strip()
+            if text and text not in cleaned:
+                cleaned.append(text[:1000])
+            if len(cleaned) >= 10:
+                break
+        for position, text in enumerate(cleaned):
+            self._conn.execute(
+                """
+                insert into blacklist_reply_variants (chat_id, word, text, position, updated_by, updated_at)
+                values (?, ?, ?, ?, ?, ?)
+                """,
+                (chat_id, normalized, text[:1000], position, updated_by, now),
+            )
+        self._conn.commit()
+
+    def list_blacklist_replies(self, chat_id: int, word: str) -> list[BlacklistReplyVariant]:
+        normalized = normalize_trigger(word)
+        rows = self._conn.execute(
+            """
+            select id, chat_id, word, text, position, updated_by, updated_at
+            from blacklist_reply_variants
+            where chat_id = ? and word = ?
+            order by position, id
+            """,
+            (chat_id, normalized),
+        ).fetchall()
+        return [BlacklistReplyVariant(**dict(row)) for row in rows]
+
+    def list_blacklist_rules(self, chat_id: int) -> list[BlacklistRule]:
+        words = self.list_blacklist_words(chat_id)
+        if not words:
+            return []
+        rows = self._conn.execute(
+            """
+            select chat_id, word, text
+            from blacklist_reply_variants
+            where chat_id = ?
+            order by word collate nocase, position, id
+            """,
+            (chat_id,),
+        ).fetchall()
+        replies: dict[str, list[str]] = {}
+        for row in rows:
+            replies.setdefault(str(row["word"]), []).append(str(row["text"]))
+        return [
+            BlacklistRule(
+                chat_id=item.chat_id,
+                word=item.word,
+                added_by=item.added_by,
+                created_at=item.created_at,
+                replies=tuple(replies.get(item.word, ())),
+            )
+            for item in words
+        ]
 
     def get_roll_mute_settings(self, chat_id: int) -> RollMuteSettings:
         row = self._conn.execute(

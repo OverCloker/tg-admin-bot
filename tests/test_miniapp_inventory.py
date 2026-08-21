@@ -11,6 +11,8 @@ from app import miniapp
 from app.miniapp import (
     MINIAPP_ASSIGNABLE_PROFILE_ROLES,
     MINIAPP_OWNER_PROFILE_ROLE,
+    MiniAppBlacklistDelete,
+    MiniAppBlacklistSave,
     MiniAppChatLockSet,
     MiniAppModeratorRoleClear,
     MiniAppModeratorRoleSet,
@@ -884,6 +886,36 @@ def test_miniapp_moderation_chat_lock_respects_role_limits(tmp_path, monkeypatch
             x_telegram_init_data="test",
         )
     assert getattr(exc_info.value, "status_code", None) == 403
+
+
+def test_miniapp_blacklist_save_list_and_delete(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-100, "Chat", "supergroup", None)
+    db.close()
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 42})
+
+    saved = miniapp.miniapp_profile_blacklist_save(
+        MiniAppBlacklistSave(chatId=-100, word="Банан", replies=["нельзя", "остынь"]),
+        x_telegram_init_data="test",
+    )
+    assert saved["item"]["word"] == "банан"
+    assert saved["item"]["replies"] == ["нельзя", "остынь"]
+
+    listed = miniapp.miniapp_profile_blacklist(chat_id=-100, x_telegram_init_data="test")
+    assert listed["items"][0]["replyCount"] == 2
+    assert listed["items"][0]["replies"] == ["нельзя", "остынь"]
+
+    deleted = miniapp.miniapp_profile_blacklist_delete(
+        MiniAppBlacklistDelete(chatId=-100, word="банан"),
+        x_telegram_init_data="test",
+    )
+    assert deleted["deleted"] is True
+    listed = miniapp.miniapp_profile_blacklist(chat_id=-100, x_telegram_init_data="test")
+    assert listed["items"] == []
 
 
 def test_dig_player_can_be_deleted_and_blocked(tmp_path) -> None:

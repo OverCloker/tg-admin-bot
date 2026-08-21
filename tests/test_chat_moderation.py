@@ -8,6 +8,7 @@ from app.bot import (
     MODERATOR_ASSIGN_COMMANDS,
     MINIAPP_ADMIN_PROFILE_LABEL,
     actor_can_manage_moderators,
+    handle_blacklist,
     is_miniapp_admin_user,
     moderator_can_delete_messages,
     moderator_can_stop_chat,
@@ -170,6 +171,50 @@ def test_chat_lock_storage_and_expiration(tmp_path) -> None:
     assert db.get_chat_lock(-100)["reason"] == "manual"
     db.set_chat_lock(-100, False, 1)
     assert db.get_chat_lock(-100) is None
+
+
+def test_blacklist_replies_storage_and_delete(tmp_path) -> None:
+    db = _db(tmp_path)
+
+    db.replace_blacklist_replies(-100, "Плохое слово", ["нельзя", "остынь", "нельзя"], 1)
+    rules = db.list_blacklist_rules(-100)
+    assert rules[0].word == "плохое слово"
+    assert rules[0].replies == ("нельзя", "остынь")
+    assert [reply.text for reply in db.list_blacklist_replies(-100, "плохое слово")] == ["нельзя", "остынь"]
+
+    assert db.delete_blacklist_word(-100, "плохое слово") is True
+    assert db.list_blacklist_rules(-100) == []
+    assert db.list_blacklist_replies(-100, "плохое слово") == []
+
+
+@pytest.mark.anyio
+async def test_blacklist_uses_random_reply_variant(tmp_path, monkeypatch) -> None:
+    from app import bot as bot_module
+
+    db = _db(tmp_path)
+    db.replace_blacklist_replies(-100, "банан", ["Первый ответ", "Второй ответ"], 1)
+    monkeypatch.setattr(bot_module, "db", db, raising=False)
+    bot_module.BLACKLIST_CACHE.clear()
+    monkeypatch.setattr(bot_module.random, "choice", lambda items: items[-1])
+
+    class FakeMessage:
+        def __init__(self) -> None:
+            self.text = "Тут банан"
+            self.caption = None
+            self.chat = type("Chat", (), {"id": -100})()
+            self.deleted = False
+            self.answers: list[str] = []
+
+        async def delete(self) -> None:
+            self.deleted = True
+
+        async def answer(self, text: str) -> None:
+            self.answers.append(text)
+
+    message = FakeMessage()
+    assert await handle_blacklist(message) is True
+    assert message.deleted is True
+    assert message.answers == ["Второй ответ"]
 
 
 def test_chat_control_payloads() -> None:

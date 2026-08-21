@@ -738,7 +738,7 @@ def cached_blacklist_words(chat_id: int):
     cached = BLACKLIST_CACHE.get(chat_id)
     if cached and now - cached[0] < RUNTIME_CACHE_SECONDS:
         return cached[1]
-    items = db.list_blacklist_words(chat_id)
+    items = db.list_blacklist_rules(chat_id)
     BLACKLIST_CACHE[chat_id] = (now, items)
     return items
 
@@ -10329,7 +10329,9 @@ async def handle_blacklist(message: Message) -> bool:
             except (TelegramBadRequest, TelegramForbiddenError):
                 pass
 
-            await message.answer("Данные выражения запрещены в чате.")
+            replies = tuple(getattr(item, "replies", ()) or ())
+            text = random.choice(replies) if replies else "Данные выражения запрещены в чате."
+            await message.answer(text)
             return True
 
     return False

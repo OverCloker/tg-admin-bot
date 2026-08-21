@@ -93,6 +93,17 @@ class MiniAppModeratorRoleClear(BaseModel):
     target: str = Field(min_length=1, max_length=64)
 
 
+class MiniAppBlacklistSave(BaseModel):
+    chatId: int
+    word: str = Field(min_length=1, max_length=120)
+    replies: list[str] = Field(default_factory=list, max_length=10)
+
+
+class MiniAppBlacklistDelete(BaseModel):
+    chatId: int
+    word: str = Field(min_length=1, max_length=120)
+
+
 class MiniAppChatLockSet(BaseModel):
     chatId: int
     seconds: int | None = Field(default=None, ge=1, le=7 * 24 * 60 * 60)
@@ -857,6 +868,10 @@ def _miniapp_can_manage_triggers(db: Database, user_id: int) -> bool:
     return _miniapp_is_app_admin(db, user_id)
 
 
+def _miniapp_can_manage_blacklist(db: Database, user_id: int) -> bool:
+    return _miniapp_is_app_admin(db, user_id)
+
+
 def _miniapp_can_view_moderation(db: Database, user_id: int) -> bool:
     return _miniapp_is_app_admin(db, user_id) or bool(db.list_user_moderator_roles(user_id))
 
@@ -942,6 +957,17 @@ def _miniapp_trigger_public(db: Database, item: Any) -> dict[str, Any]:
         "hasMedia": bool(item.media_type and item.media_file_id),
         "updatedAt": item.updated_at,
         "variants": variants,
+    }
+
+
+def _miniapp_blacklist_public(db: Database, item: Any) -> dict[str, Any]:
+    replies = db.list_blacklist_replies(item.chat_id, item.word)
+    return {
+        "chatId": int(item.chat_id),
+        "word": item.word,
+        "createdAt": item.created_at,
+        "replies": [reply.text for reply in replies],
+        "replyCount": len(replies),
     }
 
 
@@ -1110,6 +1136,17 @@ def _clean_trigger_aliases(trigger: str, aliases: list[str]) -> list[str]:
         normalized = normalize_trigger(alias)
         if normalized and normalized != normalized_trigger and normalized not in cleaned:
             cleaned.append(normalized)
+    return cleaned
+
+
+def _clean_blacklist_replies(replies: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    for reply in replies:
+        text = str(reply or "").strip()
+        if text and text not in cleaned:
+            cleaned.append(text[:1000])
+        if len(cleaned) >= 10:
+            break
     return cleaned
 
 
@@ -2521,11 +2558,13 @@ def miniapp_profile_admin_panel(
                 "moderators": len({int(row["user_id"]) for row in moderators}),
                 "minePlayers": db.count_dig_players(),
                 "triggers": sum(len(db.list_triggers(chat.chat_id)) for chat in chats),
+                "blacklistWords": sum(len(db.list_blacklist_words(chat.chat_id)) for chat in chats),
             },
             "sections": [
                 {"key": "roles", "title": "Роли", "enabled": is_owner, "description": "Выдача ролей приложения."},
                 {"key": "mine", "title": "Шахта", "enabled": _miniapp_can_view_mine_admin(db, user["id"]), "description": "Управление для владельца, просмотр для модераторов."},
                 {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Настройки режимов чата: стоп/старт."},
+                {"key": "blacklist", "title": "Чёрный список", "enabled": _miniapp_can_manage_blacklist(db, user["id"]), "description": "Запрещённые слова и варианты ответа."},
                 {"key": "triggers", "title": "Триггеры", "enabled": _miniapp_can_manage_triggers(db, user["id"]), "description": "Слова и фразы, на которые бот отвечает в чатах."},
             ],
         }
@@ -2655,6 +2694,76 @@ def miniapp_profile_moderation_chat_unlock(
             raise HTTPException(404, "Чат не найден.")
         db.set_chat_lock(payload.chatId, False, user["id"])
         return {"ok": True, "lock": None}
+    finally:
+        db.close()
+
+
+@router.get("/miniapp/profile/blacklist")
+def miniapp_profile_blacklist(
+    chat_id: int | None = Query(default=None),
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not _miniapp_can_manage_blacklist(db, user["id"]):
+            raise HTTPException(403, "Чёрный список доступен владельцу и админам Mini App.")
+        chats = db.list_chats()
+        selected_chat_id = int(chat_id) if chat_id is not None else (int(chats[0].chat_id) if chats else 0)
+        selected_chat = db.get_chat(selected_chat_id) if selected_chat_id else None
+        words = db.list_blacklist_words(selected_chat_id) if selected_chat else []
+        return {
+            "ok": True,
+            "selectedChatId": selected_chat_id if selected_chat else 0,
+            "selectedChat": _miniapp_chat_public(selected_chat) if selected_chat else None,
+            "chats": [_miniapp_chat_public(chat) for chat in chats],
+            "items": [_miniapp_blacklist_public(db, item) for item in words],
+        }
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/blacklist")
+def miniapp_profile_blacklist_save(
+    payload: MiniAppBlacklistSave,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not _miniapp_can_manage_blacklist(db, user["id"]):
+            raise HTTPException(403, "Чёрный список доступен владельцу и админам Mini App.")
+        if db.get_chat(payload.chatId) is None:
+            raise HTTPException(404, "Чат не найден.")
+        word = normalize_trigger(payload.word)
+        if not word:
+            raise HTTPException(400, "Укажи слово или выражение.")
+        replies = _clean_blacklist_replies(payload.replies)
+        db.replace_blacklist_replies(payload.chatId, word, replies, user["id"])
+        saved = next((item for item in db.list_blacklist_words(payload.chatId) if item.word == word), None)
+        return {
+            "ok": True,
+            "message": "Правило чёрного списка сохранено.",
+            "item": _miniapp_blacklist_public(db, saved) if saved else None,
+        }
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/blacklist/delete")
+def miniapp_profile_blacklist_delete(
+    payload: MiniAppBlacklistDelete,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not _miniapp_can_manage_blacklist(db, user["id"]):
+            raise HTTPException(403, "Чёрный список доступен владельцу и админам Mini App.")
+        if db.get_chat(payload.chatId) is None:
+            raise HTTPException(404, "Чат не найден.")
+        deleted = db.delete_blacklist_word(payload.chatId, payload.word)
+        return {"ok": True, "deleted": deleted}
     finally:
         db.close()
 

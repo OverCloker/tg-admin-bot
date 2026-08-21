@@ -1895,6 +1895,8 @@ MINI_APP_HTML = r"""<!doctype html>
         ? `<button class="btn secondary" onclick="showMineAdmin()">Открыть шахту</button>`
         : section.key === "moderation" && section.enabled
           ? `<button class="btn secondary" onclick="showModerationManager()">Открыть модерацию</button>`
+          : section.key === "blacklist" && section.enabled
+            ? `<button class="btn secondary" onclick="showBlacklistManager()">Открыть список</button>`
           : section.key === "triggers" && section.enabled
             ? `<button class="btn secondary" onclick="showTriggerManager()">Открыть триггеры</button>`
             : `<span class="muted">Скоро</span>`;
@@ -1922,6 +1924,7 @@ MINI_APP_HTML = r"""<!doctype html>
           <div class="mine-admin-card">Админы<b>${Number(summary.admins || 0)}</b></div>
           <div class="mine-admin-card">Модераторы<b>${Number(summary.moderators || 0)}</b></div>
           <div class="mine-admin-card">Игроки шахты<b>${Number(summary.minePlayers || 0)}</b></div>
+          <div class="mine-admin-card">Запреты<b>${Number(summary.blacklistWords || 0)}</b></div>
         </div>
       </section>
       <section class="panel">
@@ -2056,6 +2059,140 @@ MINI_APP_HTML = r"""<!doctype html>
       const title = chat.username ? `${chat.title} (@${chat.username})` : chat.title;
       return `<option value="${Number(chat.id)}"${selected}>${escapeHtml(title)}</option>`;
     }).join("");
+  }
+
+  function blacklistRowHtml(item) {
+    const replyText = Number(item.replyCount || 0) > 0
+      ? `${Number(item.replyCount || 0)} вариантов ответа`
+      : "стандартная фраза";
+    return `<div class="admin-list-row">
+      <span>
+        <b>${escapeHtml(item.word)}</b><br>
+        <span class="muted">${escapeHtml(replyText)}</span>
+      </span>
+      <span class="utility-actions" style="margin:0">
+        <button class="btn secondary" style="margin:0" onclick="editMiniAppBlacklist(${Number(item.chatId)}, ${jsAttrString(item.word)})">Редактировать</button>
+        <button class="btn danger" style="margin:0" onclick="deleteMiniAppBlacklist(${Number(item.chatId)}, ${jsAttrString(item.word)})">Удалить</button>
+      </span>
+    </div>`;
+  }
+
+  function blacklistReplyRows(editor) {
+    const replies = editor && Array.isArray(editor.replies) && editor.replies.length
+      ? editor.replies
+      : [""];
+    return replies.slice(0, 10).map((text, index) => `<div class="trigger-answer-row">
+      <textarea class="blacklistReplyInput" placeholder="Вариант ответа ${index + 1}">${escapeHtml(text || "")}</textarea>
+      <button class="btn danger" style="margin:0" onclick="this.closest('.trigger-answer-row').remove()">×</button>
+    </div>`).join("");
+  }
+
+  function blacklistEditorHtml(chatId, editor) {
+    if (!editor) return "";
+    return `<section class="panel">
+      <h2>${editor.word ? "Редактировать запрет" : "Добавить запрет"}</h2>
+      <div class="mine-admin-form">
+        <input id="blacklistWord" class="wide" placeholder="Слово или выражение" value="${escapeHtml(editor.word || "")}" ${editor.word ? "readonly" : ""}>
+        <div class="wide">
+          <p class="muted">Ответы необязательны. Если оставить пусто, бот напишет стандартную фразу. Максимум 10 вариантов, выбирается случайный.</p>
+          <div id="blacklistReplies" class="trigger-answer-list">${blacklistReplyRows(editor)}</div>
+          <button class="btn secondary" style="margin-top:8px" onclick="addBlacklistReplyInput()">Добавить ответ</button>
+        </div>
+        <button class="btn" onclick="saveMiniAppBlacklist(${Number(chatId)})">Сохранить</button>
+        <button class="btn secondary" onclick="showBlacklistManager(${Number(chatId)})">Отмена</button>
+      </div>
+    </section>`;
+  }
+
+  function addBlacklistReplyInput() {
+    const list = document.getElementById("blacklistReplies");
+    if (!list) return;
+    if (list.querySelectorAll(".blacklistReplyInput").length >= 10) {
+      alert("Максимум 10 вариантов ответа на одно правило.");
+      return;
+    }
+    const row = document.createElement("div");
+    row.className = "trigger-answer-row";
+    row.innerHTML = `<textarea class="blacklistReplyInput" placeholder="Вариант ответа"></textarea><button class="btn danger" style="margin:0" onclick="this.closest('.trigger-answer-row').remove()">×</button>`;
+    list.appendChild(row);
+  }
+
+  function editMiniAppBlacklist(chatId, word) {
+    const item = (window.currentMiniAppBlacklist || []).find(row => row.word === word);
+    showBlacklistManager(chatId, item || { word, replies: [] });
+  }
+
+  async function showBlacklistManager(chatId = null, editor = null) {
+    setScreenHeader("adminPanel");
+    content.innerHTML = `<section class="panel muted">Загружаю чёрный список...</section>`;
+    try {
+      const path = chatId ? `/miniapp/profile/blacklist?chat_id=${encodeURIComponent(chatId)}` : "/miniapp/profile/blacklist";
+      const data = await api(path);
+      const chats = data.chats || [];
+      const selectedChatId = Number(data.selectedChatId || 0);
+      const items = data.items || [];
+      window.currentMiniAppBlacklist = items;
+      const selectedChat = data.selectedChat || {};
+      const addButton = selectedChatId
+        ? `<button class="btn" style="margin:0" onclick="showBlacklistManager(${selectedChatId}, { word: '', replies: [''] })">Добавить запрет</button>`
+        : "";
+      content.innerHTML = `<section class="panel">
+        <h2>Чёрный список</h2>
+        <p class="muted">Выбери чат, добавь слово/фразу и варианты ответа. При совпадении бот удалит сообщение и ответит случайной фразой.</p>
+        <div class="mine-admin-form">
+          <select id="blacklistChatSelect" class="wide" onchange="showBlacklistManager(this.value)">
+            ${triggerChatOptionsHtml(chats, selectedChatId)}
+          </select>
+          ${addButton}
+        </div>
+      </section>
+      ${selectedChatId ? blacklistEditorHtml(selectedChatId, editor) : ""}
+      <section class="panel">
+        <h2>${escapeHtml(selectedChat.title || "Чёрный список")}</h2>
+        <div class="role-list">${items.map(blacklistRowHtml).join("") || `<p class="muted">В этом чате пока нет запрещённых слов.</p>`}</div>
+      </section>
+      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
+      scrollToTop();
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function saveMiniAppBlacklist(chatId) {
+    const word = document.getElementById("blacklistWord")?.value || "";
+    const replies = [];
+    document.querySelectorAll(".blacklistReplyInput").forEach(node => {
+      const text = node.value || "";
+      if (text.trim()) replies.push(text);
+    });
+    if (!word.trim()) {
+      alert("Укажи слово или выражение.");
+      return;
+    }
+    try {
+      await api("/miniapp/profile/blacklist", {
+        method: "POST",
+        body: JSON.stringify({ chatId: Number(chatId), word, replies: replies.slice(0, 10) })
+      });
+      showNotice("Правило чёрного списка сохранено.");
+      showBlacklistManager(chatId);
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+
+  async function deleteMiniAppBlacklist(chatId, word) {
+    if (!confirm(`Удалить запрет «${word}»?`)) return;
+    try {
+      await api("/miniapp/profile/blacklist/delete", {
+        method: "POST",
+        body: JSON.stringify({ chatId: Number(chatId), word })
+      });
+      showNotice("Запрет удалён.");
+      showBlacklistManager(chatId);
+    } catch (error) {
+      alert(error.message);
+    }
   }
 
   function triggerRowHtml(item) {
