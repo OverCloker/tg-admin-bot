@@ -18,6 +18,7 @@ from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import aiohttp
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
@@ -170,6 +171,15 @@ ALERTS_LOCATION_TITLE = "Криворізький район"
 ALERTS_POLL_INTERVAL_SECONDS = 60
 SECRET_MESSAGE_ALERT_LIMIT = 190
 GIVEAWAY_TOP_RE = re.compile(r"^топ\s+пидоров[?!.]?$", re.IGNORECASE)
+try:
+    GIVEAWAY_RESET_TIMEZONE = ZoneInfo("Europe/Kiev")
+except ZoneInfoNotFoundError:
+    try:
+        GIVEAWAY_RESET_TIMEZONE = ZoneInfo("Europe/Kyiv")
+    except ZoneInfoNotFoundError:
+        GIVEAWAY_RESET_TIMEZONE = timezone(timedelta(hours=3))
+GIVEAWAY_RESET_HOUR = 0
+GIVEAWAY_RESET_MINUTE = 1
 SECRET_MESSAGE_RE = re.compile(
     r"^\s*(?:лс|личка)(?:\s+(@[A-Za-z0-9_]{5,32}))?(?:\s+(.+))?\s*$",
     re.IGNORECASE | re.DOTALL,
@@ -1392,6 +1402,24 @@ def is_day_query(text: str | None) -> bool:
     if not text:
         return False
     return normalize_trigger(text).strip(" ?!.") == DAY_QUERY_TEXT
+
+
+def giveaway_pick_date(moment: datetime | None = None) -> str:
+    current = moment or datetime.now(GIVEAWAY_RESET_TIMEZONE)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=GIVEAWAY_RESET_TIMEZONE)
+    else:
+        current = current.astimezone(GIVEAWAY_RESET_TIMEZONE)
+
+    reset_at = current.replace(
+        hour=GIVEAWAY_RESET_HOUR,
+        minute=GIVEAWAY_RESET_MINUTE,
+        second=0,
+        microsecond=0,
+    )
+    if current < reset_at:
+        current -= timedelta(days=1)
+    return current.date().isoformat()
 
 
 def parse_weather_request(text: str | None) -> tuple[str, str] | None:
@@ -10597,7 +10625,7 @@ async def handle_day_pick(message: Message) -> bool:
         return False
 
     await remember_sender(message)
-    today = datetime.now().date().isoformat()
+    today = giveaway_pick_date()
     pick_key = settings.trigger
     picked = db.get_giveaway_picks(message.chat.id, pick_key, today)
     if picked:
