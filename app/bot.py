@@ -172,14 +172,19 @@ ALERTS_POLL_INTERVAL_SECONDS = 60
 SECRET_MESSAGE_ALERT_LIMIT = 190
 GIVEAWAY_TOP_RE = re.compile(r"^топ\s+пидоров[?!.]?$", re.IGNORECASE)
 try:
-    GIVEAWAY_RESET_TIMEZONE = ZoneInfo("Europe/Kiev")
+    LOCAL_TIMEZONE = ZoneInfo("Europe/Kiev")
 except ZoneInfoNotFoundError:
     try:
-        GIVEAWAY_RESET_TIMEZONE = ZoneInfo("Europe/Kyiv")
+        LOCAL_TIMEZONE = ZoneInfo("Europe/Kyiv")
     except ZoneInfoNotFoundError:
-        GIVEAWAY_RESET_TIMEZONE = timezone(timedelta(hours=3))
+        LOCAL_TIMEZONE = timezone(timedelta(hours=3))
+GIVEAWAY_RESET_TIMEZONE = LOCAL_TIMEZONE
 GIVEAWAY_RESET_HOUR = 0
 GIVEAWAY_RESET_MINUTE = 1
+AUTO_WEATHER_RE = re.compile(r"^\s*автопогода(?:\s+(.+))?\s*$", re.IGNORECASE)
+AUTO_WEATHER_HOURS = [8, 12, 15, 18]
+AUTO_WEATHER_TOMORROW_HOUR = 21
+AUTO_WEATHER_POLL_SECONDS = 30
 SECRET_MESSAGE_RE = re.compile(
     r"^\s*(?:лс|личка)(?:\s+(@[A-Za-z0-9_]{5,32}))?(?:\s+(.+))?\s*$",
     re.IGNORECASE | re.DOTALL,
@@ -1446,6 +1451,61 @@ def parse_weather_request(text: str | None) -> tuple[str, str] | None:
             return (city, value) if city else None
 
     return (payload, period) if payload else None
+
+
+def parse_auto_weather_command(text: str | None) -> tuple[str, str | None] | None:
+    if not text:
+        return None
+    match = AUTO_WEATHER_RE.fullmatch(text.strip())
+    if not match:
+        return None
+    payload = " ".join((match.group(1) or "").split())
+    if not payload:
+        return "status", None
+    if payload.casefold() in {"выкл", "выключить", "отключить", "off", "0"}:
+        return "off", None
+    return "on", payload
+
+
+def auto_weather_slot(
+    moment: datetime | None = None,
+    schedule_hours: list[int] | None = None,
+    tomorrow_hour: int = AUTO_WEATHER_TOMORROW_HOUR,
+) -> tuple[str, str, str] | None:
+    current = moment or datetime.now(LOCAL_TIMEZONE)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=LOCAL_TIMEZONE)
+    else:
+        current = current.astimezone(LOCAL_TIMEZONE)
+    if current.minute != 0:
+        return None
+    if current.hour in (schedule_hours or AUTO_WEATHER_HOURS):
+        return f"{current.date().isoformat()}:{current.hour:02d}:now", "now", "Плановая погода"
+    if current.hour == tomorrow_hour:
+        return f"{current.date().isoformat()}:{current.hour:02d}:tomorrow", "tomorrow", "Плановая погода на завтра"
+    return None
+
+
+def render_auto_weather_settings(chat_id: int) -> str:
+    settings = db.get_scheduled_weather_settings(chat_id)
+    try:
+        hours = [int(hour) for hour in json.loads(settings.schedule_json)]
+    except (TypeError, ValueError):
+        hours = AUTO_WEATHER_HOURS
+    hour_text = ", ".join(f"{hour:02d}:00" for hour in hours)
+    tomorrow_text = f"{settings.tomorrow_hour:02d}:00"
+    status = "включена" if settings.enabled else "выключена"
+    destination = "эта тема" if settings.topic_thread_id is not None else "основной чат"
+    return (
+        f"Автопогода: <b>{status}</b>\n"
+        f"Город: <b>{escape(settings.city)}</b>\n"
+        f"Сегодня: <b>{escape(hour_text)}</b>\n"
+        f"Завтра: <b>{escape(tomorrow_text)}</b>\n"
+        f"Куда: <b>{destination}</b>\n\n"
+        "Команды:\n"
+        "<code>автопогода Кривой Рог</code> — включить\n"
+        "<code>автопогода выкл</code> — выключить"
+    )
 
 
 def parse_birthday_payload(text: str | None) -> tuple[int, int, str] | None:
@@ -12067,6 +12127,55 @@ async def list_blacklist_words(message: Message) -> None:
     await safe_reply(message, "\n".join(lines))
 
 
+@router.message(F.text.regexp(AUTO_WEATHER_RE))
+async def auto_weather_settings(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+
+    await remember_sender(message)
+    parsed = parse_auto_weather_command(message.text)
+    if not parsed:
+        return
+
+    action, city = parsed
+    if action == "status":
+        await safe_reply(message, render_auto_weather_settings(message.chat.id))
+        return
+
+    if not message.from_user:
+        return
+    role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
+    if role is None:
+        await safe_reply(message, "Автопогоду может настраивать только админ или модератор.")
+        return
+
+    if action == "off":
+        current = db.get_scheduled_weather_settings(message.chat.id)
+        db.set_scheduled_weather_settings(
+            message.chat.id,
+            False,
+            current.city,
+            message.from_user.id,
+            current.topic_thread_id,
+        )
+        await safe_reply(message, "Автопогода выключена.")
+        return
+
+    db.set_scheduled_weather_settings(
+        message.chat.id,
+        True,
+        city or "Кривой Рог",
+        message.from_user.id,
+        message.message_thread_id,
+        AUTO_WEATHER_HOURS,
+        AUTO_WEATHER_TOMORROW_HOUR,
+    )
+    await safe_reply(
+        message,
+        "Автопогода включена.\n\n" + render_auto_weather_settings(message.chat.id),
+    )
+
+
 @router.message(F.text.regexp(re.compile(r"^погода\s+.+", re.IGNORECASE)))
 async def weather(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
@@ -12207,6 +12316,38 @@ async def advertisement_loop(bot: Bot) -> None:
         await asyncio.sleep(30)
 
 
+async def scheduled_weather_loop(bot: Bot) -> None:
+    while True:
+        now = datetime.now(LOCAL_TIMEZONE)
+        for settings in db.list_enabled_scheduled_weather():
+            try:
+                try:
+                    hours = [int(hour) for hour in json.loads(settings.schedule_json)]
+                except (TypeError, ValueError):
+                    hours = AUTO_WEATHER_HOURS
+                slot = auto_weather_slot(now, hours, int(settings.tomorrow_hour))
+                if slot is None:
+                    continue
+                sent_key, period, title = slot
+                if settings.last_sent_key == sent_key:
+                    continue
+
+                forecast = await fetch_weather(settings.city, period)
+                thread_kwargs = {"message_thread_id": settings.topic_thread_id} if settings.topic_thread_id else {}
+                await bot.send_message(
+                    settings.chat_id,
+                    f"<b>{escape(title)}</b>\n\n{forecast}",
+                    disable_web_page_preview=True,
+                    **thread_kwargs,
+                )
+                db.mark_scheduled_weather_sent(settings.chat_id, sent_key)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logging.warning("Scheduled weather send failed for chat %s: %s", settings.chat_id, exc)
+        await asyncio.sleep(AUTO_WEATHER_POLL_SECONDS)
+
+
 @router.message(F.chat.type == "private")
 async def private_fallback(message: Message) -> None:
     await message.answer(
@@ -12269,6 +12410,7 @@ async def main() -> None:
         await send_restart_panel_if_needed(bot)
         advertisement_task = asyncio.create_task(advertisement_loop(bot))
         alerts_task = asyncio.create_task(alerts_monitor_loop(bot))
+        scheduled_weather_task = asyncio.create_task(scheduled_weather_loop(bot))
         await dispatcher.start_polling(
             bot,
             allowed_updates=["message", "callback_query", "message_reaction", "pre_checkout_query", "my_chat_member"],
@@ -12284,6 +12426,10 @@ async def main() -> None:
             alerts_task.cancel()
             with suppress(asyncio.CancelledError):
                 await alerts_task
+        if "scheduled_weather_task" in locals():
+            scheduled_weather_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await scheduled_weather_task
         if staff_service:
             await staff_service.send(bot, "status", "🔴 Бот остановлен")
         await bot.session.close()

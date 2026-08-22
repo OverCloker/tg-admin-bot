@@ -154,6 +154,19 @@ class AlarmSettings:
 
 
 @dataclass(frozen=True)
+class ScheduledWeatherSettings:
+    chat_id: int
+    enabled: int
+    city: str
+    schedule_json: str
+    tomorrow_hour: int
+    topic_thread_id: int | None
+    last_sent_key: str | None
+    updated_by: int | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class GiveawayStat:
     chat_id: int
     user_id: int
@@ -666,6 +679,19 @@ class Database:
                 last_clear_message_id integer,
                 last_alarm_action_message_id integer,
                 last_clear_action_message_id integer,
+                updated_by integer,
+                updated_at text not null,
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists scheduled_weather_settings (
+                chat_id integer primary key,
+                enabled integer not null default 0,
+                city text not null default 'Кривой Рог',
+                schedule_json text not null default '[8,12,15,18]',
+                tomorrow_hour integer not null default 21,
+                topic_thread_id integer,
+                last_sent_key text,
                 updated_by integer,
                 updated_at text not null,
                 foreign key (chat_id) references chats(chat_id) on delete cascade
@@ -3429,6 +3455,94 @@ class Database:
                 updated_at = excluded.updated_at
             """,
             (chat_id, int(enabled), updated_by, utc_now()),
+        )
+        self._conn.commit()
+
+    def get_scheduled_weather_settings(self, chat_id: int) -> ScheduledWeatherSettings:
+        row = self._conn.execute(
+            """
+            select chat_id, enabled, city, schedule_json, tomorrow_hour, topic_thread_id,
+                   last_sent_key, updated_by, updated_at
+            from scheduled_weather_settings
+            where chat_id = ?
+            """,
+            (chat_id,),
+        ).fetchone()
+        if row:
+            return ScheduledWeatherSettings(**dict(row))
+        return ScheduledWeatherSettings(
+            chat_id=chat_id,
+            enabled=0,
+            city="Кривой Рог",
+            schedule_json="[8,12,15,18]",
+            tomorrow_hour=21,
+            topic_thread_id=None,
+            last_sent_key=None,
+            updated_by=None,
+            updated_at=utc_now(),
+        )
+
+    def set_scheduled_weather_settings(
+        self,
+        chat_id: int,
+        enabled: bool,
+        city: str,
+        updated_by: int | None,
+        topic_thread_id: int | None = None,
+        schedule_hours: list[int] | None = None,
+        tomorrow_hour: int = 21,
+    ) -> None:
+        hours = schedule_hours or [8, 12, 15, 18]
+        clean_hours = sorted({max(0, min(23, int(hour))) for hour in hours})
+        self._conn.execute(
+            """
+            insert into scheduled_weather_settings (
+                chat_id, enabled, city, schedule_json, tomorrow_hour,
+                topic_thread_id, updated_by, updated_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(chat_id) do update set
+                enabled = excluded.enabled,
+                city = excluded.city,
+                schedule_json = excluded.schedule_json,
+                tomorrow_hour = excluded.tomorrow_hour,
+                topic_thread_id = excluded.topic_thread_id,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (
+                chat_id,
+                int(enabled),
+                city.strip() or "Кривой Рог",
+                json.dumps(clean_hours, ensure_ascii=False),
+                max(0, min(23, int(tomorrow_hour))),
+                topic_thread_id,
+                updated_by,
+                utc_now(),
+            ),
+        )
+        self._conn.commit()
+
+    def list_enabled_scheduled_weather(self) -> list[ScheduledWeatherSettings]:
+        rows = self._conn.execute(
+            """
+            select chat_id, enabled, city, schedule_json, tomorrow_hour, topic_thread_id,
+                   last_sent_key, updated_by, updated_at
+            from scheduled_weather_settings
+            where enabled = 1
+            order by chat_id
+            """
+        ).fetchall()
+        return [ScheduledWeatherSettings(**dict(row)) for row in rows]
+
+    def mark_scheduled_weather_sent(self, chat_id: int, sent_key: str) -> None:
+        self._conn.execute(
+            """
+            update scheduled_weather_settings
+            set last_sent_key = ?, updated_at = ?
+            where chat_id = ? and enabled = 1
+            """,
+            (sent_key, utc_now(), chat_id),
         )
         self._conn.commit()
 
