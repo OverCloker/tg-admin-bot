@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from app.bot import auto_weather_slot, parse_auto_weather_command
+from app.bot import auto_weather_slot, chat_help_text, parse_auto_weather_command
 from app.db import Database
 
 
@@ -8,6 +8,14 @@ def test_parse_auto_weather_command() -> None:
     assert parse_auto_weather_command("автопогода") == ("status", None)
     assert parse_auto_weather_command("автопогода выкл") == ("off", None)
     assert parse_auto_weather_command("автопогода   Кривой   Рог ") == ("on", "Кривой Рог")
+
+
+def test_chat_help_mentions_scheduled_weather() -> None:
+    text = chat_help_text()
+
+    assert "автопогода Кривой Рог" in text
+    assert "08/12/15/18" in text
+    assert "автопогода выкл" in text
 
 
 def test_auto_weather_slot_uses_daily_schedule() -> None:

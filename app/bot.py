@@ -1508,6 +1508,47 @@ def render_auto_weather_settings(chat_id: int) -> str:
     )
 
 
+def chat_help_text() -> str:
+    return (
+        "<b>Помощь по командам</b>\n\n"
+        "<b>Основное</b>\n"
+        "<code>помощь</code> — этот список\n"
+        "<code>профиль</code> / <code>профиль @ник</code> — профиль игрока\n"
+        "<code>лс @ник</code> или ответом <code>лс</code> — скрытое сообщение через бота\n\n"
+        "<b>Шахта</b>\n"
+        "<code>копай</code> — открыть шахту и ручную вылазку\n"
+        "<code>сумка</code> — инвентарь шахтёра\n"
+        "<code>достижения</code> — достижения шахты\n"
+        "<code>+кличка текст</code> — кличка/тег в шахте до 16 символов\n"
+        "<code>топ копания</code>, <code>топ монет</code>, <code>топ рангов</code> — топы шахты\n\n"
+        "<b>Погода</b>\n"
+        "<code>погода Кривой Рог</code> — погода сейчас\n"
+        "<code>погода Кривой Рог завтра</code> — прогноз на завтра\n"
+        "<code>погода Кривой Рог неделя</code> — прогноз на неделю\n"
+        "<code>автопогода</code> — статус автопогоды\n"
+        "<code>автопогода Кривой Рог</code> — включить расписание 08/12/15/18 и завтра в 21\n"
+        "<code>автопогода выкл</code> — выключить автопогоду\n\n"
+        "<b>Развлекуха</b>\n"
+        "<code>кто пидор</code> — дневной розыгрыш\n"
+        "<code>топ пидоров</code> — статистика розыгрыша\n"
+        "<code>roll mute</code> — случайный мут по настройкам чата\n"
+        "<code>топ roll mute</code> — статистика roll mute\n"
+        "<code>в цитаты</code> — ответом добавить сообщение в цитаты\n"
+        "<code>цитата</code> — случайная цитата\n\n"
+        "<b>Модерация</b>\n"
+        "<code>косяк</code> — варн ответом на сообщение\n"
+        "<code>затихни 10 - причина</code> — мут обычного участника\n"
+        "<code>затихни админ 60 - причина</code> — тихий режим для админа\n"
+        "<code>трещи</code> — снять мут/тихий режим\n"
+        "<code>ударить словарём</code> — мут на 1 минуту с картинкой\n"
+        "<code>-сооб</code> — удалить сообщение ответом\n"
+        "<code>чат стоп 5м причина</code> — временно закрыть чат\n"
+        "<code>чат старт</code> — открыть чат\n"
+        "<code>+помощник</code>, <code>+модератор</code>, <code>+стМодератор</code> — роли, только владелец\n"
+        "<code>-помощник</code>, <code>-модератор</code>, <code>-стМодератор</code> — снять роль"
+    )
+
+
 def parse_birthday_payload(text: str | None) -> tuple[int, int, str] | None:
     payload = split_command_payload(text).strip()
     match = re.match(r"^(\d{1,2})[./-](\d{1,2})\s+(.+)$", payload)
@@ -6481,7 +6522,8 @@ async def cb_help(callback: CallbackQuery) -> None:
         "1. Добавь бота в группу или чат обсуждений.\n"
         "2. Один раз отправь в группе /register_chat.\n"
         "3. Вернись сюда, выбери группу кнопкой и настраивай ответы.\n\n"
-        "В группе бот отвечает на упоминания @username, фиксированные слова и фразу 'кто пидор'.",
+        "В группе бот отвечает на упоминания @username, фиксированные слова и фразу 'кто пидор'.\n\n"
+        + chat_help_text(),
         reply_markup=admin_back_menu(),
     )
     await callback.answer()
@@ -10650,27 +10692,10 @@ async def channels_ru(message: Message) -> None:
     await message.answer("\n".join(lines))
 
 
-@router.message(F.text.casefold() == "/помощь")
+@router.message(F.text.regexp(re.compile(r"^/?помощь[?!.]?$", re.IGNORECASE)))
 async def help_ru(message: Message) -> None:
     await message.answer(
-        "Русские команды:\n"
-        "/старт\n"
-        "/настройки\n"
-        "/регистрация\n"
-        "/ответ @username текст\n"
-        "/мойответ текст\n"
-        "/удалитьответ @username\n"
-        "/списокответов\n"
-        "/тригер слово - текст\n"
-        "/удалитьтригер слово\n"
-        "/списоктригеров\n"
-        "/участники\n"
-        "/каналы\n"
-        "копай\n"
-        "сумка\n"
-        "достижения\n"
-        "топ копания\n"
-        "топ монет",
+        chat_help_text(),
         reply_markup=main_menu() if message.chat.type == "private" else None,
     )
 
