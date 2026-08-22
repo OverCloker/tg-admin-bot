@@ -1510,43 +1510,62 @@ def render_auto_weather_settings(chat_id: int) -> str:
 
 def chat_help_text() -> str:
     return (
-        "<b>Помощь по командам</b>\n\n"
-        "<b>Основное</b>\n"
-        "<code>помощь</code> — этот список\n"
-        "<code>профиль</code> / <code>профиль @ник</code> — профиль игрока\n"
-        "<code>лс @ник</code> или ответом <code>лс</code> — скрытое сообщение через бота\n\n"
-        "<b>Шахта</b>\n"
-        "<code>копай</code> — открыть шахту и ручную вылазку\n"
-        "<code>сумка</code> — инвентарь шахтёра\n"
-        "<code>достижения</code> — достижения шахты\n"
-        "<code>+кличка текст</code> — кличка/тег в шахте до 16 символов\n"
-        "<code>топ копания</code>, <code>топ монет</code>, <code>топ рангов</code> — топы шахты\n\n"
-        "<b>Погода</b>\n"
-        "<code>погода Кривой Рог</code> — погода сейчас\n"
-        "<code>погода Кривой Рог завтра</code> — прогноз на завтра\n"
-        "<code>погода Кривой Рог неделя</code> — прогноз на неделю\n"
-        "<code>автопогода</code> — статус автопогоды\n"
-        "<code>автопогода Кривой Рог</code> — включить расписание 08/12/15/18 и завтра в 21\n"
-        "<code>автопогода выкл</code> — выключить автопогоду\n\n"
-        "<b>Развлекуха</b>\n"
-        "<code>кто пидор</code> — дневной розыгрыш\n"
-        "<code>топ пидоров</code> — статистика розыгрыша\n"
-        "<code>roll mute</code> — случайный мут по настройкам чата\n"
-        "<code>топ roll mute</code> — статистика roll mute\n"
-        "<code>в цитаты</code> — ответом добавить сообщение в цитаты\n"
-        "<code>цитата</code> — случайная цитата\n\n"
-        "<b>Модерация</b>\n"
-        "<code>косяк</code> — варн ответом на сообщение\n"
-        "<code>затихни 10 - причина</code> — мут обычного участника\n"
-        "<code>затихни админ 60 - причина</code> — тихий режим для админа\n"
-        "<code>трещи</code> — снять мут/тихий режим\n"
-        "<code>ударить словарём</code> — мут на 1 минуту с картинкой\n"
-        "<code>-сооб</code> — удалить сообщение ответом\n"
-        "<code>чат стоп 5м причина</code> — временно закрыть чат\n"
-        "<code>чат старт</code> — открыть чат\n"
-        "<code>+помощник</code>, <code>+модератор</code>, <code>+стМодератор</code> — роли, только владелец\n"
-        "<code>-помощник</code>, <code>-модератор</code>, <code>-стМодератор</code> — снять роль"
+        "<b>Помощь</b>\n"
+        "Основное: <code>профиль</code>, <code>лс @ник</code>.\n"
+        "Шахта: <code>копай</code>, <code>сумка</code>, <code>достижения</code>, <code>топ копания</code>.\n"
+        "Погода: <code>погода Кривой Рог</code>, <code>автопогода Кривой Рог</code>, <code>автопогода выкл</code>.\n"
+        "Развлекуха: <code>кто пидор</code>, <code>roll mute</code>, <code>цитата</code>.\n"
+        "Модерация: <code>косяк</code>, <code>затихни 10 - причина</code>, <code>трещи</code>, <code>-сооб</code>, <code>чат стоп 5м причина</code>."
     )
+
+
+def build_help_rich_message() -> InputRichMessage:
+    return InputRichMessage(
+        blocks=[
+            paragraph("📘 Помощь по чату"),
+            paragraph("Основные команды в таблице. Подробнее — ниже."),
+            InputRichBlockTable(
+                cells=[
+                    [rich_cell("Раздел", header=True), rich_cell("Главное", header=True)],
+                    [rich_cell("Профиль"), rich_cell("профиль · профиль @ник · лс @ник")],
+                    [rich_cell("Шахта"), rich_cell("копай · сумка · достижения · топы")],
+                    [rich_cell("Погода"), rich_cell("погода · автопогода · автопогода выкл")],
+                    [rich_cell("Игры"), rich_cell("кто пидор · roll mute · цитата")],
+                    [rich_cell("Модерация"), rich_cell("косяк · затихни · трещи · чат стоп")],
+                ],
+                is_bordered=True,
+                is_striped=False,
+            ),
+            InputRichBlockDetails(
+                summary="Подробнее ниже",
+                blocks=[
+                    paragraph("Основное: помощь; профиль; профиль @ник; лс @ник или ответом лс."),
+                    paragraph("Шахта: копай; сумка; достижения; +кличка текст; топ копания; топ монет; топ рангов."),
+                    paragraph("Погода: погода Кривой Рог; погода Кривой Рог завтра; погода Кривой Рог неделя."),
+                    paragraph("Автопогода: автопогода — статус; автопогода Кривой Рог — 08/12/15/18 и завтра в 21; автопогода выкл."),
+                    paragraph("Развлекуха: кто пидор; топ пидоров; roll mute; топ roll mute; в цитаты; цитата."),
+                    paragraph("Модерация: косяк; затихни 10 - причина; затихни админ 60 - причина; трещи; ударить словарём; -сооб; чат стоп 5м причина; чат старт."),
+                    paragraph("Роли: +помощник; +модератор; +стМодератор; -помощник; -модератор; -стМодератор. Назначение — только владелец."),
+                ],
+                is_open=False,
+            ),
+        ]
+    )
+
+
+async def send_help_message(message: Message) -> None:
+    try:
+        await message.bot.send_rich_message(
+            chat_id=message.chat.id,
+            rich_message=build_help_rich_message(),
+            message_thread_id=getattr(message, "message_thread_id", None),
+            reply_markup=main_menu() if message.chat.type == "private" else None,
+        )
+    except (TelegramBadRequest, TelegramForbiddenError):
+        await message.answer(
+            chat_help_text(),
+            reply_markup=main_menu() if message.chat.type == "private" else None,
+        )
 
 
 def parse_birthday_payload(text: str | None) -> tuple[int, int, str] | None:
@@ -10694,10 +10713,7 @@ async def channels_ru(message: Message) -> None:
 
 @router.message(F.text.regexp(re.compile(r"^/?помощь[?!.]?$", re.IGNORECASE)))
 async def help_ru(message: Message) -> None:
-    await message.answer(
-        chat_help_text(),
-        reply_markup=main_menu() if message.chat.type == "private" else None,
-    )
+    await send_help_message(message)
 
 
 async def handle_day_pick(message: Message) -> bool:

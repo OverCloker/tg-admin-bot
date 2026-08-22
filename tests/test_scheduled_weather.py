@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from app.bot import auto_weather_slot, chat_help_text, parse_auto_weather_command
+from app.bot import auto_weather_slot, build_help_rich_message, chat_help_text, parse_auto_weather_command
 from app.db import Database
 
 
@@ -14,8 +14,22 @@ def test_chat_help_mentions_scheduled_weather() -> None:
     text = chat_help_text()
 
     assert "автопогода Кривой Рог" in text
-    assert "08/12/15/18" in text
     assert "автопогода выкл" in text
+
+
+def test_chat_help_rich_message_is_compact_table_with_details() -> None:
+    message = build_help_rich_message()
+    dumped = message.model_dump(mode="json", exclude_none=True)
+    blocks = dumped["blocks"]
+
+    assert blocks[0]["type"] == "paragraph"
+    assert blocks[2]["type"] == "table"
+    assert blocks[2]["cells"][0][0]["text"] == "Раздел"
+    assert blocks[2]["cells"][3][0]["text"] == "Погода"
+    assert blocks[3]["type"] == "details"
+    assert blocks[3]["summary"] == "Подробнее ниже"
+    assert blocks[3]["is_open"] is False
+    assert any("автопогода Кривой Рог" in item["text"] for item in blocks[3]["blocks"])
 
 
 def test_auto_weather_slot_uses_daily_schedule() -> None:
