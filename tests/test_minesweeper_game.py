@@ -81,6 +81,9 @@ def test_safe_pick_is_paid_once_and_mine_costs_luck(tmp_path, monkeypatch) -> No
 def test_minesweeper_ui_and_audit_are_compact() -> None:
     assert "Сапёр 9×9" in MINI_APP_HTML
     assert "minesweeper-grid" in MINI_APP_HTML
+    assert "mine-tile-mark" in MINI_APP_HTML
+    assert "Ну ты и лох!" in MINI_APP_HTML
+    assert "showMinesweeperLoss(result)" in MINI_APP_HTML
     assert 'api("/miniapp/minesweeper/pick"' in MINI_APP_HTML
     assert api_audit_action("POST", "/miniapp/minesweeper/start") == "Сапёр 9×9 начат"
     assert should_skip_api_audit("/miniapp/minesweeper/pick")

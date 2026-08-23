@@ -863,31 +863,121 @@ MINI_APP_HTML = r"""<!doctype html>
       touch-action: manipulation;
     }
     .minesweeper-cell {
+      position: relative;
       display: grid;
       place-items: center;
       min-width: 0;
       aspect-ratio: 1;
       padding: 0;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 75%, white 12%), var(--panel));
-      box-shadow: inset 0 1px 1px #ffffff28, 0 2px 5px #02060b66;
+      border: 1px solid color-mix(in srgb, var(--line) 70%, #9fc8de);
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, #ffffff28 0 15%, transparent 16% 68%, #00000024 69%),
+        linear-gradient(155deg, color-mix(in srgb, var(--panel) 72%, #8bb8c6 22%), color-mix(in srgb, var(--panel) 85%, #07111a));
+      box-shadow:
+        inset 2px 2px 2px #ffffff38,
+        inset -3px -3px 4px #00000042,
+        0 3px 0 color-mix(in srgb, var(--line) 70%, #05080d),
+        0 5px 8px #02060b66;
       color: var(--text);
       font-size: clamp(12px, 4.2vw, 19px);
       font-weight: 900;
+      overflow: hidden;
+      transition: transform .12s ease, filter .15s ease;
     }
-    .minesweeper-cell:not(:disabled):active { transform: scale(.9); }
+    .minesweeper-cell:not(:disabled)::before,
+    .minesweeper-cell:not(:disabled)::after {
+      content: "";
+      position: absolute;
+      pointer-events: none;
+    }
+    .minesweeper-cell:not(:disabled)::before {
+      inset: 18%;
+      clip-path: polygon(50% 0, 100% 34%, 83% 100%, 17% 100%, 0 34%);
+      background: linear-gradient(145deg, #ffffff24, transparent 47%, #00000026);
+      border: 1px solid #ffffff1f;
+    }
+    .minesweeper-cell:not(:disabled)::after {
+      left: 18%;
+      right: 18%;
+      top: 15%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, #ffffff78, transparent);
+    }
+    .mine-tile-mark {
+      position: relative;
+      z-index: 1;
+      color: color-mix(in srgb, var(--text) 38%, transparent);
+      font-size: clamp(8px, 2.5vw, 13px);
+      text-shadow: 0 1px #fff3, 0 -1px #0008;
+    }
+    .minesweeper-cell:not(:disabled):active {
+      transform: translateY(3px) scale(.94);
+      filter: brightness(1.2);
+      box-shadow: inset 1px 1px 5px #0007;
+    }
     .minesweeper-cell.revealed {
-      background: color-mix(in srgb, var(--bg) 64%, var(--panel));
-      box-shadow: inset 0 1px 4px #0005;
+      border-color: color-mix(in srgb, var(--line) 55%, transparent);
+      border-radius: 6px;
+      background:
+        radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--bg) 72%, var(--panel)), color-mix(in srgb, var(--bg) 91%, #000));
+      box-shadow: inset 0 2px 7px #0008, inset 0 0 0 1px #ffffff0d;
     }
-    .minesweeper-cell.event { box-shadow: inset 0 0 0 2px #ffd45c, 0 0 10px #ffd45c55; }
+    .minesweeper-cell.event { box-shadow: inset 0 0 0 2px #ffd45c, inset 0 2px 7px #0008, 0 0 10px #ffd45c55; }
+    .minesweeper-cell small { position: absolute; top: 1px; right: 2px; color: #ffd45c; font-size: .55em; }
     .mine-number-0 { color: var(--muted); }
     .mine-number-1 { color: #62a8ff; }
     .mine-number-2 { color: #55d98b; }
     .mine-number-3 { color: #ff7c76; }
     .mine-number-4, .mine-number-5, .mine-number-6, .mine-number-7, .mine-number-8 { color: #d39cff; }
     .minesweeper-legend { display: flex; flex-wrap: wrap; gap: 7px 14px; margin-top: 10px; }
+    .mine-loss-overlay {
+      position: fixed;
+      z-index: 1000;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: #020408c9;
+      backdrop-filter: blur(10px) saturate(.75);
+      animation: mine-overlay-in .22s ease-out;
+    }
+    .mine-loss-dialog {
+      width: min(100%, 390px);
+      padding: 28px 22px 22px;
+      border: 1px solid #ff8b6b99;
+      border-radius: 28px;
+      background:
+        radial-gradient(circle at 50% 0, #ff6d3742, transparent 43%),
+        color-mix(in srgb, var(--panel) 92%, #210b08);
+      box-shadow: 0 30px 80px #000d, inset 0 1px #ffffff2e, 0 0 45px #ff4e2633;
+      color: var(--text);
+      text-align: center;
+      animation: mine-dialog-in .45s cubic-bezier(.2,.85,.25,1.22);
+    }
+    .mine-loss-bomb {
+      display: inline-grid;
+      place-items: center;
+      width: 112px;
+      height: 112px;
+      margin-bottom: 8px;
+      border-radius: 50%;
+      background: radial-gradient(circle, #fff5 0 3%, #ffcf52 4% 9%, #ff6638 10% 23%, transparent 54%);
+      font-size: 68px;
+      filter: drop-shadow(0 10px 12px #000a);
+      animation: mine-bang .65s ease-out both;
+    }
+    .mine-loss-dialog h2 { margin: 0 0 10px; font-size: 29px; }
+    .mine-loss-dialog p { margin: 0 0 18px; color: var(--muted); font-size: 17px; line-height: 1.4; }
+    .mine-loss-dialog .btn { margin: 0; }
+    @keyframes mine-overlay-in { from { opacity: 0; } }
+    @keyframes mine-dialog-in { from { opacity: 0; transform: translateY(35px) scale(.78); } }
+    @keyframes mine-bang {
+      0% { opacity: 0; transform: scale(.3) rotate(-18deg); }
+      42% { opacity: 1; transform: scale(1.32) rotate(10deg); }
+      72% { transform: scale(.92) rotate(-4deg); }
+      100% { transform: scale(1) rotate(0); }
+    }
     .game-result {
       min-height: 1.35em;
       margin-top: 10px;
@@ -2997,7 +3087,7 @@ MINI_APP_HTML = r"""<!doctype html>
     const cells = Array.from({ length: 81 }, (_, index) => {
       const result = opened[String(index)];
       if (!result) {
-        return `<button class="minesweeper-cell" aria-label="Закрытая клетка ${index + 1}" onclick="pickMinesweeper(${index}, this)">▦</button>`;
+        return `<button class="minesweeper-cell" aria-label="Закрытая клетка ${index + 1}" onclick="pickMinesweeper(${index}, this)"><span class="mine-tile-mark">◆</span></button>`;
       }
       const adjacent = Number(result.adjacent || 0);
       const hasEvent = Boolean(result.event);
@@ -3215,13 +3305,36 @@ MINI_APP_HTML = r"""<!doctype html>
       });
       state = result.state;
       renderMine(false);
-      showNotice(result.message, Boolean(result.event));
+      if (result.mine) showMinesweeperLoss(result);
+      else showNotice(result.message, Boolean(result.event));
     } catch (error) {
       if (button) button.disabled = false;
       showNotice(error.message);
     } finally {
       busy = false;
     }
+  }
+
+  function showMinesweeperLoss(result) {
+    document.querySelectorAll(".mine-loss-overlay").forEach(node => node.remove());
+    const overlay = document.createElement("div");
+    overlay.className = "mine-loss-overlay";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-labelledby", "mineLossTitle");
+    const lost = Number(result.luckLost || 0);
+    overlay.innerHTML = `
+      <div class="mine-loss-dialog">
+        <div class="mine-loss-bomb" aria-hidden="true">💥</div>
+        <h2 id="mineLossTitle">Ну ты и лох!</h2>
+        <p>Наступил прямо на мину и потерял <b>${lost} удачи</b>.<br>Раунд окончен, но добытые котоины остались у тебя.</p>
+        <button class="btn danger" type="button">Ладно, переживу</button>
+      </div>`;
+    const close = () => overlay.remove();
+    overlay.querySelector("button").addEventListener("click", close);
+    overlay.addEventListener("click", event => { if (event.target === overlay) close(); });
+    document.body.appendChild(overlay);
+    overlay.querySelector("button").focus();
   }
 
   async function exitMinesweeper() {
