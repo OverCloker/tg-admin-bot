@@ -89,36 +89,26 @@ MINI_APP_HTML = r"""<!doctype html>
         linear-gradient(160deg, #08111d 0%, #0d1829 45%, #05070d 100%),
         var(--bg);
     }
-    body[data-theme="neon"] {
-      --bg: #050711;
-      --panel:
-        linear-gradient(145deg, #15102c 0%, #08182a 52%, #07101c 100%);
-      --panel-color: #08182a;
-      --panel-2:
-        linear-gradient(145deg, #211245 0%, #0b2b3a 54%, #091424 100%);
-      --line: #2af7ff9a;
-      --text: #f4fbff;
-      --muted: #a9bad4;
-      --accent: #21f4ff;
-      --accent-2: #ff4fd8;
-      --radius: 24px;
-      --radius-sm: 16px;
-      --button-radius: 18px;
-      --input-bg: #071120d9;
-      --input-placeholder: #8eb2ca;
-      --panel-shadow:
-        0 18px 44px #00000070,
-        0 0 28px #00eaff16,
-        inset 0 1px 0 #ffffff16,
-        inset 0 0 26px #18f5ff08;
+    body[data-theme="classic"] {
+      --bg: #008080;
+      --panel: #c0c0c0;
+      --panel-color: #c0c0c0;
+      --panel-2: #c0c0c0;
+      --line: #808080;
+      --text: #000;
+      --muted: #404040;
+      --accent: #000080;
+      --accent-2: #800000;
+      --ok: #008000;
+      --danger: #f00;
+      --radius: 0;
+      --radius-sm: 0;
+      --button-radius: 0;
+      --input-bg: #fff;
+      --input-placeholder: #666;
+      --panel-shadow: 2px 2px 0 #000;
       --surface-blur: none;
-      --app-bg-layer:
-        radial-gradient(circle at 16% 8%, #21f4ff3a, transparent 24%),
-        radial-gradient(circle at 86% 16%, #ff4fd834, transparent 24%),
-        radial-gradient(circle at 20% 82%, #7b4dff30, transparent 28%),
-        linear-gradient(128deg, transparent 0 22%, #21f4ff10 23%, transparent 25% 50%, #ff4fd80c 51%, transparent 54%),
-        linear-gradient(160deg, #070914 0%, #071321 44%, #04060d 100%),
-        var(--bg);
+      --app-bg-layer: #008080;
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
@@ -205,37 +195,71 @@ MINI_APP_HTML = r"""<!doctype html>
         linear-gradient(145deg, #536f9a 0%, #334f79 54%, #2b4166 100%);
       text-shadow: 0 1px 1px #00122499;
     }
-    body[data-theme="neon"] .top-profile,
-    body[data-theme="neon"] .btn,
-    body[data-theme="neon"] .mini-form input,
-    body[data-theme="neon"] .role-manager-form input,
-    body[data-theme="neon"] .mine-admin-form input,
-    body[data-theme="neon"] .mine-admin-form textarea,
-    body[data-theme="neon"] .mine-admin-form select,
-    body[data-theme="neon"] .persistent-radio {
-      border: 1px solid color-mix(in srgb, var(--accent) 55%, #ffffff1c);
-      box-shadow:
-        0 0 0 1px #ff4fd815 inset,
-        0 0 22px #21f4ff1a,
-        0 12px 28px #00000055;
+    body[data-theme="classic"] {
+      font-family: Arial, "MS Sans Serif", sans-serif;
     }
-    body[data-theme="neon"] .btn {
-      color: #031016;
-      text-shadow: 0 1px 0 #ffffff8a;
-      background:
-        linear-gradient(135deg, #21f4ff 0%, #7a6cff 50%, #ff4fd8 100%);
-      box-shadow:
-        0 0 22px #21f4ff38,
-        0 14px 30px #00000060,
-        inset 0 1px 0 #ffffffb0;
+    body[data-theme="classic"] :is(.panel, .stat, .profile-card, .achievement-card, .inventory-group, .bag-summary, .mine-admin-card, .mine-admin-row, .admin-list-row, .role-row, .friend-row, .reminder-item, .trigger-media-box) {
+      border: 3px solid !important;
+      border-color: #fff #808080 #808080 #fff !important;
+      border-radius: 0 !important;
+      background: #c0c0c0 !important;
+      color: #000 !important;
+      box-shadow: 2px 2px 0 #000 !important;
+      backdrop-filter: none !important;
     }
-    body[data-theme="neon"] .btn.secondary,
-    body[data-theme="neon"] .top-profile {
-      color: var(--text);
-      text-shadow: 0 0 9px #21f4ff6a;
-      background:
-        radial-gradient(circle at 18% 0%, #21f4ff1f, transparent 38%),
-        linear-gradient(145deg, #1a2141 0%, #092739 100%);
+    body[data-theme="classic"] :is(.btn, .top-profile, .role-tab, .mine-cell, .ticket-cell, .super-cell) {
+      border: 3px solid !important;
+      border-color: #fff #808080 #808080 #fff !important;
+      border-radius: 0 !important;
+      background: #c0c0c0 !important;
+      color: #000 !important;
+      text-shadow: none !important;
+      box-shadow: none !important;
+    }
+    body[data-theme="classic"] :is(.btn, .top-profile, .role-tab, .mine-cell, .ticket-cell, .super-cell):active {
+      border-color: #808080 #fff #fff #808080 !important;
+      transform: translate(1px, 1px);
+    }
+    body[data-theme="classic"] :is(input, textarea, select, .persistent-radio) {
+      border: 3px solid !important;
+      border-color: #808080 #fff #fff #808080 !important;
+      border-radius: 0 !important;
+      background: #fff !important;
+      color: #000 !important;
+      box-shadow: none !important;
+    }
+    body[data-theme="classic"] :is(.profile-badge, .rank-badge, .inventory-chip) {
+      border: 2px solid #808080 !important;
+      border-radius: 0 !important;
+      background: #c0c0c0 !important;
+      color: #000 !important;
+      box-shadow: none !important;
+    }
+    body[data-theme="classic"] :is(.profile-hero, .profile-hero.bg-lava, .profile-hero.bg-old-mine) {
+      background: #c0c0c0 !important;
+    }
+    body[data-theme="classic"] .profile-avatar {
+      border: 3px solid !important;
+      border-color: #fff #808080 #808080 #fff !important;
+      border-radius: 0 !important;
+      background: #000080 !important;
+      box-shadow: none !important;
+    }
+    body[data-theme="classic"] .meter {
+      border: 2px solid;
+      border-color: #808080 #fff #fff #808080;
+      border-radius: 0;
+      background: #fff;
+    }
+    body[data-theme="classic"] .fill { background: #000080; }
+    body[data-theme="classic"] .theme-switch-track,
+    body[data-theme="classic"] .theme-switch-knob {
+      border-radius: 0;
+      background: #c0c0c0;
+    }
+    body[data-theme="classic"] .theme-switch-knob::after {
+      background: #000080;
+      box-shadow: none;
     }
     h1, h2, p { margin-top: 0; }
     h1 { margin-bottom: 2px; font-size: 34px; letter-spacing: 0; }
@@ -762,13 +786,13 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     #themeApple:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(0); }
     #themeExpressive:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(calc(100% + 6px)); }
-    #themeNeon:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(calc(200% + 12px)); }
+    #themeClassic:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(calc(200% + 12px)); }
     #themeApple:checked ~ .theme-switch-icons .theme-apple-icon,
     #themeApple:checked ~ .theme-switch-labels .theme-apple-label,
     #themeExpressive:checked ~ .theme-switch-icons .theme-expressive-icon,
     #themeExpressive:checked ~ .theme-switch-labels .theme-expressive-label,
-    #themeNeon:checked ~ .theme-switch-icons .theme-neon-icon,
-    #themeNeon:checked ~ .theme-switch-labels .theme-neon-label {
+    #themeClassic:checked ~ .theme-switch-icons .theme-classic-icon,
+    #themeClassic:checked ~ .theme-switch-labels .theme-classic-label {
       color: var(--text);
       opacity: 1;
     }
@@ -1790,18 +1814,19 @@ MINI_APP_HTML = r"""<!doctype html>
   const MINI_APP_THEMES = {
     expressive: "Material 3 Expressive",
     glass: "Liquid Glass",
-    neon: "Neon Mine",
+    classic: "Classic Minesweeper",
   };
 
   function currentMiniTheme() {
-    const theme = loadMiniSettings().theme || "expressive";
+    const savedTheme = loadMiniSettings().theme || "expressive";
+    const theme = savedTheme === "neon" ? "classic" : savedTheme;
     return Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "expressive";
   }
 
   function applyMiniTheme(theme) {
     const safeTheme = Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "expressive";
     document.documentElement.dataset.theme = safeTheme;
-    document.documentElement.style.colorScheme = "dark";
+    document.documentElement.style.colorScheme = safeTheme === "classic" ? "light" : "dark";
     document.body.dataset.theme = safeTheme;
   }
 
@@ -1825,7 +1850,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <div class="theme-platform-switch">
         <input type="radio" name="miniAppTheme" id="themeApple" value="glass" ${theme === "glass" ? "checked" : ""} onchange="setMiniTheme('glass')">
         <input type="radio" name="miniAppTheme" id="themeExpressive" value="expressive" ${theme === "expressive" ? "checked" : ""} onchange="setMiniTheme('expressive')">
-        <input type="radio" name="miniAppTheme" id="themeNeon" value="neon" ${theme === "neon" ? "checked" : ""} onchange="setMiniTheme('neon')">
+        <input type="radio" name="miniAppTheme" id="themeClassic" value="classic" ${theme === "classic" ? "checked" : ""} onchange="setMiniTheme('classic')">
         <div class="theme-switch-icons">
           <label class="theme-platform-icon theme-apple-icon" for="themeApple" aria-label="Liquid Glass">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1837,9 +1862,9 @@ MINI_APP_HTML = r"""<!doctype html>
               <path d="M12 2.4l1.8 5.2 5.5.2-4.4 3.3 1.5 5.3L12 13.3l-4.5 3.1 1.5-5.3-4.4-3.3 5.5-.2L12 2.4zm6.5 12.6l.8 2.3 2.4.1-1.9 1.4.7 2.3-2-1.3-2 1.3.7-2.3-1.9-1.4 2.4-.1.8-2.3zM4.7 15l.8 2.3 2.4.1L6 18.8l.7 2.3-2-1.3-2 1.3.7-2.3-1.9-1.4 2.4-.1.8-2.3z"/>
             </svg>
           </label>
-          <label class="theme-platform-icon theme-neon-icon" for="themeNeon" aria-label="Neon Mine">
+          <label class="theme-platform-icon theme-classic-icon" for="themeClassic" aria-label="Classic Minesweeper">
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 2l7.2 4.2v8.3L12 22l-7.2-7.5V6.2L12 2zm0 2.8L7.1 7.6v5.9l4.9 5.2 4.9-5.2V7.6L12 4.8zm0 2.7l2.8 1.6v3.5L12 15.5l-2.8-2.9V9.1L12 7.5z"/>
+              <path d="M13 2v2.1a7.5 7.5 0 1 1-2 0V2h2zm-1 5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zm0 2 1 2 2 .3-1.5 1.5.4 2.2-1.9-1-1.9 1 .4-2.2L9 11.3l2-.3 1-2zm4.7-5.7 1.4-1.4 2 2-1.4 1.4-2-2z"/>
             </svg>
           </label>
         </div>
@@ -1847,12 +1872,12 @@ MINI_APP_HTML = r"""<!doctype html>
           <span class="theme-switch-knob"></span>
           <label for="themeApple"></label>
           <label for="themeExpressive"></label>
-          <label for="themeNeon"></label>
+          <label for="themeClassic"></label>
         </div>
         <div class="theme-switch-labels">
           <label class="theme-apple-label" for="themeApple">Liquid Glass</label>
           <label class="theme-expressive-label" for="themeExpressive">M3 Expressive</label>
-          <label class="theme-neon-label" for="themeNeon">Neon Mine</label>
+          <label class="theme-classic-label" for="themeClassic">Сапёр Classic</label>
         </div>
       </div>
     </div>`;

@@ -6,6 +6,7 @@ BRANCH=${1:-}
 GIT_SAFE_DIR="$PROJECT_DIR"
 DEPLOY_NOTICE_STARTED=0
 DEPLOY_NOTICE_DONE=0
+DEPLOY_NOTICE_TARGETS=""
 
 cd "$PROJECT_DIR"
 
@@ -17,13 +18,41 @@ env_value() {
     sed -n "s/^${key}=//p" "$PROJECT_DIR/.env" | tail -n 1 | sed "s/^['\"]//; s/['\"]$//"
 }
 
+resolve_deploy_notice_targets() {
+    configured=$(env_value DEPLOY_NOTIFY_TARGETS)
+    if [ -n "$configured" ]; then
+        DEPLOY_NOTICE_TARGETS=$(printf '%s' "$configured" | tr ',' ' ')
+        return 0
+    fi
+
+    legacy_chat_id=$(env_value DEPLOY_NOTIFY_CHAT_ID)
+    legacy_thread_id=$(env_value DEPLOY_NOTIFY_THREAD_ID)
+    # With no explicit list, notify every group registered in the bot database.
+    # Keep the legacy target too, but replace its top-level entry with the
+    # configured topic when DEPLOY_NOTIFY_THREAD_ID is present.
+    registered_targets=$(docker compose exec -T bot python -c \
+        'from app.config import load_config; from app.db import Database; db=Database(load_config().db_path); print(" ".join(str(chat.chat_id) for chat in db.list_chats())); db.close()' \
+        2>/dev/null || true)
+    for registered_chat_id in $registered_targets; do
+        if [ -z "$legacy_chat_id" ] || [ "$registered_chat_id" != "$legacy_chat_id" ]; then
+            DEPLOY_NOTICE_TARGETS="${DEPLOY_NOTICE_TARGETS}${DEPLOY_NOTICE_TARGETS:+ }$registered_chat_id"
+        fi
+    done
+    if [ -n "$legacy_chat_id" ]; then
+        legacy_target=$legacy_chat_id
+        if [ -n "$legacy_thread_id" ]; then
+            legacy_target="$legacy_chat_id:$legacy_thread_id"
+        fi
+        DEPLOY_NOTICE_TARGETS="${DEPLOY_NOTICE_TARGETS}${DEPLOY_NOTICE_TARGETS:+ }$legacy_target"
+    fi
+}
+
 send_deploy_notice() {
     text=$1
     token=$(env_value BOT_TOKEN)
-    chat_id=$(env_value DEPLOY_NOTIFY_CHAT_ID)
-    thread_id=$(env_value DEPLOY_NOTIFY_THREAD_ID)
 
-    if [ -z "$token" ] || [ -z "$chat_id" ]; then
+    if [ -z "$token" ] || [ -z "$DEPLOY_NOTICE_TARGETS" ]; then
+        echo "Deploy Telegram notice skipped: no recipients configured or registered."
         return 0
     fi
     if ! command -v curl >/dev/null 2>&1; then
@@ -31,22 +60,34 @@ send_deploy_notice() {
         return 0
     fi
 
-    if [ -n "$thread_id" ]; then
-        curl --silent --show-error --fail --max-time 15 --request POST \
-            --data-urlencode "chat_id=$chat_id" \
-            --data-urlencode "message_thread_id=$thread_id" \
-            --data-urlencode "parse_mode=HTML" \
-            --data-urlencode "disable_web_page_preview=true" \
-            --data-urlencode "text=$text" \
-            "https://api.telegram.org/bot$token/sendMessage" >/dev/null || true
-    else
-        curl --silent --show-error --fail --max-time 15 --request POST \
-            --data-urlencode "chat_id=$chat_id" \
-            --data-urlencode "parse_mode=HTML" \
-            --data-urlencode "disable_web_page_preview=true" \
-            --data-urlencode "text=$text" \
-            "https://api.telegram.org/bot$token/sendMessage" >/dev/null || true
-    fi
+    for target in $DEPLOY_NOTICE_TARGETS; do
+        chat_id=${target%%:*}
+        thread_id=""
+        if [ "$target" != "$chat_id" ]; then
+            thread_id=${target#*:}
+        fi
+        if [ -z "$chat_id" ]; then
+            continue
+        fi
+
+        echo "Sending deploy notice to $chat_id${thread_id:+, topic $thread_id}"
+        if [ -n "$thread_id" ]; then
+            curl --silent --show-error --fail --max-time 15 --request POST \
+                --data-urlencode "chat_id=$chat_id" \
+                --data-urlencode "message_thread_id=$thread_id" \
+                --data-urlencode "parse_mode=HTML" \
+                --data-urlencode "disable_web_page_preview=true" \
+                --data-urlencode "text=$text" \
+                "https://api.telegram.org/bot$token/sendMessage" >/dev/null || true
+        else
+            curl --silent --show-error --fail --max-time 15 --request POST \
+                --data-urlencode "chat_id=$chat_id" \
+                --data-urlencode "parse_mode=HTML" \
+                --data-urlencode "disable_web_page_preview=true" \
+                --data-urlencode "text=$text" \
+                "https://api.telegram.org/bot$token/sendMessage" >/dev/null || true
+        fi
+    done
 }
 
 deploy_exit_notice() {
@@ -92,6 +133,7 @@ echo "== git =="
 git -c safe.directory="$GIT_SAFE_DIR" fetch origin "$BRANCH"
 git -c safe.directory="$GIT_SAFE_DIR" pull --ff-only origin "$BRANCH"
 
+resolve_deploy_notice_targets
 DEPLOY_NOTICE_STARTED=1
 send_deploy_notice "$(printf "🔄 <b>Бот уходит на обновление</b>\nПожалуйста, пару минут не пишите команды — я пересобираюсь и перезапускаюсь.")"
 
