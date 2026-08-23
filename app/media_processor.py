@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -61,10 +62,17 @@ def ffmpeg_available() -> bool:
 
 
 def whisper_available() -> bool:
+    """Check package presence without loading its native ML runtime.
+
+    Importing ``faster_whisper`` pulls in CTranslate2 and other comparatively
+    heavy native modules.  This function is called while rendering the media
+    menu, so importing the package here can block the bot event loop or even
+    make a memory-constrained container restart.  The actual import remains in
+    ``get_whisper_model`` and only happens when a transcription is requested.
+    """
     try:
-        from faster_whisper import WhisperModel  # noqa: F401
-        return True
-    except ImportError:
+        return importlib.util.find_spec("faster_whisper") is not None
+    except (ImportError, AttributeError, ValueError):
         return False
 
 
