@@ -5,6 +5,8 @@ PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 BRANCH=${1:-main}
 SERVICE_NAME=otveto4ka-auto-update.service
 TIMER_NAME=otveto4ka-auto-update.timer
+OLD_LOCK_DIR="${TMPDIR:-/tmp}/otveto4ka-auto-update.lock"
+FALLBACK_LOCK_DIR="${TMPDIR:-/tmp}/otveto4ka-auto-update.lock.d"
 
 cd "$PROJECT_DIR" || exit 1
 
@@ -25,6 +27,17 @@ if command -v git >/dev/null 2>&1; then
     fi
 else
     echo "git not found"
+fi
+echo
+
+echo "== update lock =="
+if [ -d "$OLD_LOCK_DIR" ]; then
+    echo "Legacy stale lock found: $OLD_LOCK_DIR"
+    echo "It was created by an older updater and can be removed safely when no deploy is running."
+elif [ -d "$FALLBACK_LOCK_DIR" ]; then
+    echo "Fallback lock active: $FALLBACK_LOCK_DIR (PID $(cat "$FALLBACK_LOCK_DIR/pid" 2>/dev/null || echo unknown))"
+else
+    echo "No stale directory lock found."
 fi
 echo
 
