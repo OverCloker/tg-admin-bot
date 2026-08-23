@@ -884,9 +884,73 @@ MINI_APP_HTML = r"""<!doctype html>
     .minesweeper-grid {
       display: grid;
       grid-template-columns: repeat(9, minmax(0, 1fr));
-      gap: 4px;
+      gap: 0;
       margin-top: 12px;
+      padding: 3px;
+      border: 3px solid;
+      border-color: #808080 #fff #fff #808080;
+      background: #c0c0c0;
       touch-action: manipulation;
+    }
+    .minesweeper-shell {
+      --win-gray: #c0c0c0;
+      --win-dark: #808080;
+      --win-light: #fff;
+      border: 3px solid !important;
+      border-color: var(--win-light) var(--win-dark) var(--win-dark) var(--win-light) !important;
+      border-radius: 0 !important;
+      background: var(--win-gray) !important;
+      box-shadow: 2px 2px 0 #000 !important;
+      color: #000 !important;
+      font-family: Arial, "MS Sans Serif", sans-serif;
+    }
+    .minesweeper-shell .section-title {
+      gap: 8px;
+      padding: 5px;
+      border: 3px solid;
+      border-color: var(--win-dark) var(--win-light) var(--win-light) var(--win-dark);
+      background: var(--win-gray);
+    }
+    .minesweeper-shell .section-title h2 { color: #000; }
+    .minesweeper-shell .counter {
+      min-width: 62px;
+      padding: 3px 6px;
+      border: 2px solid;
+      border-color: #606060 #fff #fff #606060;
+      border-radius: 0;
+      background: #080808;
+      color: #f00;
+      font-family: "Courier New", monospace;
+      font-size: 18px;
+      line-height: 1;
+      text-align: right;
+      text-shadow: 0 0 5px #f00;
+    }
+    .minesweeper-face {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      flex: 0 0 32px;
+      border: 3px solid;
+      border-color: #fff #808080 #808080 #fff;
+      background: #c0c0c0;
+      font-size: 20px;
+      line-height: 1;
+    }
+    .minesweeper-shell .muted,
+    .minesweeper-shell .game-result { color: #202020; }
+    .minesweeper-shell > .btn {
+      border: 3px solid !important;
+      border-color: #fff #808080 #808080 #fff !important;
+      border-radius: 0 !important;
+      background: #c0c0c0 !important;
+      color: #000 !important;
+      box-shadow: none !important;
+    }
+    .minesweeper-shell > .btn:active {
+      border-color: #808080 #fff #fff #808080 !important;
+      transform: translate(1px, 1px);
     }
     .minesweeper-cell {
       position: relative;
@@ -895,82 +959,56 @@ MINI_APP_HTML = r"""<!doctype html>
       min-width: 0;
       aspect-ratio: 1;
       padding: 0;
-      border: 1px solid color-mix(in srgb, var(--line) 70%, #9fc8de);
-      border-radius: 8px;
-      background:
-        linear-gradient(135deg, #ffffff28 0 15%, transparent 16% 68%, #00000024 69%),
-        linear-gradient(155deg, color-mix(in srgb, var(--panel) 72%, #8bb8c6 22%), color-mix(in srgb, var(--panel) 85%, #07111a));
-      box-shadow:
-        inset 2px 2px 2px #ffffff38,
-        inset -3px -3px 4px #00000042,
-        0 3px 0 color-mix(in srgb, var(--line) 70%, #05080d),
-        0 5px 8px #02060b66;
-      color: var(--text);
+      border: 3px solid;
+      border-color: #fff #808080 #808080 #fff;
+      border-radius: 0;
+      background: #c0c0c0;
+      box-shadow: none;
+      color: #000;
       font-size: clamp(12px, 4.2vw, 19px);
       font-weight: 900;
       overflow: hidden;
-      transition: transform .12s ease, filter .15s ease;
+      transition: none;
     }
-    .minesweeper-cell:not(:disabled)::before,
-    .minesweeper-cell:not(:disabled)::after {
-      content: "";
-      position: absolute;
-      pointer-events: none;
-    }
-    .minesweeper-cell:not(:disabled)::before {
-      inset: 18%;
-      clip-path: polygon(50% 0, 100% 34%, 83% 100%, 17% 100%, 0 34%);
-      background: linear-gradient(145deg, #ffffff24, transparent 47%, #00000026);
-      border: 1px solid #ffffff1f;
-    }
-    .minesweeper-cell:not(:disabled)::after {
-      left: 18%;
-      right: 18%;
-      top: 15%;
-      height: 1px;
-      background: linear-gradient(90deg, transparent, #ffffff78, transparent);
-    }
-    .mine-tile-mark {
-      position: relative;
-      z-index: 1;
-      color: color-mix(in srgb, var(--text) 38%, transparent);
-      font-size: clamp(8px, 2.5vw, 13px);
-      text-shadow: 0 1px #fff3, 0 -1px #0008;
-    }
+    .mine-tile-mark { display: none; }
     .minesweeper-cell:not(:disabled):active {
-      transform: translateY(3px) scale(.94);
-      filter: brightness(1.2);
-      box-shadow: inset 1px 1px 5px #0007;
+      border: 1px solid #808080;
+      transform: none;
+      filter: none;
+      box-shadow: none;
     }
     .minesweeper-cell.revealed {
-      border-color: color-mix(in srgb, var(--line) 55%, transparent);
-      border-radius: 6px;
-      background:
-        radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--bg) 72%, var(--panel)), color-mix(in srgb, var(--bg) 91%, #000));
-      box-shadow: inset 0 2px 7px #0008, inset 0 0 0 1px #ffffff0d;
+      border: 1px solid #808080;
+      border-radius: 0;
+      background: #c0c0c0;
+      box-shadow: none;
     }
-    .minesweeper-cell.event { box-shadow: inset 0 0 0 2px #ffd45c, inset 0 2px 7px #0008, 0 0 10px #ffd45c55; }
-    .minesweeper-cell small { position: absolute; top: 1px; right: 2px; color: #ffd45c; font-size: .55em; }
+    .minesweeper-cell.event { box-shadow: inset 0 0 0 2px #ff0; }
+    .minesweeper-cell small { position: absolute; top: 1px; right: 2px; color: #806000; font-size: .55em; }
     .minesweeper-cell.revealed-mine {
-      border-color: #d29b65;
-      background: radial-gradient(circle at 42% 38%, #5d6871, #20272e 62%, #0a0d11);
-      box-shadow: inset 0 1px 4px #ffffff25, inset 0 -3px 6px #0009;
-      color: #fff;
+      border: 1px solid #808080;
+      background: #c0c0c0;
+      box-shadow: none;
+      color: #000;
       font-size: clamp(16px, 5vw, 24px);
     }
     .minesweeper-cell.hit-mine {
       z-index: 2;
-      border-color: #ffad7b;
-      background: radial-gradient(circle, #fff5a5 0 9%, #ff6638 27%, #9d1e18 57%, #270706 100%);
-      box-shadow: 0 0 20px #ff4f32cc, inset 0 0 7px #fff6;
+      border: 1px solid #808080;
+      background: #f00;
+      box-shadow: none;
       animation: hit-mine-shake .5s ease-out;
     }
-    .minesweeper-result-countdown { color: #ffcf7b; }
-    .mine-number-0 { color: var(--muted); }
-    .mine-number-1 { color: #62a8ff; }
-    .mine-number-2 { color: #55d98b; }
-    .mine-number-3 { color: #ff7c76; }
-    .mine-number-4, .mine-number-5, .mine-number-6, .mine-number-7, .mine-number-8 { color: #d39cff; }
+    .minesweeper-result-countdown { color: #800000 !important; }
+    .mine-number-0 { color: #c0c0c0; }
+    .mine-number-1 { color: #0000ff; }
+    .mine-number-2 { color: #008000; }
+    .mine-number-3 { color: #f00; }
+    .mine-number-4 { color: #000080; }
+    .mine-number-5 { color: #800000; }
+    .mine-number-6 { color: #008080; }
+    .mine-number-7 { color: #000; }
+    .mine-number-8 { color: #808080; }
     .minesweeper-legend { display: flex; flex-wrap: wrap; gap: 7px 14px; margin-top: 10px; }
     .mine-loss-overlay {
       position: fixed;
@@ -3257,7 +3295,7 @@ MINI_APP_HTML = r"""<!doctype html>
     const game = state.minesweeper;
     if (!game) {
       const canStart = Number(state.luck || 0) >= 10;
-      return `<section class="panel">
+      return `<section class="panel minesweeper-shell">
         <div class="section-title"><h2>💣 Сапёр 9×9</h2><span class="counter">удача ${state.luck}/100</span></div>
         <p class="muted">Чем меньше удачи на старте, тем больше мин: примерно от 10 до 50. Безопасные клетки дают котоины и могут открыть случайное событие. Мина завершает раунд и отнимает 10 удачи.</p>
         <button class="btn" ${canStart ? "" : "disabled"} onclick="startMinesweeper()">Начать игру</button>
@@ -3275,8 +3313,8 @@ MINI_APP_HTML = r"""<!doctype html>
       return `<button class="minesweeper-cell revealed mine-number-${adjacent} ${hasEvent ? "event" : ""}" disabled
         aria-label="Открытая клетка, мин рядом: ${adjacent}">${label}${hasEvent ? '<small>★</small>' : ""}</button>`;
     }).join("");
-    return `<section class="panel" id="minesweeperPanel">
-      <div class="section-title"><h2>💣 Сапёр</h2><span class="counter">${game.safeOpened}/${game.safeTotal}</span></div>
+    return `<section class="panel minesweeper-shell" id="minesweeperPanel">
+      <div class="section-title"><span class="counter" title="Мин на поле">${String(game.mineCount).padStart(3, "0")}</span><span class="minesweeper-face" aria-hidden="true">🙂</span><span class="counter" title="Открыто клеток">${String(game.safeOpened).padStart(3, "0")}</span></div>
       <p class="muted">Мин на поле: <b>${game.mineCount}</b> · добыто за раунд: <b>${game.earnedCoins}</b> 🪙 · удача на старте: <b>${game.luckAtStart}</b>/100</p>
       <div class="minesweeper-grid">${cells}</div>
       <div class="minesweeper-legend muted"><span>Число — мин рядом</span><span>★ — событие</span></div>
