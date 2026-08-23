@@ -325,6 +325,7 @@ def test_miniapp_has_interface_themes() -> None:
     assert 'body[data-theme="material"]' not in MINI_APP_HTML
     assert 'body[data-theme="expressive"]' in MINI_APP_HTML
     assert 'body[data-theme="glass"]' in MINI_APP_HTML
+    assert 'body[data-theme="neon"]' in MINI_APP_HTML
     assert "--app-bg-layer:" in MINI_APP_HTML
     assert 'class="app-bg" aria-hidden="true"' in MINI_APP_HTML
     assert ".app-bg {" in MINI_APP_HTML
@@ -336,18 +337,25 @@ def test_miniapp_has_interface_themes() -> None:
     assert "Material 3 Expressive" in MINI_APP_HTML
     assert "M3 Expressive" in MINI_APP_HTML
     assert "Liquid Glass" in MINI_APP_HTML
+    assert "Neon Mine" in MINI_APP_HTML
     assert 'id="themeApple" value="glass"' in MINI_APP_HTML
     assert 'id="themeAndroid" value="material"' not in MINI_APP_HTML
     assert 'id="themeExpressive" value="expressive"' in MINI_APP_HTML
+    assert 'id="themeNeon" value="neon"' in MINI_APP_HTML
     assert "setMiniTheme('expressive')" in MINI_APP_HTML
-    assert 'grid-template-columns: repeat(2, 1fr);' in MINI_APP_HTML
+    assert "setMiniTheme('neon')" in MINI_APP_HTML
+    assert 'grid-template-columns: repeat(3, 1fr);' in MINI_APP_HTML
     assert '#themeExpressive:checked ~ .theme-switch-track .theme-switch-knob' in MINI_APP_HTML
+    assert '#themeNeon:checked ~ .theme-switch-track .theme-switch-knob' in MINI_APP_HTML
     assert "theme-switch-knob" in MINI_APP_HTML
     assert "theme-platform-icon theme-android-icon" not in MINI_APP_HTML
     assert "theme-platform-icon theme-expressive-icon" in MINI_APP_HTML
+    assert "theme-platform-icon theme-neon-icon" in MINI_APP_HTML
     assert 'body[data-theme="material"] .btn.secondary' not in MINI_APP_HTML
     assert 'body[data-theme="expressive"] .btn' in MINI_APP_HTML
+    assert 'body[data-theme="neon"] .btn' in MINI_APP_HTML
     assert '"expressive"' in MINI_APP_HTML
+    assert '"neon"' in MINI_APP_HTML
     assert '"material"' not in MINI_APP_HTML
     assert "--surface-blur: blur(36px) saturate(2.05) contrast(1.04)" in MINI_APP_HTML
     assert 'body[data-theme="glass"] .panel::before' in MINI_APP_HTML

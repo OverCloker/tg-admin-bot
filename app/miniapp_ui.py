@@ -89,6 +89,37 @@ MINI_APP_HTML = r"""<!doctype html>
         linear-gradient(160deg, #08111d 0%, #0d1829 45%, #05070d 100%),
         var(--bg);
     }
+    body[data-theme="neon"] {
+      --bg: #050711;
+      --panel:
+        linear-gradient(145deg, #15102c 0%, #08182a 52%, #07101c 100%);
+      --panel-color: #08182a;
+      --panel-2:
+        linear-gradient(145deg, #211245 0%, #0b2b3a 54%, #091424 100%);
+      --line: #2af7ff9a;
+      --text: #f4fbff;
+      --muted: #a9bad4;
+      --accent: #21f4ff;
+      --accent-2: #ff4fd8;
+      --radius: 24px;
+      --radius-sm: 16px;
+      --button-radius: 18px;
+      --input-bg: #071120d9;
+      --input-placeholder: #8eb2ca;
+      --panel-shadow:
+        0 18px 44px #00000070,
+        0 0 28px #00eaff16,
+        inset 0 1px 0 #ffffff16,
+        inset 0 0 26px #18f5ff08;
+      --surface-blur: none;
+      --app-bg-layer:
+        radial-gradient(circle at 16% 8%, #21f4ff3a, transparent 24%),
+        radial-gradient(circle at 86% 16%, #ff4fd834, transparent 24%),
+        radial-gradient(circle at 20% 82%, #7b4dff30, transparent 28%),
+        linear-gradient(128deg, transparent 0 22%, #21f4ff10 23%, transparent 25% 50%, #ff4fd80c 51%, transparent 54%),
+        linear-gradient(160deg, #070914 0%, #071321 44%, #04060d 100%),
+        var(--bg);
+    }
     * { box-sizing: border-box; }
     html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
     body {
@@ -173,6 +204,38 @@ MINI_APP_HTML = r"""<!doctype html>
       background:
         linear-gradient(145deg, #536f9a 0%, #334f79 54%, #2b4166 100%);
       text-shadow: 0 1px 1px #00122499;
+    }
+    body[data-theme="neon"] .top-profile,
+    body[data-theme="neon"] .btn,
+    body[data-theme="neon"] .mini-form input,
+    body[data-theme="neon"] .role-manager-form input,
+    body[data-theme="neon"] .mine-admin-form input,
+    body[data-theme="neon"] .mine-admin-form textarea,
+    body[data-theme="neon"] .mine-admin-form select,
+    body[data-theme="neon"] .persistent-radio {
+      border: 1px solid color-mix(in srgb, var(--accent) 55%, #ffffff1c);
+      box-shadow:
+        0 0 0 1px #ff4fd815 inset,
+        0 0 22px #21f4ff1a,
+        0 12px 28px #00000055;
+    }
+    body[data-theme="neon"] .btn {
+      color: #031016;
+      text-shadow: 0 1px 0 #ffffff8a;
+      background:
+        linear-gradient(135deg, #21f4ff 0%, #7a6cff 50%, #ff4fd8 100%);
+      box-shadow:
+        0 0 22px #21f4ff38,
+        0 14px 30px #00000060,
+        inset 0 1px 0 #ffffffb0;
+    }
+    body[data-theme="neon"] .btn.secondary,
+    body[data-theme="neon"] .top-profile {
+      color: var(--text);
+      text-shadow: 0 0 9px #21f4ff6a;
+      background:
+        radial-gradient(circle at 18% 0%, #21f4ff1f, transparent 38%),
+        linear-gradient(145deg, #1a2141 0%, #092739 100%);
     }
     h1, h2, p { margin-top: 0; }
     h1 { margin-bottom: 2px; font-size: 34px; letter-spacing: 0; }
@@ -589,7 +652,7 @@ MINI_APP_HTML = r"""<!doctype html>
     .theme-switch-icons,
     .theme-switch-labels {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(3, 1fr);
       text-align: center;
     }
     .theme-switch-icons {
@@ -617,7 +680,7 @@ MINI_APP_HTML = r"""<!doctype html>
     .theme-switch-track {
       position: relative;
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(3, 1fr);
       height: 30px;
       overflow: hidden;
       border: 1px solid color-mix(in srgb, var(--line) 72%, #ffffff);
@@ -639,7 +702,7 @@ MINI_APP_HTML = r"""<!doctype html>
       position: absolute;
       top: 3px;
       left: 3px;
-      width: calc(50% - 6px);
+      width: calc(33.333% - 6px);
       height: 22px;
       border: 1px solid #777;
       border-radius: 999px;
@@ -673,10 +736,13 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     #themeApple:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(0); }
     #themeExpressive:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(calc(100% + 6px)); }
+    #themeNeon:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(calc(200% + 12px)); }
     #themeApple:checked ~ .theme-switch-icons .theme-apple-icon,
     #themeApple:checked ~ .theme-switch-labels .theme-apple-label,
     #themeExpressive:checked ~ .theme-switch-icons .theme-expressive-icon,
-    #themeExpressive:checked ~ .theme-switch-labels .theme-expressive-label {
+    #themeExpressive:checked ~ .theme-switch-labels .theme-expressive-label,
+    #themeNeon:checked ~ .theme-switch-icons .theme-neon-icon,
+    #themeNeon:checked ~ .theme-switch-labels .theme-neon-label {
       color: var(--text);
       opacity: 1;
     }
@@ -1509,6 +1575,7 @@ MINI_APP_HTML = r"""<!doctype html>
   const MINI_APP_THEMES = {
     expressive: "Material 3 Expressive",
     glass: "Liquid Glass",
+    neon: "Neon Mine",
   };
 
   function currentMiniTheme() {
@@ -1543,6 +1610,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <div class="theme-platform-switch">
         <input type="radio" name="miniAppTheme" id="themeApple" value="glass" ${theme === "glass" ? "checked" : ""} onchange="setMiniTheme('glass')">
         <input type="radio" name="miniAppTheme" id="themeExpressive" value="expressive" ${theme === "expressive" ? "checked" : ""} onchange="setMiniTheme('expressive')">
+        <input type="radio" name="miniAppTheme" id="themeNeon" value="neon" ${theme === "neon" ? "checked" : ""} onchange="setMiniTheme('neon')">
         <div class="theme-switch-icons">
           <label class="theme-platform-icon theme-apple-icon" for="themeApple" aria-label="Liquid Glass">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1554,15 +1622,22 @@ MINI_APP_HTML = r"""<!doctype html>
               <path d="M12 2.4l1.8 5.2 5.5.2-4.4 3.3 1.5 5.3L12 13.3l-4.5 3.1 1.5-5.3-4.4-3.3 5.5-.2L12 2.4zm6.5 12.6l.8 2.3 2.4.1-1.9 1.4.7 2.3-2-1.3-2 1.3.7-2.3-1.9-1.4 2.4-.1.8-2.3zM4.7 15l.8 2.3 2.4.1L6 18.8l.7 2.3-2-1.3-2 1.3.7-2.3-1.9-1.4 2.4-.1.8-2.3z"/>
             </svg>
           </label>
+          <label class="theme-platform-icon theme-neon-icon" for="themeNeon" aria-label="Neon Mine">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 2l7.2 4.2v8.3L12 22l-7.2-7.5V6.2L12 2zm0 2.8L7.1 7.6v5.9l4.9 5.2 4.9-5.2V7.6L12 4.8zm0 2.7l2.8 1.6v3.5L12 15.5l-2.8-2.9V9.1L12 7.5z"/>
+            </svg>
+          </label>
         </div>
         <div class="theme-switch-track">
           <span class="theme-switch-knob"></span>
           <label for="themeApple"></label>
           <label for="themeExpressive"></label>
+          <label for="themeNeon"></label>
         </div>
         <div class="theme-switch-labels">
           <label class="theme-apple-label" for="themeApple">Liquid Glass</label>
           <label class="theme-expressive-label" for="themeExpressive">M3 Expressive</label>
+          <label class="theme-neon-label" for="themeNeon">Neon Mine</label>
         </div>
       </div>
     </div>`;
