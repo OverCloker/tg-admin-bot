@@ -84,6 +84,9 @@ def test_minesweeper_ui_and_audit_are_compact() -> None:
     assert "mine-tile-mark" in MINI_APP_HTML
     assert "Ну ты и лох!" in MINI_APP_HTML
     assert "showMinesweeperLoss(result)" in MINI_APP_HTML
+    assert "await revealMinesweeperField(result)" in MINI_APP_HTML
+    assert "Поле раскрыто. Итоги через" in MINI_APP_HTML
+    assert "hit-mine" in MINI_APP_HTML
     assert 'api("/miniapp/minesweeper/pick"' in MINI_APP_HTML
     assert api_audit_action("POST", "/miniapp/minesweeper/start") == "Сапёр 9×9 начат"
     assert should_skip_api_audit("/miniapp/minesweeper/pick")

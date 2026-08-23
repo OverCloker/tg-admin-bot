@@ -925,6 +925,21 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     .minesweeper-cell.event { box-shadow: inset 0 0 0 2px #ffd45c, inset 0 2px 7px #0008, 0 0 10px #ffd45c55; }
     .minesweeper-cell small { position: absolute; top: 1px; right: 2px; color: #ffd45c; font-size: .55em; }
+    .minesweeper-cell.revealed-mine {
+      border-color: #d29b65;
+      background: radial-gradient(circle at 42% 38%, #5d6871, #20272e 62%, #0a0d11);
+      box-shadow: inset 0 1px 4px #ffffff25, inset 0 -3px 6px #0009;
+      color: #fff;
+      font-size: clamp(16px, 5vw, 24px);
+    }
+    .minesweeper-cell.hit-mine {
+      z-index: 2;
+      border-color: #ffad7b;
+      background: radial-gradient(circle, #fff5a5 0 9%, #ff6638 27%, #9d1e18 57%, #270706 100%);
+      box-shadow: 0 0 20px #ff4f32cc, inset 0 0 7px #fff6;
+      animation: hit-mine-shake .5s ease-out;
+    }
+    .minesweeper-result-countdown { color: #ffcf7b; }
     .mine-number-0 { color: var(--muted); }
     .mine-number-1 { color: #62a8ff; }
     .mine-number-2 { color: #55d98b; }
@@ -977,6 +992,13 @@ MINI_APP_HTML = r"""<!doctype html>
       42% { opacity: 1; transform: scale(1.32) rotate(10deg); }
       72% { transform: scale(.92) rotate(-4deg); }
       100% { transform: scale(1) rotate(0); }
+    }
+    @keyframes hit-mine-shake {
+      0%, 100% { transform: translateX(0) rotate(0); }
+      20% { transform: translateX(-3px) rotate(-8deg); }
+      40% { transform: translateX(3px) rotate(8deg); }
+      60% { transform: translateX(-2px) rotate(-5deg); }
+      80% { transform: translateX(2px) rotate(4deg); }
     }
     .game-result {
       min-height: 1.35em;
@@ -3304,14 +3326,60 @@ MINI_APP_HTML = r"""<!doctype html>
         method: "POST", body: JSON.stringify({ cell })
       });
       state = result.state;
-      renderMine(false);
-      if (result.mine) showMinesweeperLoss(result);
-      else showNotice(result.message, Boolean(result.event));
+      if (result.mine) {
+        await revealMinesweeperField(result);
+        renderMine(false);
+        showMinesweeperLoss(result);
+      } else {
+        renderMine(false);
+        showNotice(result.message, Boolean(result.event));
+      }
     } catch (error) {
       if (button) button.disabled = false;
       showNotice(error.message);
     } finally {
       busy = false;
+    }
+  }
+
+  function minesAroundCell(cell, mines) {
+    const row = Math.floor(cell / 9);
+    const column = cell % 9;
+    let count = 0;
+    for (let rowOffset = -1; rowOffset <= 1; rowOffset += 1) {
+      for (let columnOffset = -1; columnOffset <= 1; columnOffset += 1) {
+        if (!rowOffset && !columnOffset) continue;
+        const nearRow = row + rowOffset;
+        const nearColumn = column + columnOffset;
+        if (nearRow >= 0 && nearRow < 9 && nearColumn >= 0 && nearColumn < 9 && mines.has(nearRow * 9 + nearColumn)) count += 1;
+      }
+    }
+    return count;
+  }
+
+  async function revealMinesweeperField(result) {
+    const mines = new Set((result.mines || []).map(Number));
+    const cells = document.querySelectorAll("#minesweeperPanel .minesweeper-cell");
+    cells.forEach((cellNode, index) => {
+      cellNode.disabled = true;
+      cellNode.className = "minesweeper-cell revealed";
+      if (mines.has(index)) {
+        cellNode.classList.add("revealed-mine");
+        cellNode.innerHTML = index === Number(result.cell) ? "💥" : "💣";
+        if (index === Number(result.cell)) cellNode.classList.add("hit-mine");
+        cellNode.setAttribute("aria-label", index === Number(result.cell) ? "Взорванная мина" : "Мина");
+      } else {
+        const adjacent = minesAroundCell(index, mines);
+        cellNode.classList.add(`mine-number-${adjacent}`);
+        cellNode.textContent = adjacent ? String(adjacent) : "";
+        cellNode.setAttribute("aria-label", adjacent ? `Безопасная клетка, мин рядом: ${adjacent}` : "Пустая безопасная клетка");
+      }
+    });
+    const status = document.getElementById("minesweeperResult");
+    if (status) status.classList.add("minesweeper-result-countdown");
+    for (let seconds = 5; seconds > 0; seconds -= 1) {
+      if (status) status.textContent = `Поле раскрыто. Итоги через ${seconds} сек.`;
+      await sleep(1000);
     }
   }
 
