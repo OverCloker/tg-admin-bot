@@ -1467,6 +1467,51 @@ def parse_auto_weather_command(text: str | None) -> tuple[str, str | None] | Non
     return "on", payload
 
 
+def parse_personal_reminder_command(
+    text: str | None,
+    moment: datetime | None = None,
+) -> tuple[datetime, str] | None:
+    if not text:
+        return None
+    current = moment or datetime.now(LOCAL_TIMEZONE)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=LOCAL_TIMEZONE)
+    else:
+        current = current.astimezone(LOCAL_TIMEZONE)
+    value = " ".join(text.strip().split())
+    relative = re.fullmatch(r"напомни через (\d{1,4})\s*(м|мин|ч|час|д|дн)\s+(.+)", value, re.IGNORECASE)
+    if relative:
+        amount = int(relative.group(1))
+        unit = relative.group(2).casefold()
+        delta = timedelta(days=amount) if unit in {"д", "дн"} else timedelta(hours=amount) if unit in {"ч", "час"} else timedelta(minutes=amount)
+        remind_at = current + delta
+        return (remind_at, relative.group(3).strip()) if timedelta(minutes=1) <= delta <= timedelta(days=366) else None
+
+    tomorrow = re.fullmatch(r"напомни завтра в (\d{1,2}):(\d{2})\s+(.+)", value, re.IGNORECASE)
+    if tomorrow:
+        hour, minute = int(tomorrow.group(1)), int(tomorrow.group(2))
+        if hour > 23 or minute > 59:
+            return None
+        remind_at = (current + timedelta(days=1)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+        return remind_at, tomorrow.group(3).strip()
+
+    dated = re.fullmatch(r"напомни (\d{1,2})[.](\d{1,2})(?:[.](\d{4}))? в (\d{1,2}):(\d{2})\s+(.+)", value, re.IGNORECASE)
+    if dated:
+        day, month = int(dated.group(1)), int(dated.group(2))
+        year = int(dated.group(3) or current.year)
+        hour, minute = int(dated.group(4)), int(dated.group(5))
+        try:
+            remind_at = current.replace(year=year, month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0)
+            if dated.group(3) is None and remind_at <= current:
+                remind_at = remind_at.replace(year=year + 1)
+        except ValueError:
+            return None
+        if remind_at <= current or remind_at > current + timedelta(days=366):
+            return None
+        return remind_at, dated.group(6).strip()
+    return None
+
+
 def auto_weather_slot(
     moment: datetime | None = None,
     schedule_hours: list[int] | None = None,
@@ -1539,9 +1584,9 @@ def build_help_rich_message() -> InputRichMessage:
             InputRichBlockDetails(
                 summary="Подробнее ниже",
                 blocks=[
-                    paragraph("Основное: помощь; профиль; профиль @ник; лс @ник или ответом лс; напоминание — открыть личный планировщик."),
+                    paragraph("Основное: помощь; профиль; профиль @ник; лс @ник или ответом лс; напоминание — открыть личный планировщик; напомни через 30м текст."),
                     paragraph("Шахта: копай; сумка; достижения; +кличка текст; топ копания; топ монет; топ рангов."),
-                    paragraph("Погода: погода Кривой Рог; погода Кривой Рог завтра; погода Кривой Рог неделя."),
+                    paragraph("Погода: погода Кривой Рог; погода Кривой Рог завтра; погода Кривой Рог неделя; погода каждый день 08:00 Кривой Рог; погода завтра 21:00 Кривой Рог; погода выкл."),
                     paragraph("Автопогода: автопогода — статус; автопогода Кривой Рог — 08/12/15/18 и завтра в 21; автопогода выкл."),
                     paragraph("Развлекуха: кто пидор; топ пидоров; roll mute; топ roll mute; в цитаты; цитата."),
                     paragraph("Модерация: косяк; затихни 10 - причина; затихни админ 60 - причина; трещи; ударить словарём; -сооб; чат стоп 5м причина; чат старт."),
@@ -10730,6 +10775,94 @@ async def personal_reminders_link(message: Message) -> None:
         "Личные напоминания и погодная рассылка настраиваются в Mini App.",
         reply_markup=keyboard,
     )
+
+
+@router.message(F.text.regexp(re.compile(r"^напомни\s+.+", re.IGNORECASE)))
+async def create_personal_reminder_command(message: Message) -> None:
+    if not message.from_user:
+        return
+    await remember_sender(message)
+    parsed = parse_personal_reminder_command(message.text)
+    if not parsed:
+        await safe_reply(
+            message,
+            "Не понял время. Примеры: <code>напомни через 30м купить корм</code>, "
+            "<code>напомни завтра в 12:00 позвонить</code>, "
+            "<code>напомни 25.08 в 18:30 проверить почту</code>.",
+        )
+        return
+    remind_at, reminder_text = parsed
+    if len(db.list_personal_reminders(message.from_user.id, 100)) >= 50:
+        await safe_reply(message, "У тебя уже 50 активных напоминаний. Удали лишние в Mini App.")
+        return
+    saved = db.create_personal_reminder(
+        message.from_user.id,
+        reminder_text,
+        remind_at.astimezone(timezone.utc).isoformat(timespec="seconds"),
+    )
+    link = miniapp_deep_link(f"reminders_{message.from_user.id}")
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🔔 Управление напоминаниями", url=link)]]
+    )
+    await safe_reply(
+        message,
+        f"Напоминание №{saved.id} сохранено на <b>{remind_at.strftime('%d.%m.%Y, %H:%M')}</b>. "
+        "Оно придёт лично, если ты запускал бота через /start.",
+        reply_markup=keyboard,
+    )
+
+
+@router.message(F.text.regexp(re.compile(r"^удали\s+напоминание\s+\d+$", re.IGNORECASE)))
+async def delete_personal_reminder_command(message: Message) -> None:
+    if not message.from_user or not message.text:
+        return
+    reminder_id = int(message.text.rsplit(maxsplit=1)[-1])
+    deleted = db.delete_personal_reminder(message.from_user.id, reminder_id)
+    await safe_reply(message, "Напоминание удалено." if deleted else "Такого активного напоминания нет.")
+
+
+@router.message(F.text.regexp(re.compile(r"^погода\s+(?:каждый\s+день|завтра)\s+\d{1,2}:\d{2}\s+.+$", re.IGNORECASE)))
+async def personal_weather_command(message: Message) -> None:
+    if not message.from_user or not message.text:
+        return
+    match = re.fullmatch(
+        r"погода\s+(каждый\s+день|завтра)\s+(\d{1,2}):(\d{2})\s+(.+)",
+        " ".join(message.text.strip().split()),
+        re.IGNORECASE,
+    )
+    if not match:
+        return
+    hour, minute = int(match.group(2)), int(match.group(3))
+    if hour > 23 or minute > 59:
+        await safe_reply(message, "Неверное время. Используй формат ЧЧ:ММ.")
+        return
+    current = db.get_personal_weather_settings(message.from_user.id)
+    is_daily = match.group(1).casefold() == "каждый день"
+    offset = -int((datetime.now(LOCAL_TIMEZONE).utcoffset() or timedelta()).total_seconds() // 60)
+    db.set_personal_weather_settings(
+        message.from_user.id,
+        match.group(4).strip(),
+        offset,
+        True if is_daily else bool(current.daily_enabled),
+        hour if is_daily else current.daily_hour,
+        minute if is_daily else current.daily_minute,
+        True if not is_daily else bool(current.tomorrow_enabled),
+        hour if not is_daily else current.tomorrow_hour,
+        minute if not is_daily else current.tomorrow_minute,
+    )
+    await safe_reply(
+        message,
+        f"Личная погода включена: <b>{escape(match.group(4).strip())}</b>, "
+        f"<b>{hour:02d}:{minute:02d}</b> ({'сегодня' if is_daily else 'на завтра'}).",
+    )
+
+
+@router.message(F.text.regexp(re.compile(r"^погода\s+выкл[.!]?$", re.IGNORECASE)))
+async def personal_weather_off_command(message: Message) -> None:
+    if not message.from_user:
+        return
+    db.disable_personal_weather(message.from_user.id)
+    await safe_reply(message, "Личная погодная рассылка выключена.")
 
 
 async def handle_day_pick(message: Message) -> bool:

@@ -2,9 +2,22 @@ from datetime import datetime, timedelta, timezone
 
 from app import miniapp
 from app.admin_api import should_skip_api_audit
+from app.bot import LOCAL_TIMEZONE, parse_personal_reminder_command
 from app.db import Database
 from app.miniapp import PersonalReminderCreate, PersonalReminderDelete, PersonalWeatherSave
 from app.miniapp_ui import MINI_APP_HTML
+
+
+def test_personal_reminder_command_parser() -> None:
+    now = datetime(2026, 8, 23, 10, 0, tzinfo=LOCAL_TIMEZONE)
+    relative = parse_personal_reminder_command("напомни через 30м купить корм", now)
+    tomorrow = parse_personal_reminder_command("напомни завтра в 12:15 позвонить", now)
+    dated = parse_personal_reminder_command("напомни 25.08 в 18:30 проверить почту", now)
+
+    assert relative == (now + timedelta(minutes=30), "купить корм")
+    assert tomorrow == (datetime(2026, 8, 24, 12, 15, tzinfo=LOCAL_TIMEZONE), "позвонить")
+    assert dated == (datetime(2026, 8, 25, 18, 30, tzinfo=LOCAL_TIMEZONE), "проверить почту")
+    assert parse_personal_reminder_command("напомни когда-нибудь текст", now) is None
 
 
 def test_personal_reminder_claim_is_idempotent(tmp_path) -> None:
