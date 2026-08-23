@@ -1511,7 +1511,7 @@ def render_auto_weather_settings(chat_id: int) -> str:
 def chat_help_text() -> str:
     return (
         "<b>Помощь</b>\n"
-        "Основное: <code>профиль</code>, <code>лс @ник</code>.\n"
+        "Основное: <code>профиль</code>, <code>лс @ник</code>, <code>напоминание</code>.\n"
         "Шахта: <code>копай</code>, <code>сумка</code>, <code>достижения</code>, <code>топ копания</code>.\n"
         "Погода: <code>погода Кривой Рог</code>, <code>автопогода Кривой Рог</code>, <code>автопогода выкл</code>.\n"
         "Развлекуха: <code>кто пидор</code>, <code>roll mute</code>, <code>цитата</code>.\n"
@@ -1527,7 +1527,7 @@ def build_help_rich_message() -> InputRichMessage:
             InputRichBlockTable(
                 cells=[
                     [rich_cell("Раздел", header=True), rich_cell("Главное", header=True)],
-                    [rich_cell("Профиль"), rich_cell("профиль · профиль @ник · лс @ник")],
+                    [rich_cell("Профиль"), rich_cell("профиль · лс @ник · напоминание")],
                     [rich_cell("Шахта"), rich_cell("копай · сумка · достижения · топы")],
                     [rich_cell("Погода"), rich_cell("погода · автопогода · автопогода выкл")],
                     [rich_cell("Игры"), rich_cell("кто пидор · roll mute · цитата")],
@@ -1539,7 +1539,7 @@ def build_help_rich_message() -> InputRichMessage:
             InputRichBlockDetails(
                 summary="Подробнее ниже",
                 blocks=[
-                    paragraph("Основное: помощь; профиль; профиль @ник; лс @ник или ответом лс."),
+                    paragraph("Основное: помощь; профиль; профиль @ник; лс @ник или ответом лс; напоминание — открыть личный планировщик."),
                     paragraph("Шахта: копай; сумка; достижения; +кличка текст; топ копания; топ монет; топ рангов."),
                     paragraph("Погода: погода Кривой Рог; погода Кривой Рог завтра; погода Кривой Рог неделя."),
                     paragraph("Автопогода: автопогода — статус; автопогода Кривой Рог — 08/12/15/18 и завтра в 21; автопогода выкл."),
@@ -10716,6 +10716,22 @@ async def help_ru(message: Message) -> None:
     await send_help_message(message)
 
 
+@router.message(F.text.regexp(re.compile(r"^/?напоминани[ея][?!.]?$", re.IGNORECASE)))
+async def personal_reminders_link(message: Message) -> None:
+    if not message.from_user:
+        return
+    await remember_sender(message)
+    link = miniapp_deep_link(f"reminders_{message.from_user.id}")
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🔔 Открыть напоминания", url=link)]]
+    )
+    await safe_reply(
+        message,
+        "Личные напоминания и погодная рассылка настраиваются в Mini App.",
+        reply_markup=keyboard,
+    )
+
+
 async def handle_day_pick(message: Message) -> bool:
     settings = db.get_giveaway_settings(message.chat.id)
     if not message.text:
@@ -12389,6 +12405,67 @@ async def scheduled_weather_loop(bot: Bot) -> None:
         await asyncio.sleep(AUTO_WEATHER_POLL_SECONDS)
 
 
+async def personal_notifications_loop(bot: Bot) -> None:
+    while True:
+        now_utc = datetime.now(timezone.utc)
+        for reminder in db.claim_due_personal_reminders(now_utc.isoformat(timespec="seconds")):
+            try:
+                link = miniapp_deep_link(f"reminders_{reminder.user_id}")
+                keyboard = InlineKeyboardMarkup(
+                    inline_keyboard=[[InlineKeyboardButton(text="🔔 Мои напоминания", url=link)]]
+                )
+                await bot.send_message(
+                    reminder.user_id,
+                    f"🔔 <b>Напоминание</b>\n\n{escape(reminder.text)}",
+                    reply_markup=keyboard,
+                )
+                db.finish_personal_reminder(reminder.id)
+            except asyncio.CancelledError:
+                raise
+            except (TelegramForbiddenError, TelegramBadRequest) as exc:
+                db.finish_personal_reminder(reminder.id, error="Бот не может написать в личный чат. Открой бота и нажми /start.")
+                logging.info("Personal reminder delivery unavailable for user %s: %s", reminder.user_id, exc)
+            except Exception as exc:
+                db.finish_personal_reminder(reminder.id, error="Не удалось доставить напоминание.")
+                logging.warning("Personal reminder %s failed: %s", reminder.id, exc)
+
+        for settings in db.list_enabled_personal_weather():
+            try:
+                local_now = now_utc - timedelta(minutes=int(settings.timezone_offset_minutes))
+                slots = []
+                if (
+                    settings.daily_enabled
+                    and local_now.hour == settings.daily_hour
+                    and local_now.minute == settings.daily_minute
+                ):
+                    slots.append(("daily", "now", "Личная погода", settings.last_daily_key))
+                if (
+                    settings.tomorrow_enabled
+                    and local_now.hour == settings.tomorrow_hour
+                    and local_now.minute == settings.tomorrow_minute
+                ):
+                    slots.append(("tomorrow", "tomorrow", "Погода на завтра", settings.last_tomorrow_key))
+                for kind, period, title, previous_key in slots:
+                    sent_key = f"{local_now.date().isoformat()}:{kind}"
+                    if previous_key == sent_key:
+                        continue
+                    forecast = await fetch_weather(settings.city, period)
+                    await bot.send_message(
+                        settings.user_id,
+                        f"<b>{escape(title)}</b>\n\n{forecast}",
+                        disable_web_page_preview=True,
+                    )
+                    db.mark_personal_weather_sent(settings.user_id, kind, sent_key)
+            except asyncio.CancelledError:
+                raise
+            except (TelegramForbiddenError, TelegramBadRequest) as exc:
+                db.disable_personal_weather(settings.user_id)
+                logging.info("Personal weather disabled for user %s: %s", settings.user_id, exc)
+            except Exception as exc:
+                logging.warning("Personal weather failed for user %s: %s", settings.user_id, exc)
+        await asyncio.sleep(30)
+
+
 @router.message(F.chat.type == "private")
 async def private_fallback(message: Message) -> None:
     await message.answer(
@@ -12452,6 +12529,7 @@ async def main() -> None:
         advertisement_task = asyncio.create_task(advertisement_loop(bot))
         alerts_task = asyncio.create_task(alerts_monitor_loop(bot))
         scheduled_weather_task = asyncio.create_task(scheduled_weather_loop(bot))
+        personal_notifications_task = asyncio.create_task(personal_notifications_loop(bot))
         await dispatcher.start_polling(
             bot,
             allowed_updates=["message", "callback_query", "message_reaction", "pre_checkout_query", "my_chat_member"],
@@ -12471,6 +12549,10 @@ async def main() -> None:
             scheduled_weather_task.cancel()
             with suppress(asyncio.CancelledError):
                 await scheduled_weather_task
+        if "personal_notifications_task" in locals():
+            personal_notifications_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await personal_notifications_task
         if staff_service:
             await staff_service.send(bot, "status", "🔴 Бот остановлен")
         await bot.session.close()

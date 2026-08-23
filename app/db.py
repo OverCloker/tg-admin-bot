@@ -167,6 +167,34 @@ class ScheduledWeatherSettings:
 
 
 @dataclass(frozen=True)
+class PersonalReminder:
+    id: int
+    user_id: int
+    text: str
+    remind_at: str
+    status: str
+    last_error: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class PersonalWeatherSettings:
+    user_id: int
+    city: str
+    timezone_offset_minutes: int
+    daily_enabled: int
+    daily_hour: int
+    daily_minute: int
+    tomorrow_enabled: int
+    tomorrow_hour: int
+    tomorrow_minute: int
+    last_daily_key: str | None
+    last_tomorrow_key: str | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class GiveawayStat:
     chat_id: int
     user_id: int
@@ -695,6 +723,35 @@ class Database:
                 updated_by integer,
                 updated_at text not null,
                 foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists personal_reminders (
+                id integer primary key autoincrement,
+                user_id integer not null,
+                text text not null,
+                remind_at text not null,
+                status text not null default 'pending',
+                last_error text,
+                created_at text not null,
+                updated_at text not null
+            );
+
+            create index if not exists personal_reminders_due_idx
+            on personal_reminders(status, remind_at);
+
+            create table if not exists personal_weather_settings (
+                user_id integer primary key,
+                city text not null default 'Кривой Рог',
+                timezone_offset_minutes integer not null default -180,
+                daily_enabled integer not null default 0,
+                daily_hour integer not null default 8,
+                daily_minute integer not null default 0,
+                tomorrow_enabled integer not null default 0,
+                tomorrow_hour integer not null default 21,
+                tomorrow_minute integer not null default 0,
+                last_daily_key text,
+                last_tomorrow_key text,
+                updated_at text not null
             );
 
             create table if not exists alarm_restriction_settings (
@@ -3599,6 +3656,175 @@ class Database:
             where chat_id = ? and enabled = 1
             """,
             (sent_key, utc_now(), chat_id),
+        )
+        self._conn.commit()
+
+    def create_personal_reminder(self, user_id: int, text: str, remind_at: str) -> PersonalReminder:
+        now = utc_now()
+        cursor = self._conn.execute(
+            """
+            insert into personal_reminders (user_id, text, remind_at, status, created_at, updated_at)
+            values (?, ?, ?, 'pending', ?, ?)
+            """,
+            (int(user_id), text.strip()[:500], remind_at, now, now),
+        )
+        self._conn.commit()
+        row = self._conn.execute(
+            "select id, user_id, text, remind_at, status, last_error, created_at, updated_at "
+            "from personal_reminders where id = ?",
+            (int(cursor.lastrowid),),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("personal reminder was not created")
+        return PersonalReminder(**dict(row))
+
+    def list_personal_reminders(self, user_id: int, limit: int = 50) -> list[PersonalReminder]:
+        rows = self._conn.execute(
+            """
+            select id, user_id, text, remind_at, status, last_error, created_at, updated_at
+            from personal_reminders
+            where user_id = ? and status in ('pending', 'sending', 'failed')
+            order by remind_at, id
+            limit ?
+            """,
+            (int(user_id), max(1, min(100, int(limit)))),
+        ).fetchall()
+        return [PersonalReminder(**dict(row)) for row in rows]
+
+    def delete_personal_reminder(self, user_id: int, reminder_id: int) -> bool:
+        cursor = self._conn.execute(
+            "delete from personal_reminders where id = ? and user_id = ? and status != 'sent'",
+            (int(reminder_id), int(user_id)),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def claim_due_personal_reminders(self, due_at: str, limit: int = 25) -> list[PersonalReminder]:
+        stale_before = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(timespec="seconds")
+        try:
+            self._conn.execute("begin immediate")
+            self._conn.execute(
+                "update personal_reminders set status = 'pending', updated_at = ? "
+                "where status = 'sending' and updated_at < ?",
+                (utc_now(), stale_before),
+            )
+            rows = self._conn.execute(
+                """
+                select id, user_id, text, remind_at, status, last_error, created_at, updated_at
+                from personal_reminders
+                where status = 'pending' and remind_at <= ?
+                order by remind_at, id
+                limit ?
+                """,
+                (due_at, max(1, min(100, int(limit)))),
+            ).fetchall()
+            ids = [int(row["id"]) for row in rows]
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                self._conn.execute(
+                    f"update personal_reminders set status = 'sending', updated_at = ? where id in ({placeholders})",
+                    (utc_now(), *ids),
+                )
+            self._conn.commit()
+            return [PersonalReminder(**{**dict(row), "status": "sending"}) for row in rows]
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def finish_personal_reminder(self, reminder_id: int, *, error: str | None = None) -> None:
+        self._conn.execute(
+            """
+            update personal_reminders
+            set status = ?, last_error = ?, updated_at = ?
+            where id = ? and status = 'sending'
+            """,
+            ("failed" if error else "sent", (error or "")[:500] or None, utc_now(), int(reminder_id)),
+        )
+        self._conn.commit()
+
+    def get_personal_weather_settings(self, user_id: int) -> PersonalWeatherSettings:
+        row = self._conn.execute(
+            """
+            select user_id, city, timezone_offset_minutes, daily_enabled, daily_hour, daily_minute,
+                   tomorrow_enabled, tomorrow_hour, tomorrow_minute, last_daily_key,
+                   last_tomorrow_key, updated_at
+            from personal_weather_settings where user_id = ?
+            """,
+            (int(user_id),),
+        ).fetchone()
+        if row:
+            return PersonalWeatherSettings(**dict(row))
+        return PersonalWeatherSettings(
+            user_id=int(user_id), city="Кривой Рог", timezone_offset_minutes=-180,
+            daily_enabled=0, daily_hour=8, daily_minute=0,
+            tomorrow_enabled=0, tomorrow_hour=21, tomorrow_minute=0,
+            last_daily_key=None, last_tomorrow_key=None, updated_at=utc_now(),
+        )
+
+    def set_personal_weather_settings(
+        self,
+        user_id: int,
+        city: str,
+        timezone_offset_minutes: int,
+        daily_enabled: bool,
+        daily_hour: int,
+        daily_minute: int,
+        tomorrow_enabled: bool,
+        tomorrow_hour: int,
+        tomorrow_minute: int,
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into personal_weather_settings (
+                user_id, city, timezone_offset_minutes, daily_enabled, daily_hour, daily_minute,
+                tomorrow_enabled, tomorrow_hour, tomorrow_minute, updated_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(user_id) do update set
+                city = excluded.city,
+                timezone_offset_minutes = excluded.timezone_offset_minutes,
+                daily_enabled = excluded.daily_enabled,
+                daily_hour = excluded.daily_hour,
+                daily_minute = excluded.daily_minute,
+                tomorrow_enabled = excluded.tomorrow_enabled,
+                tomorrow_hour = excluded.tomorrow_hour,
+                tomorrow_minute = excluded.tomorrow_minute,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(user_id), city.strip()[:120] or "Кривой Рог",
+                max(-840, min(840, int(timezone_offset_minutes))), int(daily_enabled),
+                max(0, min(23, int(daily_hour))), max(0, min(59, int(daily_minute))),
+                int(tomorrow_enabled), max(0, min(23, int(tomorrow_hour))),
+                max(0, min(59, int(tomorrow_minute))), utc_now(),
+            ),
+        )
+        self._conn.commit()
+
+    def list_enabled_personal_weather(self) -> list[PersonalWeatherSettings]:
+        rows = self._conn.execute(
+            """
+            select user_id, city, timezone_offset_minutes, daily_enabled, daily_hour, daily_minute,
+                   tomorrow_enabled, tomorrow_hour, tomorrow_minute, last_daily_key,
+                   last_tomorrow_key, updated_at
+            from personal_weather_settings
+            where daily_enabled = 1 or tomorrow_enabled = 1
+            order by user_id
+            """
+        ).fetchall()
+        return [PersonalWeatherSettings(**dict(row)) for row in rows]
+
+    def mark_personal_weather_sent(self, user_id: int, kind: str, sent_key: str) -> None:
+        column = "last_daily_key" if kind == "daily" else "last_tomorrow_key"
+        self._conn.execute(
+            f"update personal_weather_settings set {column} = ?, updated_at = ? where user_id = ?",
+            (sent_key, utc_now(), int(user_id)),
+        )
+        self._conn.commit()
+
+    def disable_personal_weather(self, user_id: int) -> None:
+        self._conn.execute(
+            "update personal_weather_settings set daily_enabled = 0, tomorrow_enabled = 0, updated_at = ? where user_id = ?",
+            (utc_now(), int(user_id)),
         )
         self._conn.commit()
 

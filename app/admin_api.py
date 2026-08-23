@@ -3204,6 +3204,9 @@ def should_skip_api_audit(path: str) -> bool:
         "/miniapp/mine/interactive/tool",
         "/miniapp/mine/interactive/event",
         "/miniapp/minesweeper/pick",
+        "/miniapp/reminders/create",
+        "/miniapp/reminders/delete",
+        "/miniapp/reminders/weather",
     }
 
 

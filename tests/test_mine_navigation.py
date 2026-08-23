@@ -178,7 +178,7 @@ def test_mine_actions_refresh_without_scrolling_to_top() -> None:
 
 
 def test_shop_deep_link_opens_a_distinct_compact_screen() -> None:
-    assert '["shop", "bag", "profile", "weather", "radio"].includes(initialView)' in MINI_APP_HTML
+    assert '["shop", "bag", "profile", "weather", "radio", "reminders"].includes(initialView)' in MINI_APP_HTML
     assert 'screenTitle.textContent = "🛒 Магазин"' in MINI_APP_HTML
     assert 'setScreenHeader("shop");' in MINI_APP_HTML
     assert 'class="shop-hero"' in MINI_APP_HTML

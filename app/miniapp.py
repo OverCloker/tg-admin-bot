@@ -73,6 +73,25 @@ class MinesweeperPick(BaseModel):
     cell: int = Field(ge=0, le=80)
 
 
+class PersonalReminderCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+    remindAt: str = Field(min_length=10, max_length=50)
+    timezoneOffsetMinutes: int = Field(default=-180, ge=-840, le=840)
+
+
+class PersonalReminderDelete(BaseModel):
+    reminderId: int = Field(gt=0)
+
+
+class PersonalWeatherSave(BaseModel):
+    city: str = Field(min_length=1, max_length=120)
+    timezoneOffsetMinutes: int = Field(default=-180, ge=-840, le=840)
+    dailyEnabled: bool = False
+    dailyTime: str = Field(default="08:00", pattern=r"^\d{2}:\d{2}$")
+    tomorrowEnabled: bool = False
+    tomorrowTime: str = Field(default="21:00", pattern=r"^\d{2}:\d{2}$")
+
+
 class ShopPurchase(BaseModel):
     item_key: str = Field(min_length=1, max_length=64)
 
@@ -3129,6 +3148,117 @@ async def miniapp_avatar(user_id: int, sig: str = "") -> FileResponse:
     if not path or not os.path.exists(path):
         raise HTTPException(404, "Avatar not found")
     return FileResponse(path, media_type="image/jpeg", filename=f"user_{user_id}.jpg")
+
+
+def _personal_center_state(db: Database, user_id: int) -> dict[str, Any]:
+    reminders = db.list_personal_reminders(user_id)
+    weather = db.get_personal_weather_settings(user_id)
+    return {
+        "reminders": [
+            {
+                "id": item.id,
+                "text": item.text,
+                "remindAt": item.remind_at,
+                "status": item.status,
+                "error": item.last_error or "",
+            }
+            for item in reminders
+        ],
+        "weather": {
+            "city": weather.city,
+            "dailyEnabled": bool(weather.daily_enabled),
+            "dailyTime": f"{weather.daily_hour:02d}:{weather.daily_minute:02d}",
+            "tomorrowEnabled": bool(weather.tomorrow_enabled),
+            "tomorrowTime": f"{weather.tomorrow_hour:02d}:{weather.tomorrow_minute:02d}",
+            "timezoneOffsetMinutes": weather.timezone_offset_minutes,
+        },
+    }
+
+
+@router.get("/miniapp/reminders")
+def miniapp_reminders(
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        return _personal_center_state(db, user["id"])
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/reminders/create")
+def miniapp_reminder_create(
+    payload: PersonalReminderCreate,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    try:
+        local_remind_at = datetime.fromisoformat(payload.remindAt.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(400, "Неверные дата или время напоминания.") from exc
+    if local_remind_at.tzinfo is None:
+        remind_at = (local_remind_at + timedelta(minutes=payload.timezoneOffsetMinutes)).replace(tzinfo=timezone.utc)
+    else:
+        remind_at = local_remind_at.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    if remind_at < now + timedelta(seconds=30):
+        raise HTTPException(400, "Выбери время хотя бы на минуту вперёд.")
+    if remind_at > now + timedelta(days=366):
+        raise HTTPException(400, "Напоминание можно поставить максимум на год вперёд.")
+    db = _db()
+    try:
+        if len(db.list_personal_reminders(user["id"], 100)) >= 50:
+            raise HTTPException(400, "Одновременно можно хранить не больше 50 напоминаний.")
+        db.create_personal_reminder(
+            user["id"], payload.text, remind_at.isoformat(timespec="seconds")
+        )
+        return {"ok": True, "message": "Напоминание сохранено.", **_personal_center_state(db, user["id"])}
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/reminders/delete")
+def miniapp_reminder_delete(
+    payload: PersonalReminderDelete,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        deleted = db.delete_personal_reminder(user["id"], payload.reminderId)
+        if not deleted:
+            raise HTTPException(404, "Напоминание уже выполнено или удалено.")
+        return {"ok": True, "message": "Напоминание удалено.", **_personal_center_state(db, user["id"])}
+    finally:
+        db.close()
+
+
+def _parse_clock(value: str) -> tuple[int, int]:
+    hour, minute = (int(part) for part in value.split(":", 1))
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise HTTPException(400, "Неверное время рассылки.")
+    return hour, minute
+
+
+@router.post("/miniapp/reminders/weather")
+def miniapp_personal_weather_save(
+    payload: PersonalWeatherSave,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    daily_hour, daily_minute = _parse_clock(payload.dailyTime)
+    tomorrow_hour, tomorrow_minute = _parse_clock(payload.tomorrowTime)
+    db = _db()
+    try:
+        db.set_personal_weather_settings(
+            user["id"], payload.city, payload.timezoneOffsetMinutes,
+            payload.dailyEnabled, daily_hour, daily_minute,
+            payload.tomorrowEnabled, tomorrow_hour, tomorrow_minute,
+        )
+        return {"ok": True, "message": "Личная погода настроена.", **_personal_center_state(db, user["id"])}
+    finally:
+        db.close()
 
 
 @router.get("/miniapp/weather")

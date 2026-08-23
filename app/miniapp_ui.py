@@ -327,7 +327,8 @@ MINI_APP_HTML = r"""<!doctype html>
     .utility-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
     .utility-actions .btn { min-height: 46px; margin: 0; }
     .mini-form { display: grid; gap: 8px; margin-top: 12px; }
-    .mini-form input {
+    .mini-form input,
+    .mini-form textarea {
       width: 100%;
       min-height: 44px;
       padding: 10px 12px;
@@ -337,6 +338,31 @@ MINI_APP_HTML = r"""<!doctype html>
       color: var(--text);
       font: inherit;
     }
+    .mini-form textarea { min-height: 88px; resize: vertical; }
+    .reminder-list { display: grid; gap: 8px; margin-top: 12px; }
+    .reminder-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: color-mix(in srgb, var(--panel) 88%, var(--accent) 5%);
+    }
+    .reminder-item p { margin: 0 0 5px; overflow-wrap: anywhere; }
+    .reminder-item .btn { width: auto; min-height: 38px; margin: 0; padding: 8px 12px; }
+    .reminder-item.failed { border-color: #c96969; }
+    .personal-weather-toggle {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) 110px;
+      gap: 9px;
+      align-items: center;
+      min-height: 48px;
+      padding: 8px 0;
+    }
+    .personal-weather-toggle input[type="checkbox"] { width: 24px; min-height: 24px; accent-color: var(--accent); }
+    .personal-weather-toggle input[type="time"] { min-width: 0; }
     .mini-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .mini-row .btn { min-height: 44px; margin: 0; }
     .profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
@@ -1458,6 +1484,9 @@ MINI_APP_HTML = r"""<!doctype html>
     } else if (view === "weather") {
       screenTitle.textContent = "🌦️ Погода";
       nameNode.textContent = "Город и текущая сводка";
+    } else if (view === "reminders") {
+      screenTitle.textContent = "🔔 Напоминания";
+      nameNode.textContent = "Личный планировщик";
     } else if (view === "radio") {
       screenTitle.textContent = "📻 Радио";
       nameNode.textContent = "Поиск станций и избранное";
@@ -1486,6 +1515,7 @@ MINI_APP_HTML = r"""<!doctype html>
     if (target === "shop") return showShop(shopCategory);
     if (target === "bag") return showBag();
     if (target === "weather") return showWeather();
+    if (target === "reminders") return showReminders();
     if (target === "radio") return showRadio();
     if (target === "mineAdmin") return showMineAdmin();
     return renderMine();
@@ -1631,6 +1661,7 @@ MINI_APP_HTML = r"""<!doctype html>
     if (normalized === "bag" || normalized.startsWith("bag_")) return "bag";
     if (normalized === "profile" || normalized.startsWith("profile_")) return "profile";
     if (normalized === "weather" || normalized.startsWith("weather_")) return "weather";
+    if (normalized === "reminders" || normalized.startsWith("reminders_")) return "reminders";
     if (normalized === "radio" || normalized.startsWith("radio_")) return "radio";
     if (normalized === "mine" || normalized.startsWith("mine_")) return "mine";
     return normalized;
@@ -1671,7 +1702,7 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   function readStartOwner() {
-    const match = readRawStartParam().match(/^(?:mine|shop|bag|profile|weather|radio)_(\d+)$/);
+    const match = readRawStartParam().match(/^(?:mine|shop|bag|profile|weather|radio|reminders)_(\d+)$/);
     return match ? Number(match[1]) : null;
   }
 
@@ -1702,6 +1733,7 @@ MINI_APP_HTML = r"""<!doctype html>
     return `<div class="utility-actions">
       <button class="btn secondary" onclick="showWeather()">Погода</button>
       <button class="btn secondary" onclick="showRadio()">Радио</button>
+      <button class="btn secondary" style="grid-column:1/-1" onclick="showReminders()">🔔 Напоминания</button>
     </div>`;
   }
 
@@ -1852,6 +1884,132 @@ MINI_APP_HTML = r"""<!doctype html>
       renderWeather(data);
     } catch (error) {
       renderWeather(null, `Не удалось загрузить погоду: ${error.message || error}`);
+    }
+  }
+
+  function localDateTimeInputValue(date) {
+    const shifted = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+    return shifted.toISOString().slice(0, 16);
+  }
+
+  function renderReminders(data, message = "") {
+    setScreenHeader("reminders");
+    const reminders = data.reminders || [];
+    const weather = data.weather || {};
+    const defaultTime = localDateTimeInputValue(new Date(Date.now() + 60 * 60 * 1000));
+    const minimumTime = localDateTimeInputValue(new Date(Date.now() + 60 * 1000));
+    const rows = reminders.map(item => {
+      const failed = item.status === "failed";
+      const status = failed ? (item.error || "Не удалось доставить.") : new Date(item.remindAt).toLocaleString();
+      return `<div class="reminder-item ${failed ? "failed" : ""}">
+        <div><p><b>${escapeHtml(item.text)}</b></p><div class="muted">${escapeHtml(status)}</div></div>
+        <button class="btn danger" onclick="deleteReminder(${Number(item.id)})">Удалить</button>
+      </div>`;
+    }).join("") || `<div class="muted">Активных напоминаний пока нет.</div>`;
+    content.innerHTML = `
+      ${message ? `<section class="panel notice">${escapeHtml(message)}</section>` : ""}
+      <section class="panel">
+        <h2>Новое напоминание</h2>
+        <p class="muted">Бот пришлёт сообщение лично. Для доставки сначала нужно нажать /start в диалоге с ботом.</p>
+        <div class="mini-form">
+          <textarea id="reminderText" maxlength="500" placeholder="О чём напомнить?"></textarea>
+          <input id="reminderAt" type="datetime-local" min="${minimumTime}" value="${defaultTime}">
+          <button class="btn" onclick="createReminder()">🔔 Сохранить напоминание</button>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="section-title"><h2>Мои напоминания</h2><span class="counter">${reminders.length}/50</span></div>
+        <div class="reminder-list">${rows}</div>
+      </section>
+      <section class="panel">
+        <h2>Личная погода</h2>
+        <p class="muted">Прогноз будет приходить в личный чат по времени твоего устройства.</p>
+        <div class="mini-form">
+          <input id="personalWeatherCity" maxlength="120" placeholder="Город" value="${escapeHtml(weather.city || "Кривой Рог")}">
+          <label class="personal-weather-toggle">
+            <input id="personalWeatherDailyEnabled" type="checkbox" ${weather.dailyEnabled ? "checked" : ""}>
+            <span>Погода сегодня</span>
+            <input id="personalWeatherDailyTime" type="time" value="${escapeHtml(weather.dailyTime || "08:00")}">
+          </label>
+          <label class="personal-weather-toggle">
+            <input id="personalWeatherTomorrowEnabled" type="checkbox" ${weather.tomorrowEnabled ? "checked" : ""}>
+            <span>На завтра</span>
+            <input id="personalWeatherTomorrowTime" type="time" value="${escapeHtml(weather.tomorrowTime || "21:00")}">
+          </label>
+          <button class="btn" onclick="savePersonalWeather()">Сохранить расписание</button>
+          <div class="mini-row">
+            <button class="btn secondary" onclick="showWeather()">Погода сейчас</button>
+            <button class="btn secondary" onclick="renderMine()">Назад</button>
+          </div>
+        </div>
+      </section>`;
+    scrollToTop();
+  }
+
+  async function showReminders() {
+    setScreenHeader("reminders");
+    content.innerHTML = `<section class="panel muted">Загружаю напоминания...</section>`;
+    try {
+      renderReminders(await api("/miniapp/reminders"));
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function createReminder() {
+    if (busy) return;
+    const textValue = document.getElementById("reminderText").value.trim();
+    const remindAt = document.getElementById("reminderAt").value;
+    if (!textValue || !remindAt) return alert("Заполни текст, дату и время.");
+    busy = true;
+    try {
+      const result = await api("/miniapp/reminders/create", {
+        method: "POST",
+        body: JSON.stringify({ text: textValue, remindAt, timezoneOffsetMinutes: new Date().getTimezoneOffset() })
+      });
+      renderReminders(result, result.message);
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function deleteReminder(reminderId) {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/reminders/delete", {
+        method: "POST", body: JSON.stringify({ reminderId })
+      });
+      renderReminders(result, result.message);
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function savePersonalWeather() {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/reminders/weather", {
+        method: "POST",
+        body: JSON.stringify({
+          city: document.getElementById("personalWeatherCity").value.trim(),
+          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+          dailyEnabled: document.getElementById("personalWeatherDailyEnabled").checked,
+          dailyTime: document.getElementById("personalWeatherDailyTime").value,
+          tomorrowEnabled: document.getElementById("personalWeatherTomorrowEnabled").checked,
+          tomorrowTime: document.getElementById("personalWeatherTomorrowTime").value
+        })
+      });
+      renderReminders(result, result.message);
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      busy = false;
     }
   }
 
@@ -3163,7 +3321,7 @@ MINI_APP_HTML = r"""<!doctype html>
   async function load() {
     const initialView = readStartParam();
     const intendedOwner = readStartOwner();
-    setScreenHeader(["shop", "bag", "profile", "weather", "radio"].includes(initialView) ? initialView : "mine");
+    setScreenHeader(["shop", "bag", "profile", "weather", "radio", "reminders"].includes(initialView) ? initialView : "mine");
     try {
       state = await api("/miniapp/mine");
       if (intendedOwner && Number(state.userId) !== intendedOwner) {
@@ -3175,6 +3333,7 @@ MINI_APP_HTML = r"""<!doctype html>
       else if (initialView === "bag") await showBag();
       else if (initialView === "profile") await showProfile();
       else if (initialView === "weather") await showWeather();
+      else if (initialView === "reminders") await showReminders();
       else if (initialView === "radio") showRadio();
       else renderMine();
     } catch (error) {
