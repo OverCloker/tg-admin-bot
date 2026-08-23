@@ -3127,6 +3127,10 @@ def api_audit_action(method: str, path: str) -> str:
         return "Супер-игра 9×9 начата"
     if path == "/miniapp/super-game/pick":
         return "Супер-игра 9×9 завершена"
+    if path == "/miniapp/minesweeper/start":
+        return "Сапёр 9×9 начат"
+    if path == "/miniapp/minesweeper/exit":
+        return "Сапёр 9×9 завершён"
     if path == "/miniapp/shop/buy":
         return "Покупка в Mini App"
     if "/triggers" in path:
@@ -3199,6 +3203,7 @@ def should_skip_api_audit(path: str) -> bool:
         "/miniapp/mine/interactive/cell",
         "/miniapp/mine/interactive/tool",
         "/miniapp/mine/interactive/event",
+        "/miniapp/minesweeper/pick",
     }
 
 

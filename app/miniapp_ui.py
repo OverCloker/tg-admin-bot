@@ -855,6 +855,39 @@ MINI_APP_HTML = r"""<!doctype html>
     .super-cell { border-radius: 5px; font-size: 17px; }
     .super-cell .cat { font-size: clamp(15px, 5vw, 23px); }
     .super-cell .hammer { font-size: 22px; }
+    .minesweeper-grid {
+      display: grid;
+      grid-template-columns: repeat(9, minmax(0, 1fr));
+      gap: 4px;
+      margin-top: 12px;
+      touch-action: manipulation;
+    }
+    .minesweeper-cell {
+      display: grid;
+      place-items: center;
+      min-width: 0;
+      aspect-ratio: 1;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 75%, white 12%), var(--panel));
+      box-shadow: inset 0 1px 1px #ffffff28, 0 2px 5px #02060b66;
+      color: var(--text);
+      font-size: clamp(12px, 4.2vw, 19px);
+      font-weight: 900;
+    }
+    .minesweeper-cell:not(:disabled):active { transform: scale(.9); }
+    .minesweeper-cell.revealed {
+      background: color-mix(in srgb, var(--bg) 64%, var(--panel));
+      box-shadow: inset 0 1px 4px #0005;
+    }
+    .minesweeper-cell.event { box-shadow: inset 0 0 0 2px #ffd45c, 0 0 10px #ffd45c55; }
+    .mine-number-0 { color: var(--muted); }
+    .mine-number-1 { color: #62a8ff; }
+    .mine-number-2 { color: #55d98b; }
+    .mine-number-3 { color: #ff7c76; }
+    .mine-number-4, .mine-number-5, .mine-number-6, .mine-number-7, .mine-number-8 { color: #d39cff; }
+    .minesweeper-legend { display: flex; flex-wrap: wrap; gap: 7px 14px; margin-top: 10px; }
     .game-result {
       min-height: 1.35em;
       margin-top: 10px;
@@ -2868,6 +2901,7 @@ MINI_APP_HTML = r"""<!doctype html>
       ${utilityActionsHtml()}
       ${shiftContractHtml()}
       ${interactiveMineHtml(disabled, cooldown)}
+      ${minesweeperHtml()}
       ${goldTicketHtml()}
       ${superGameHtml()}
       <section class="panel">Уровень <b>${state.level}</b> · XP <b>${state.xp}</b> · серия <b>${state.streak}</b></section>
@@ -2946,6 +2980,38 @@ MINI_APP_HTML = r"""<!doctype html>
       <div class="section-title"><h2>🎟️ Золотой билет</h2><span class="counter" id="goldAttempts">${game.attemptsLeft} попытки</span></div>
       <div class="ticket-grid">${cells}</div>
       <div class="game-result" id="goldResult" aria-live="polite"></div>
+    </section>`;
+  }
+
+  function minesweeperHtml() {
+    const game = state.minesweeper;
+    if (!game) {
+      const canStart = Number(state.luck || 0) >= 10;
+      return `<section class="panel">
+        <div class="section-title"><h2>💣 Сапёр 9×9</h2><span class="counter">удача ${state.luck}/100</span></div>
+        <p class="muted">Чем меньше удачи на старте, тем больше мин: примерно от 10 до 50. Безопасные клетки дают котоины и могут открыть случайное событие. Мина завершает раунд и отнимает 10 удачи.</p>
+        <button class="btn" ${canStart ? "" : "disabled"} onclick="startMinesweeper()">Начать игру</button>
+      </section>`;
+    }
+    const opened = game.opened || {};
+    const cells = Array.from({ length: 81 }, (_, index) => {
+      const result = opened[String(index)];
+      if (!result) {
+        return `<button class="minesweeper-cell" aria-label="Закрытая клетка ${index + 1}" onclick="pickMinesweeper(${index}, this)">▦</button>`;
+      }
+      const adjacent = Number(result.adjacent || 0);
+      const hasEvent = Boolean(result.event);
+      const label = adjacent || "·";
+      return `<button class="minesweeper-cell revealed mine-number-${adjacent} ${hasEvent ? "event" : ""}" disabled
+        aria-label="Открытая клетка, мин рядом: ${adjacent}">${label}${hasEvent ? '<small>★</small>' : ""}</button>`;
+    }).join("");
+    return `<section class="panel" id="minesweeperPanel">
+      <div class="section-title"><h2>💣 Сапёр</h2><span class="counter">${game.safeOpened}/${game.safeTotal}</span></div>
+      <p class="muted">Мин на поле: <b>${game.mineCount}</b> · добыто за раунд: <b>${game.earnedCoins}</b> 🪙 · удача на старте: <b>${game.luckAtStart}</b>/100</p>
+      <div class="minesweeper-grid">${cells}</div>
+      <div class="minesweeper-legend muted"><span>Число — мин рядом</span><span>★ — событие</span></div>
+      <div class="game-result" id="minesweeperResult" aria-live="polite"></div>
+      <button class="btn danger" onclick="exitMinesweeper()">Завершить раунд</button>
     </section>`;
   }
 
@@ -3114,6 +3180,55 @@ MINI_APP_HTML = r"""<!doctype html>
     busy = true;
     try {
       const result = await api("/miniapp/mine/interactive/exit", { method: "POST" });
+      state = result.state;
+      renderMine(false);
+      showNotice(result.message);
+    } catch (error) {
+      showNotice(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function startMinesweeper() {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/minesweeper/start", { method: "POST" });
+      state = result.state;
+      renderMine(false);
+      showNotice(result.message || "Поле сапёра готово.");
+    } catch (error) {
+      showNotice(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function pickMinesweeper(cell, button) {
+    if (busy) return;
+    busy = true;
+    if (button) button.disabled = true;
+    try {
+      const result = await api("/miniapp/minesweeper/pick", {
+        method: "POST", body: JSON.stringify({ cell })
+      });
+      state = result.state;
+      renderMine(false);
+      showNotice(result.message, Boolean(result.event));
+    } catch (error) {
+      if (button) button.disabled = false;
+      showNotice(error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function exitMinesweeper() {
+    if (busy || !confirm("Завершить текущий раунд сапёра? Уже полученные котоины сохранятся.")) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/minesweeper/exit", { method: "POST" });
       state = result.state;
       renderMine(false);
       showNotice(result.message);

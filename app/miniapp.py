@@ -69,6 +69,10 @@ class SuperTicketPick(BaseModel):
     cell: int = Field(ge=0, le=80)
 
 
+class MinesweeperPick(BaseModel):
+    cell: int = Field(ge=0, le=80)
+
+
 class ShopPurchase(BaseModel):
     item_key: str = Field(min_length=1, max_length=64)
 
@@ -553,6 +557,52 @@ def _display_name(db: Database, game: Any, user_id: int, username: str | None, f
     tag = db.get_dig_player_tag(user_id)
     tag_suffix = f" «{tag}»" if tag else ""
     return f"{name}{tag_suffix}{game.dig_title_suffix(items)}"
+
+
+MINESWEEPER_SIZE = 9
+MINESWEEPER_CELLS = MINESWEEPER_SIZE * MINESWEEPER_SIZE
+MINESWEEPER_MINE_LUCK_COST = 10
+
+
+def minesweeper_mine_count(luck: int, random_offset: int | None = None) -> int:
+    """Scale a slightly random mine count from 10/100 luck to 50/10 luck."""
+    safe_luck = max(10, min(100, int(luck)))
+    if safe_luck == 100:
+        return 10
+    if safe_luck == 10:
+        return 50
+    target = round(10 + (100 - safe_luck) * 40 / 90)
+    offset = secrets.randbelow(5) - 2 if random_offset is None else max(-2, min(2, int(random_offset)))
+    return max(10, min(50, target + offset))
+
+
+def minesweeper_adjacent_mines(cell: int, mines: set[int]) -> int:
+    row, column = divmod(int(cell), MINESWEEPER_SIZE)
+    return sum(
+        1
+        for row_offset in (-1, 0, 1)
+        for column_offset in (-1, 0, 1)
+        if (row_offset or column_offset)
+        and 0 <= row + row_offset < MINESWEEPER_SIZE
+        and 0 <= column + column_offset < MINESWEEPER_SIZE
+        and (row + row_offset) * MINESWEEPER_SIZE + column + column_offset in mines
+    )
+
+
+def _minesweeper_public(db: Database, user_id: int) -> dict[str, Any] | None:
+    game = db.get_minesweeper_game(user_id)
+    if not game:
+        return None
+    opened = json.loads(game["opened_json"] or "{}")
+    return {
+        "active": True,
+        "mineCount": int(game["mine_count"]),
+        "luckAtStart": int(game["luck_at_start"]),
+        "earnedCoins": int(game["earned_coins"]),
+        "opened": opened,
+        "safeOpened": len(opened),
+        "safeTotal": MINESWEEPER_CELLS - int(game["mine_count"]),
+    }
 
 
 MINIAPP_MODERATOR_ROLE_TITLES = {
@@ -1469,6 +1519,7 @@ def _state(db: Database, user_id: int) -> dict[str, Any]:
             "ticketGame": _ticket_public(db, user_id),
             "superPasses": db.get_dig_item_quantity(0, user_id, "super_game_pass"),
             "superGame": _super_ticket_public(db, user_id),
+            "minesweeper": _minesweeper_public(db, user_id),
             "superRewards": {
                 "mute30": db.get_dig_item_quantity(0, user_id, "super_mute30"),
                 "tag": db.get_dig_item_quantity(0, user_id, "super_tag"),
@@ -3479,6 +3530,167 @@ def miniapp_interactive_cell(
             if replacement_stage:
                 suffix += " Этот ряд исчерпан, кот нашёл соседний ход."
             return {"ok": True, "message": f"Слой не поддался: {cell_name}. {suffix}", "state": _state(db, user["id"])}
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/minesweeper/start")
+def minesweeper_start(
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    with DIG_LOCK:
+        db = _db()
+        try:
+            from . import bot as game
+            _ensure_mine_not_blocked(db, user["id"])
+            active = _minesweeper_public(db, user["id"])
+            if active:
+                return {"ok": True, "game": active, "state": _state(db, user["id"])}
+            player = db.get_dig_player(0, user["id"])
+            if not player:
+                raise HTTPException(400, "Сначала зарегистрируйся в шахте.")
+            now = datetime.now(timezone.utc)
+            luck = _refreshed_luck(db, game, user["id"], player.luck, player.last_luck_at, now)
+            if luck < MINESWEEPER_MINE_LUCK_COST:
+                raise HTTPException(400, "Для начала нужно хотя бы 10 удачи.")
+            mine_count = minesweeper_mine_count(luck)
+            mines = sorted(secrets.SystemRandom().sample(range(MINESWEEPER_CELLS), mine_count))
+            created_at = now.isoformat(timespec="seconds")
+            db.set_dig_luck(0, user["id"], luck, created_at)
+            db.save_minesweeper_game(
+                user["id"], json.dumps(mines), "{}", mine_count, luck, 0, created_at
+            )
+            return {
+                "ok": True,
+                "message": f"Поле готово: {mine_count} мин. Безопасный выбор приносит котоины.",
+                "game": _minesweeper_public(db, user["id"]),
+                "state": _state(db, user["id"]),
+            }
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/minesweeper/pick")
+def minesweeper_pick(
+    payload: MinesweeperPick,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    with DIG_LOCK:
+        db = _db()
+        try:
+            from . import bot as game
+            _ensure_mine_not_blocked(db, user["id"])
+            session = db.get_minesweeper_game(user["id"])
+            if not session:
+                raise HTTPException(400, "Сначала начни игру в сапёра.")
+            opened = json.loads(session["opened_json"] or "{}")
+            cell_key = str(payload.cell)
+            if cell_key in opened:
+                raise HTTPException(400, "Эта клетка уже открыта.")
+            mines = {int(cell) for cell in json.loads(session["mines_json"] or "[]")}
+            if payload.cell in mines:
+                player = db.get_dig_player(0, user["id"])
+                if not player:
+                    raise HTTPException(400, "Игрок шахты не найден.")
+                now = datetime.now(timezone.utc)
+                current_luck = _refreshed_luck(
+                    db, game, user["id"], player.luck, player.last_luck_at, now
+                )
+                new_luck = max(0, current_luck - MINESWEEPER_MINE_LUCK_COST)
+                db.set_dig_luck(0, user["id"], new_luck, now.isoformat(timespec="seconds"))
+                db.clear_minesweeper_game(user["id"])
+                return {
+                    "ok": True,
+                    "mine": True,
+                    "finished": True,
+                    "cell": payload.cell,
+                    "mines": sorted(mines),
+                    "luckLost": current_luck - new_luck,
+                    "message": f"💥 Мина! Потеряно {current_luck - new_luck} удачи. Раунд завершён.",
+                    "state": _state(db, user["id"]),
+                }
+
+            adjacent = minesweeper_adjacent_mines(payload.cell, mines)
+            reward = 2 + secrets.randbelow(4) + min(3, adjacent)
+            event = None
+            event_roll = secrets.randbelow(100)
+            if event_roll < 4:
+                reward *= 3
+                event = {"key": "ore_vein", "text": "⛏️ Богатая жила: награда утроена!"}
+            elif event_roll < 8:
+                reward += 5
+                event = {"key": "lost_cat", "text": "🐈 Потерявшийся кот привёл к тайнику: +5 котоинов."}
+            elif event_roll < 11:
+                reward += 10
+                event = {"key": "old_purse", "text": "👛 Под землёй найден старый кошелёк: +10 котоинов."}
+            elif event_roll < 13:
+                player = db.get_dig_player(0, user["id"])
+                if player:
+                    now = datetime.now(timezone.utc)
+                    current_luck = _refreshed_luck(
+                        db, game, user["id"], player.luck, player.last_luck_at, now
+                    )
+                    restored = min(100, current_luck + 2) - current_luck
+                    if restored:
+                        db.set_dig_luck(0, user["id"], current_luck + restored, now.isoformat(timespec="seconds"))
+                    event = {"key": "lucky_find", "text": f"🍀 Счастливая находка: +{restored} удачи."}
+
+            opened[cell_key] = {"adjacent": adjacent, "reward": reward, "event": event}
+            earned = int(session["earned_coins"]) + reward
+            db.add_dig_coins(0, user["id"], reward)
+            safe_total = MINESWEEPER_CELLS - int(session["mine_count"])
+            finished = len(opened) >= safe_total
+            completion_bonus = 0
+            if finished:
+                completion_bonus = 50
+                db.add_dig_coins(0, user["id"], completion_bonus)
+                db.clear_minesweeper_game(user["id"])
+            else:
+                db.save_minesweeper_game(
+                    user["id"], session["mines_json"], json.dumps(opened, ensure_ascii=False),
+                    int(session["mine_count"]), int(session["luck_at_start"]), earned,
+                    session["created_at"],
+                )
+            event_text = f" {event['text']}" if event else ""
+            message = f"Безопасно: рядом мин — {adjacent}. +{reward} котоинов.{event_text}"
+            if completion_bonus:
+                message += f" Поле очищено! Бонус +{completion_bonus} котоинов."
+            return {
+                "ok": True,
+                "mine": False,
+                "finished": finished,
+                "cell": payload.cell,
+                "adjacent": adjacent,
+                "coins": reward,
+                "event": event,
+                "completionBonus": completion_bonus,
+                "message": message,
+                "state": _state(db, user["id"]),
+            }
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/minesweeper/exit")
+def minesweeper_exit(
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    with DIG_LOCK:
+        db = _db()
+        try:
+            session = db.get_minesweeper_game(user["id"])
+            if not session:
+                raise HTTPException(400, "Активной игры уже нет.")
+            earned = int(session["earned_coins"])
+            db.clear_minesweeper_game(user["id"])
+            return {
+                "ok": True,
+                "message": f"Раунд завершён. За игру получено {earned} котоинов.",
+                "state": _state(db, user["id"]),
+            }
         finally:
             db.close()
 

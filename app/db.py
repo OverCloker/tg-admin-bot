@@ -1169,6 +1169,17 @@ class Database:
                 updated_at text not null
             );
 
+            create table if not exists minesweeper_games (
+                user_id integer primary key,
+                mines_json text not null,
+                opened_json text not null default '{}',
+                mine_count integer not null,
+                luck_at_start integer not null,
+                earned_coins integer not null default 0,
+                created_at text not null,
+                updated_at text not null
+            );
+
             create table if not exists dig_contracts (
                 user_id integer not null,
                 contract_date text not null,
@@ -1682,6 +1693,51 @@ class Database:
 
     def clear_super_ticket_game(self, user_id: int) -> None:
         self._conn.execute("delete from super_ticket_games where user_id = ?", (int(user_id),))
+        self._conn.commit()
+
+    def get_minesweeper_game(self, user_id: int) -> dict | None:
+        row = self._conn.execute(
+            "select user_id, mines_json, opened_json, mine_count, luck_at_start, "
+            "earned_coins, created_at, updated_at from minesweeper_games where user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def save_minesweeper_game(
+        self,
+        user_id: int,
+        mines_json: str,
+        opened_json: str,
+        mine_count: int,
+        luck_at_start: int,
+        earned_coins: int,
+        created_at: str,
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into minesweeper_games (
+                user_id, mines_json, opened_json, mine_count, luck_at_start,
+                earned_coins, created_at, updated_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(user_id) do update set
+                mines_json = excluded.mines_json,
+                opened_json = excluded.opened_json,
+                mine_count = excluded.mine_count,
+                luck_at_start = excluded.luck_at_start,
+                earned_coins = excluded.earned_coins,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(user_id), mines_json, opened_json, max(0, int(mine_count)),
+                max(0, min(100, int(luck_at_start))), max(0, int(earned_coins)),
+                created_at, utc_now(),
+            ),
+        )
+        self._conn.commit()
+
+    def clear_minesweeper_game(self, user_id: int) -> None:
+        self._conn.execute("delete from minesweeper_games where user_id = ?", (int(user_id),))
         self._conn.commit()
 
     def list_chats(self) -> list[RegisteredChat]:
@@ -5254,6 +5310,7 @@ class Database:
                 "dig_weekly_depth",
                 "gold_ticket_games",
                 "super_ticket_games",
+                "minesweeper_games",
                 "dig_contracts",
             ):
                 self._conn.execute(f"delete from {table} where user_id = ?", (uid,))
