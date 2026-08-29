@@ -3322,7 +3322,7 @@ MINI_APP_HTML = r"""<!doctype html>
       const canStart = Number(state.luck || 0) >= 10;
       return `<section class="panel minesweeper-shell">
         <div class="section-title"><h2>💣 Сапёр 9×9</h2><span class="counter">удача ${state.luck}/100</span></div>
-        <p class="muted">Чем меньше удачи на старте, тем больше мин: примерно от 10 до 50. Безопасные клетки дают котоины и могут открыть случайное событие. Мина завершает раунд и отнимает 10 удачи.</p>
+        <p class="muted">Чем меньше удачи на старте, тем больше мин: примерно от 10 до 50. В безопасных клетках лежат котоины, продаваемая добыча и редкие золотые билеты. Мина завершает раунд и отнимает 10 удачи.</p>
         <button class="btn" ${canStart ? "" : "disabled"} onclick="startMinesweeper()">Начать игру</button>
       </section>`;
     }
@@ -3334,15 +3334,17 @@ MINI_APP_HTML = r"""<!doctype html>
       }
       const adjacent = Number(result.adjacent || 0);
       const hasEvent = Boolean(result.event);
+      const finding = result.find || null;
       const label = adjacent || "·";
-      return `<button class="minesweeper-cell revealed mine-number-${adjacent} ${hasEvent ? "event" : ""}" disabled
-        aria-label="Открытая клетка, мин рядом: ${adjacent}">${label}${hasEvent ? '<small>★</small>' : ""}</button>`;
+      const marker = finding ? escapeHtml(finding.emoji || "🎁") : (hasEvent ? "★" : "");
+      return `<button class="minesweeper-cell revealed mine-number-${adjacent} ${(hasEvent || finding) ? "event" : ""}" disabled
+        aria-label="Открытая клетка, мин рядом: ${adjacent}${finding ? `, находка: ${escapeHtml(finding.title || "награда")}` : ""}">${label}${marker ? `<small>${marker}</small>` : ""}</button>`;
     }).join("");
     return `<section class="panel minesweeper-shell" id="minesweeperPanel">
       <div class="section-title"><span class="counter" title="Мин на поле">${String(game.mineCount).padStart(3, "0")}</span><span class="minesweeper-face" aria-hidden="true">🙂</span><span class="counter" title="Открыто клеток">${String(game.safeOpened).padStart(3, "0")}</span></div>
       <p class="muted">Мин на поле: <b>${game.mineCount}</b> · добыто за раунд: <b>${game.earnedCoins}</b> 🪙 · удача на старте: <b>${game.luckAtStart}</b>/100</p>
       <div class="minesweeper-grid">${cells}</div>
-      <div class="minesweeper-legend muted"><span>Число — мин рядом</span><span>★ — событие</span></div>
+      <div class="minesweeper-legend muted"><span>Число — мин рядом</span><span>★ — событие</span><span>🎁 — находка</span></div>
       <div class="game-result" id="minesweeperResult" aria-live="polite"></div>
       <button class="btn danger" onclick="exitMinesweeper()">Завершить раунд</button>
     </section>`;
@@ -3554,7 +3556,7 @@ MINI_APP_HTML = r"""<!doctype html>
         showMinesweeperLoss(result);
       } else {
         renderMine(false);
-        showNotice(result.message, Boolean(result.event));
+        showNotice(result.message, Boolean(result.event || result.find));
       }
     } catch (error) {
       if (button) button.disabled = false;

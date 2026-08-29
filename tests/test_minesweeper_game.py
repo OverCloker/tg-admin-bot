@@ -6,7 +6,12 @@ from fastapi import HTTPException
 from app import miniapp
 from app.admin_api import api_audit_action, should_skip_api_audit
 from app.db import Database
-from app.miniapp import MinesweeperPick, minesweeper_adjacent_mines, minesweeper_mine_count
+from app.miniapp import (
+    MinesweeperPick,
+    minesweeper_adjacent_mines,
+    minesweeper_cell_find,
+    minesweeper_mine_count,
+)
 from app.miniapp_ui import MINI_APP_HTML
 
 
@@ -24,6 +29,18 @@ def test_adjacent_mines_respect_edges_and_corners() -> None:
     assert minesweeper_adjacent_mines(0, mines) == 3
     assert minesweeper_adjacent_mines(11, mines) == 2
     assert minesweeper_adjacent_mines(79, mines) == 1
+
+
+def test_safe_cell_find_pool_has_resources_and_rare_ticket() -> None:
+    assert minesweeper_cell_find(0)["key"] == "golden_ticket"
+    assert minesweeper_cell_find(5)["key"] == "res_crystal"
+    assert minesweeper_cell_find(20)["key"] == "res_fossil"
+    assert minesweeper_cell_find(40)["key"] == "res_silver"
+    assert minesweeper_cell_find(70)["key"] == "res_glow_moss"
+    assert minesweeper_cell_find(100)["key"] == "res_iron"
+    assert minesweeper_cell_find(150, 1)["quantity"] == 2
+    assert minesweeper_cell_find(220, 1)["key"] == "res_stone"
+    assert minesweeper_cell_find(250) is None
 
 
 def test_minesweeper_session_persists(tmp_path) -> None:
@@ -78,11 +95,37 @@ def test_safe_pick_is_paid_once_and_mine_costs_luck(tmp_path, monkeypatch) -> No
         db.close()
 
 
+def test_safe_pick_can_grant_golden_ticket(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.register_dig_player(0, 11, "finder", "Искатель")
+    db.save_minesweeper_game(11, "[0]", "{}", 1, 100, 0, "2026-08-23T10:00:00+00:00")
+    db.close()
+
+    rolls = iter((3, 99, 0))
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _data: {"id": 11})
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp.secrets, "randbelow", lambda _limit: next(rolls))
+
+    result = miniapp.minesweeper_pick(MinesweeperPick(cell=1), x_telegram_init_data="test")
+
+    assert result["find"]["key"] == "golden_ticket"
+    assert "Золотой билет ×1" in result["message"]
+    db = Database(str(db_path))
+    try:
+        assert db.get_dig_item_quantity(0, 11, "golden_ticket") == 1
+    finally:
+        db.close()
+
+
 def test_minesweeper_ui_and_audit_are_compact() -> None:
     assert "Сапёр 9×9" in MINI_APP_HTML
     assert "minesweeper-grid" in MINI_APP_HTML
     assert "minesweeper-shell" in MINI_APP_HTML
     assert "minesweeper-face" in MINI_APP_HTML
+    assert "продаваемая добыча" in MINI_APP_HTML
+    assert "🎁 — находка" in MINI_APP_HTML
     assert "#0000ff" in MINI_APP_HTML
     assert "#008000" in MINI_APP_HTML
     assert "mine-tile-mark" in MINI_APP_HTML

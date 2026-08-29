@@ -608,6 +608,41 @@ def minesweeper_adjacent_mines(cell: int, mines: set[int]) -> int:
     )
 
 
+def minesweeper_cell_find(roll: int | None = None, quantity_roll: int | None = None) -> dict[str, Any] | None:
+    """Return an occasional sellable find for a safe Minesweeper cell."""
+    value = secrets.randbelow(1000) if roll is None else max(0, min(999, int(roll)))
+    if value < 5:
+        return {"key": "golden_ticket", "title": "Золотой билет", "emoji": "🎟️", "quantity": 1, "kind": "item"}
+    resource_key = None
+    quantity = 1
+    if value < 15:
+        resource_key = "res_crystal"
+    elif value < 30:
+        resource_key = "res_fossil"
+    elif value < 50:
+        resource_key = "res_silver"
+    elif value < 80:
+        resource_key = "res_glow_moss"
+    elif value < 125:
+        resource_key = "res_iron"
+    elif value < 185:
+        resource_key = "res_coal"
+        quantity += secrets.randbelow(2) if quantity_roll is None else max(0, min(1, int(quantity_roll)))
+    elif value < 250:
+        resource_key = "res_stone"
+        quantity += secrets.randbelow(2) if quantity_roll is None else max(0, min(1, int(quantity_roll)))
+    if resource_key is None:
+        return None
+    resource = MINE_RESOURCE_CATALOG[resource_key]
+    return {
+        "key": resource_key,
+        "title": str(resource["title"]),
+        "emoji": str(resource["emoji"]),
+        "quantity": quantity,
+        "kind": "resource",
+    }
+
+
 def _minesweeper_public(db: Database, user_id: int) -> dict[str, Any] | None:
     game = db.get_minesweeper_game(user_id)
     if not game:
@@ -3693,7 +3728,7 @@ def minesweeper_start(
             )
             return {
                 "ok": True,
-                "message": f"Поле готово: {mine_count} мин. Безопасный выбор приносит котоины.",
+                "message": f"Поле готово: {mine_count} мин. В безопасных клетках бывают котоины, руда и золотые билеты.",
                 "game": _minesweeper_public(db, user["id"]),
                 "state": _state(db, user["id"]),
             }
@@ -3767,7 +3802,11 @@ def minesweeper_pick(
                         db.set_dig_luck(0, user["id"], current_luck + restored, now.isoformat(timespec="seconds"))
                     event = {"key": "lucky_find", "text": f"🍀 Счастливая находка: +{restored} удачи."}
 
-            opened[cell_key] = {"adjacent": adjacent, "reward": reward, "event": event}
+            finding = minesweeper_cell_find()
+            if finding:
+                db.add_dig_item(0, user["id"], str(finding["key"]), int(finding["quantity"]))
+
+            opened[cell_key] = {"adjacent": adjacent, "reward": reward, "event": event, "find": finding}
             earned = int(session["earned_coins"]) + reward
             db.add_dig_coins(0, user["id"], reward)
             safe_total = MINESWEEPER_CELLS - int(session["mine_count"])
@@ -3784,7 +3823,12 @@ def minesweeper_pick(
                     session["created_at"],
                 )
             event_text = f" {event['text']}" if event else ""
-            message = f"Безопасно: рядом мин — {adjacent}. +{reward} котоинов.{event_text}"
+            find_text = ""
+            if finding:
+                find_text = (
+                    f" Находка: {finding['emoji']} {finding['title']} ×{finding['quantity']}."
+                )
+            message = f"Безопасно: рядом мин — {adjacent}. +{reward} котоинов.{find_text}{event_text}"
             if completion_bonus:
                 message += f" Поле очищено! Бонус +{completion_bonus} котоинов."
             return {
@@ -3795,6 +3839,7 @@ def minesweeper_pick(
                 "adjacent": adjacent,
                 "coins": reward,
                 "event": event,
+                "find": finding,
                 "completionBonus": completion_bonus,
                 "message": message,
                 "state": _state(db, user["id"]),
