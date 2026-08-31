@@ -132,7 +132,7 @@ class MainWindow(QMainWindow):
             show_item = QTreeWidgetItem([show.title, "", "", ""])
             self.tree.addTopLevelItem(show_item)
             for season in show.seasons:
-                season_item = QTreeWidgetItem(["", f"Сезон {season.season}", "", ", ".join(season.warnings)])
+                season_item = QTreeWidgetItem(["", f"Сезон {season.season_number}", "", ", ".join(season.warnings)])
                 show_item.addChild(season_item)
                 for media in season.files:
                     QTreeWidgetItem(season_item, ["", f"Серия {media.episode or '—'}", media.path.name, "найдено"])
