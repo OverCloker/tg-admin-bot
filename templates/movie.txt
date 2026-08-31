@@ -1,0 +1,10 @@
+{title} — {year}
+
+{ratings}
+
+Жанр: {genres}
+
+В ролях: {actors}
+
+{description}
+

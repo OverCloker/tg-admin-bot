@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import aiohttp
+
+from .base_transport import TelegramTransport
+
+
+class TelegramApiError(RuntimeError):
+    pass
+
+
+class BotApiTransport(TelegramTransport):
+    """Outgoing-only Bot API transport; it never calls getUpdates/webhooks."""
+
+    def __init__(self, token: str, timeout_seconds: int = 60):
+        self.token = token.strip()
+        self.timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+
+    @property
+    def base_url(self) -> str:
+        return f"https://api.telegram.org/bot{self.token}"
+
+    async def _request(self, method: str, data: dict | None = None, form: aiohttp.FormData | None = None):
+        if not self.token:
+            raise TelegramApiError("Токен Telegram не настроен.")
+        async with aiohttp.ClientSession(timeout=self.timeout) as session:
+            async with session.post(f"{self.base_url}/{method}", data=form or data) as response:
+                try:
+                    payload = await response.json(content_type=None)
+                except (ValueError, aiohttp.ClientError) as exc:
+                    raise TelegramApiError(f"Telegram вернул некорректный ответ (HTTP {response.status}).") from exc
+        if not payload.get("ok"):
+            raise TelegramApiError(str(payload.get("description") or f"Ошибка Telegram API: {method}"))
+        return payload.get("result")
+
+    async def test_connection(self) -> dict:
+        return await self._request("getMe", data={})
+
+    @staticmethod
+    def _chat_data(chat_id: str, thread_id: str) -> dict:
+        data = {"chat_id": str(chat_id).strip()}
+        if str(thread_id).strip():
+            data["message_thread_id"] = str(thread_id).strip()
+        return data
+
+    async def send_message(self, text: str, chat_id: str, thread_id: str = "") -> dict:
+        data = self._chat_data(chat_id, thread_id)
+        data["text"] = text
+        return await self._request("sendMessage", data=data)
+
+    async def send_photo(self, photo: str | Path, caption: str, chat_id: str, thread_id: str = "") -> dict:
+        path = Path(photo)
+        if path.is_file():
+            form = aiohttp.FormData()
+            for key, value in self._chat_data(chat_id, thread_id).items():
+                form.add_field(key, value)
+            form.add_field("photo", path.open("rb"), filename=path.name)
+            form.add_field("caption", caption)
+            return await self._request("sendPhoto", form=form)
+        data = self._chat_data(chat_id, thread_id)
+        data.update({"photo": str(photo), "caption": caption})
+        return await self._request("sendPhoto", data=data)
+
+    async def send_media_group(self, files: list[Path], caption: str, chat_id: str, thread_id: str = "") -> list[dict]:
+        if not files:
+            return []
+        if len(files) > 10:
+            raise TelegramApiError("В одной медиагруппе Telegram разрешено не более 10 файлов.")
+        form = aiohttp.FormData()
+        for key, value in self._chat_data(chat_id, thread_id).items():
+            form.add_field(key, value)
+        media = []
+        handles = []
+        try:
+            for index, path in enumerate(files):
+                handle = path.open("rb")
+                handles.append(handle)
+                attach_name = f"media{index}"
+                item = {"type": "video", "media": f"attach://{attach_name}"}
+                if index == 0 and caption:
+                    item["caption"] = caption
+                media.append(item)
+                form.add_field(attach_name, handle, filename=path.name, content_type="video/mp4")
+            form.add_field("media", json.dumps(media, ensure_ascii=False))
+            return await self._request("sendMediaGroup", form=form)
+        finally:
+            for handle in handles:
+                handle.close()
+

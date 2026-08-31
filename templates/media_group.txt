@@ -1,0 +1,4 @@
+{season_number} сезон
+Серии {episode_from}-{episode_to}
+Дубляж: {dub}
+

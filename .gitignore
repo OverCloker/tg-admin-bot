@@ -13,3 +13,6 @@ bot.db
 admin_access_keys.json
 logs/
 backups/
+# Local Telegram Media Publisher state
+media_publisher_data/
+*.publisher.sqlite3
