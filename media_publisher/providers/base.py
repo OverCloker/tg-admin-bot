@@ -16,6 +16,10 @@ class Metadata:
     imdb_votes: str = ""
     kinopoisk_rating: str = ""
     kinopoisk_votes: str = ""
+    country: str = ""
+    director: str = ""
+    age_rating: str = ""
+    source_url: str = ""
     source: str = ""
 
 
@@ -31,4 +35,3 @@ class NullMetadataProvider(MetadataProvider):
 
     async def search(self, title: str, season: int | None = None) -> list[Metadata]:
         return [Metadata(title=title, source=self.name)]
-

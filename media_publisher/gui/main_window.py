@@ -12,10 +12,17 @@ from PySide6.QtWidgets import (
 )
 
 from ..config.settings import PublisherSettings
+from ..database.repository import PublisherDatabase
 from ..media.grouper import group_media
 from ..media.scanner import scan_folder
+from ..providers.base import Metadata
+from ..providers.omdb_provider import OmdbProvider
+from ..providers.rezka_provider import RezkaProvider
+from ..providers.tmdb_provider import TmdbProvider
+from ..services.metadata_service import MetadataService
 from ..services.publication_service import PublicationService
 from ..telegram.bot_api_transport import BotApiTransport, TelegramApiError
+from .metadata_dialog import MetadataPreviewDialog
 
 
 PUBLISH_DESTINATIONS = (
@@ -35,6 +42,10 @@ PUBLISH_DESTINATIONS = (
 def default_settings_path() -> Path:
     location = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
     return Path(location) / "settings.json"
+
+
+def default_database_path() -> Path:
+    return default_settings_path().with_name("publisher.sqlite3")
 
 
 class ScanWorker(QThread):
@@ -57,13 +68,14 @@ class PublishWorker(QThread):
     completed = Signal(int)
     failed = Signal(str)
 
-    def __init__(self, token: str, chat_id: str, thread_id: str, target_type: str, target: object):
+    def __init__(self, token: str, chat_id: str, thread_id: str, target_type: str, target: object, metadata: Metadata):
         super().__init__()
         self.token = token
         self.chat_id = chat_id
         self.thread_id = thread_id
         self.target_type = target_type
         self.target = target
+        self.metadata = metadata
 
     def run(self) -> None:
         try:
@@ -75,12 +87,40 @@ class PublishWorker(QThread):
     async def _publish(self) -> list[dict]:
         service = PublicationService(BotApiTransport(self.token), self.chat_id, self.thread_id)
         if self.target_type == "media":
-            return await service.publish_media(self.target)
+            return await service.publish_media(self.target, metadata=self.metadata)
         if self.target_type == "season":
-            return await service.publish_season(self.target)
+            return await service.publish_season(self.target, metadata=self.metadata)
         if self.target_type == "show":
-            return await service.publish_show(self.target)
+            return await service.publish_show(self.target, metadata=self.metadata)
         raise ValueError("Неизвестный тип публикации.")
+
+
+class MetadataWorker(QThread):
+    completed = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, title: str, season: int | None, settings: PublisherSettings):
+        super().__init__()
+        self.title = title
+        self.season = season
+        self.settings = settings
+
+    def run(self) -> None:
+        database = None
+        try:
+            database = PublisherDatabase(default_database_path())
+            providers = [RezkaProvider(self.settings.rezka_domain)]
+            if self.settings.tmdb_api_key:
+                providers.append(TmdbProvider(self.settings.tmdb_api_key))
+            if self.settings.omdb_api_key:
+                providers.append(OmdbProvider(self.settings.omdb_api_key))
+            results = asyncio.run(MetadataService(database, providers).find(self.title, self.season))
+            self.completed.emit(results)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        finally:
+            if database:
+                database.close()
 
 
 class MainWindow(QMainWindow):
@@ -93,6 +133,8 @@ class MainWindow(QMainWindow):
         self._active_destination = self.settings.selected_destination
         self.worker: ScanWorker | None = None
         self.publish_worker: PublishWorker | None = None
+        self.metadata_worker: MetadataWorker | None = None
+        self.pending_publication: tuple[str, object] | None = None
         self._build_ui()
         self._load_settings()
 
@@ -114,6 +156,9 @@ class MainWindow(QMainWindow):
         self.chat_edit = QLineEdit()
         self.chat_edit.setPlaceholderText("например, -1001234567890")
         form.addRow("Chat ID", self.chat_edit)
+        self.rezka_edit = QLineEdit()
+        self.rezka_edit.setPlaceholderText("необязательно: своё рабочее зеркало")
+        form.addRow("Домен Rezka", self.rezka_edit)
         self.destination_combo = QComboBox()
         self.destination_combo.addItems(PUBLISH_DESTINATIONS)
         self.destination_combo.currentTextChanged.connect(self.destination_changed)
@@ -152,6 +197,7 @@ class MainWindow(QMainWindow):
         self.folder_edit.setText(self.settings.folder)
         self.token_edit.setText(self.settings.bot_token)
         self.chat_edit.setText(self.settings.chat_id)
+        self.rezka_edit.setText(self.settings.rezka_domain)
         destination = self.settings.selected_destination
         if destination not in PUBLISH_DESTINATIONS:
             destination = PUBLISH_DESTINATIONS[0]
@@ -165,6 +211,7 @@ class MainWindow(QMainWindow):
         self.settings.folder = self.folder_edit.text().strip()
         self.settings.bot_token = self.token_edit.text().strip()
         self.settings.chat_id = self.chat_edit.text().strip()
+        self.settings.rezka_domain = self.rezka_edit.text().strip()
         destination = self.destination_combo.currentText()
         topic_id = self.thread_edit.text().strip()
         self.settings.selected_destination = destination
@@ -276,18 +323,47 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Публикация", "Выберите фильм, сезон, серию или весь сериал в таблице.")
             return
         target_type, target = target_data
-        label = item.text(0) or item.text(1) or item.text(2)
-        answer = QMessageBox.question(
-            self,
-            "Подтверждение публикации",
-            f"Опубликовать «{label}» в тему «{self.settings.selected_destination}»\n"
-            f"Chat ID: {self.settings.chat_id}\nID темы: {self.settings.thread_id}?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if answer != QMessageBox.Yes:
-            return
+        self.pending_publication = (target_type, target)
         self.publish_button.setEnabled(False)
+        self.progress.show()
+        self.status.setText("Поиск постера и описания…")
+        title = getattr(target, "title", "")
+        season = getattr(target, "season_number", None)
+        self.metadata_worker = MetadataWorker(title, season, self.settings)
+        self.metadata_worker.completed.connect(self.metadata_ready)
+        self.metadata_worker.failed.connect(self.metadata_failed)
+        self.metadata_worker.start()
+
+    def metadata_ready(self, results: list[Metadata]) -> None:
+        self.progress.hide()
+        if not results:
+            self.publish_button.setEnabled(True)
+            self.status.setText("Метаданные не найдены")
+            QMessageBox.warning(
+                self,
+                "Метаданные",
+                "Rezka и резервные источники не вернули карточку. Проверьте домен Rezka или название — публикация остановлена.",
+            )
+            return
+        dialog = MetadataPreviewDialog(results, self)
+        if not dialog.exec():
+            self.publish_button.setEnabled(True)
+            self.status.setText("Публикация отменена")
+            return
+        metadata = dialog.metadata()
+        self.start_publication(metadata)
+
+    def metadata_failed(self, message: str) -> None:
+        self.progress.hide()
+        self.publish_button.setEnabled(True)
+        self.status.setText("Ошибка поиска метаданных")
+        QMessageBox.critical(self, "Метаданные", message)
+
+    def start_publication(self, metadata: Metadata) -> None:
+        if not self.pending_publication:
+            self.publish_button.setEnabled(True)
+            return
+        target_type, target = self.pending_publication
         self.progress.show()
         self.status.setText(f"Публикация в тему «{self.settings.selected_destination}»…")
         self.publish_worker = PublishWorker(
@@ -296,6 +372,7 @@ class MainWindow(QMainWindow):
             self.settings.thread_id,
             target_type,
             target,
+            metadata,
         )
         self.publish_worker.completed.connect(self.publish_completed)
         self.publish_worker.failed.connect(self.publish_failed)

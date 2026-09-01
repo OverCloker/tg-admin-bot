@@ -12,19 +12,20 @@ class MetadataService:
         self.providers = providers or [NullMetadataProvider()]
 
     async def find(self, title: str, season: int | None = None) -> list[Metadata]:
-        cache_key = f"{title.casefold()}:{season or 0}"
+        cache_key = f"v2:{title.casefold()}:{season or 0}"
         row = self.database.connection.execute("select payload from metadata_cache where cache_key=?", (cache_key,)).fetchone()
         if row:
             payload = json.loads(row["payload"])
-            return [Metadata(**payload)]
+            records = payload if isinstance(payload, list) else [payload]
+            return [Metadata(**record) for record in records]
         for provider in self.providers:
             try:
                 results = await provider.search(title, season)
             except Exception:
                 continue
             if results:
-                self.database.connection.execute("insert or replace into metadata_cache(cache_key,provider,payload,updated_at) values(?,?,?,datetime('now'))", (cache_key, provider.name, json.dumps(results[0].__dict__, ensure_ascii=False)))
+                serialised = [item.__dict__ for item in results]
+                self.database.connection.execute("insert or replace into metadata_cache(cache_key,provider,payload,updated_at) values(?,?,?,datetime('now'))", (cache_key, provider.name, json.dumps(serialised, ensure_ascii=False)))
                 self.database.connection.commit()
                 return results
         return []
-

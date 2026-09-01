@@ -2,10 +2,14 @@ import asyncio
 from pathlib import Path
 
 from media_publisher.config.settings import PublisherSettings
+from media_publisher.database.repository import PublisherDatabase
 from media_publisher.media.grouper import group_media
 from media_publisher.media.scanner import scan_folder
 from media_publisher.models import MediaFileInfo, SeasonGroup, ShowGroup
 from media_publisher.parsers.filename_parser import parse_filename
+from media_publisher.providers.base import Metadata, MetadataProvider
+from media_publisher.providers.rezka_provider import RezkaProvider, _solve_anubis_pow
+from media_publisher.services.metadata_service import MetadataService
 from media_publisher.services.publication_service import PublicationService
 from media_publisher.telegram.base_transport import TelegramTransport
 
@@ -36,6 +40,13 @@ class RecordingTransport(TelegramTransport):
     async def send_media_group(self, files, caption, chat_id, thread_id=""):
         self.calls.append(("group", files, caption, chat_id, thread_id))
         return [{"message_id": index + 1} for index in range(len(files))]
+
+
+class StaticMetadataProvider(MetadataProvider):
+    name = "static"
+
+    async def search(self, title, season=None):
+        return [Metadata(title=title, year="2025"), Metadata(title=title + " 2", year="2026")]
 
 
 def test_filename_parser_extracts_series_data(tmp_path: Path):
@@ -199,3 +210,75 @@ def test_publication_service_sends_single_series_file_without_media_group(tmp_pa
     assert len(result) == 1
     assert transport.calls[0][0] == "document"
     assert transport.calls[0][-1] == "149"
+
+
+def test_rezka_parser_extracts_card_fields():
+    html = """
+    <div class="b-post__title"><h1>Миротворец</h1></div>
+    <div class="b-post__origtitle">Peacemaker</div>
+    <div class="b-sidecover"><img src="/covers/peace.jpg"></div>
+    <table class="b-post__info">
+      <tr><td>Год:</td><td>2022</td></tr>
+      <tr><td>Страна:</td><td>США</td></tr>
+      <tr><td>Жанр:</td><td>Боевик, Комедия</td></tr>
+      <tr><td>Режиссер:</td><td>Джеймс Ганн</td></tr>
+      <tr><td>В ролях:</td><td>Джон Сина, Даниэль Брукс</td></tr>
+    </table>
+    <div class="b-post__rating">IMDb: 8.3 (100 000) КиноПоиск: 8.0 (90 000)</div>
+    <div class="b-post__description_text">Описание сериала.</div>
+    """
+    item = RezkaProvider.parse_detail_html(html, "https://rezka.example/series/peace.html")
+    assert item.title == "Миротворец"
+    assert item.original_title == "Peacemaker"
+    assert item.year == "2022"
+    assert item.poster_url == "https://rezka.example/covers/peace.jpg"
+    assert item.genres == ["Боевик", "Комедия"]
+    assert item.cast == ["Джон Сина", "Даниэль Брукс"]
+    assert item.imdb_rating == "8.3"
+    assert item.kinopoisk_rating == "8.0"
+    assert item.overview == "Описание сериала."
+
+
+def test_rezka_search_does_not_accept_unrelated_homepage_cards():
+    html = """
+    <div class="b-content__inline_item">
+      <div class="b-content__inline_item-link"><a href="/wrong.html">Мятеж (2026)</a></div>
+    </div>
+    <div class="b-content__inline_item">
+      <div class="b-content__inline_item-link"><a href="/right.html">Миротворец (2022)</a></div>
+    </div>
+    """
+    assert RezkaProvider._parse_search_links(html, "https://rezka.example", "Миротворец") == [
+        "https://rezka.example/right.html"
+    ]
+
+
+def test_rezka_anubis_pow_solver_matches_required_prefix():
+    digest, nonce = _solve_anubis_pow("test-seed", 2)
+    assert digest.startswith("00")
+    assert nonce >= 0
+
+
+def test_metadata_cache_preserves_all_search_choices(tmp_path: Path):
+    database = PublisherDatabase(tmp_path / "publisher.sqlite3")
+    try:
+        first = asyncio.run(MetadataService(database, [StaticMetadataProvider()]).find("Demo"))
+        second = asyncio.run(MetadataService(database, []).find("Demo"))
+    finally:
+        database.close()
+    assert [item.year for item in first] == ["2025", "2026"]
+    assert [item.year for item in second] == ["2025", "2026"]
+
+
+def test_publication_sends_metadata_card_before_movie(tmp_path: Path):
+    path = tmp_path / "Кино.mp4"
+    path.touch()
+    movie = MediaFileInfo(path=path, filename=path.name, title="Кино", media_type="movie")
+    metadata = Metadata(title="Кино", year="2025", overview="Описание", poster_url="https://example.test/poster.jpg")
+    transport = RecordingTransport()
+    service = PublicationService(transport, "-1001", "2")
+    result = asyncio.run(service.publish_media(movie, metadata=metadata))
+    assert len(result) == 2
+    assert transport.calls[0][0] == "photo"
+    assert "Кино (2025)" in transport.calls[0][2]
+    assert transport.calls[1][0] == "video"

@@ -25,5 +25,6 @@ class OmdbProvider(MetadataProvider):
     def _metadata(self, payload):
         from .base import Metadata
 
-        return Metadata(title=payload.get("Title") or "", original_title=payload.get("Title") or "", year=payload.get("Year") or "", overview=payload.get("Plot") or "", poster_url=payload.get("Poster") or "", imdb_rating=payload.get("imdbRating") or "", imdb_votes=payload.get("imdbVotes") or "", source=self.name)
-
+        genres = [item.strip() for item in (payload.get("Genre") or "").split(",") if item.strip()]
+        cast = [item.strip() for item in (payload.get("Actors") or "").split(",") if item.strip()]
+        return Metadata(title=payload.get("Title") or "", original_title=payload.get("Title") or "", year=payload.get("Year") or "", overview=payload.get("Plot") or "", poster_url=payload.get("Poster") or "", genres=genres, cast=cast, imdb_rating=payload.get("imdbRating") or "", imdb_votes=payload.get("imdbVotes") or "", country=payload.get("Country") or "", director=payload.get("Director") or "", age_rating=payload.get("Rated") or "", source=self.name)

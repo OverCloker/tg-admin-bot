@@ -22,6 +22,6 @@ class TmdbProvider(MetadataProvider):
         result: list[Metadata] = []
         for item in payload.get("results", [])[:5]:
             media_title = item.get("title") or item.get("name") or title
-            result.append(Metadata(title=media_title, original_title=item.get("original_title") or item.get("original_name") or "", year=(item.get("release_date") or item.get("first_air_date") or "")[:4], overview=item.get("overview") or "", poster_url=item.get("poster_path") or "", source=self.name))
+            poster_path = item.get("poster_path") or ""
+            result.append(Metadata(title=media_title, original_title=item.get("original_title") or item.get("original_name") or "", year=(item.get("release_date") or item.get("first_air_date") or "")[:4], overview=item.get("overview") or "", poster_url=f"https://image.tmdb.org/t/p/w780{poster_path}" if poster_path else "", source=self.name))
         return result
-
