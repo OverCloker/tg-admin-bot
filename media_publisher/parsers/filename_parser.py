@@ -24,6 +24,15 @@ def _clean_title(raw: str) -> str:
     return value or "Без названия"
 
 
+def _clean_movie_title(stem: str) -> str:
+    value = _DUB_BRACKET.sub("", stem)
+    value = _QUALITY.sub("", value)
+    value = _AGE.sub("", value)
+    # Some movie filenames contain empty S/E placeholders from export tools.
+    value = re.sub(r"(?ix)\s+s\s*[-_. ]*\s*(?:e|ep)?\s*[-_. ]*$", "", value)
+    return _clean_title(value)
+
+
 def parse_filename(path: str | Path) -> MediaFileInfo:
     file_path = Path(path)
     stem = file_path.stem
@@ -49,10 +58,11 @@ def parse_filename(path: str | Path) -> MediaFileInfo:
         title_source = stem[: match.start()]
     elif season is not None:
         title_source = re.split(r"(?i)\b(?:season|сезон|s)\b", stem, maxsplit=1)[0]
-    title = _clean_title(title_source)
+    is_series = season is not None or episode is not None
+    title = _clean_title(title_source) if is_series else _clean_movie_title(stem)
     tags = [item.group(1) for item in _QUALITY.finditer(stem)]
     warning = None
-    if season is None or episode is None:
+    if is_series and (season is None or episode is None):
         warning = "Не удалось уверенно определить сезон и серию; проверьте данные."
     return MediaFileInfo(
         path=file_path,
@@ -65,5 +75,5 @@ def parse_filename(path: str | Path) -> MediaFileInfo:
         quality=quality_match.group(1) if quality_match else None,
         additional_tags=tags,
         warning=warning,
+        media_type="series" if is_series else "movie",
     )
-

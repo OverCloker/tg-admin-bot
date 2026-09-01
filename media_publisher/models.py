@@ -16,6 +16,7 @@ class MediaFileInfo:
     quality: str | None = None
     additional_tags: list[str] = field(default_factory=list)
     warning: str | None = None
+    media_type: str = "movie"
 
 
 @dataclass
@@ -38,4 +39,4 @@ class SeasonGroup:
 class ShowGroup:
     title: str
     seasons: list[SeasonGroup] = field(default_factory=list)
-
+    movies: list[MediaFileInfo] = field(default_factory=list)

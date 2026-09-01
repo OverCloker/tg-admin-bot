@@ -129,10 +129,18 @@ class MainWindow(QMainWindow):
     def show_groups(self, groups: list) -> None:
         self.tree.clear()
         for show in groups:
-            show_item = QTreeWidgetItem([show.title, "", "", ""])
+            if show.movies and not show.seasons and len(show.movies) == 1:
+                movie = show.movies[0]
+                show_item = QTreeWidgetItem([show.title, "Фильм", movie.filename, movie.warning or "найдено"])
+                self.tree.addTopLevelItem(show_item)
+                continue
+            show_item = QTreeWidgetItem([show.title, "Сериал" if show.seasons else "Фильмы", "", ""])
             self.tree.addTopLevelItem(show_item)
+            for movie in show.movies:
+                QTreeWidgetItem(show_item, ["", "Фильм", movie.filename, movie.warning or "найдено"])
             for season in show.seasons:
-                season_item = QTreeWidgetItem(["", f"Сезон {season.season_number}", "", ", ".join(season.warnings)])
+                season_label = f"Сезон {season.season_number}" if season.season_number else "Сезон не определён"
+                season_item = QTreeWidgetItem(["", season_label, "", ", ".join(season.warnings)])
                 show_item.addChild(season_item)
                 for media in season.episodes:
                     QTreeWidgetItem(season_item, ["", f"Серия {media.episode_number or '—'}", media.filename, "найдено"])
