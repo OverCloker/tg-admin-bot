@@ -13,7 +13,7 @@ _SEASON = re.compile(r"(?ix)\b(?:s(?:eason)?|с(?:езон)?)\s*0*(?P<season>\d+
 _EPISODE = re.compile(r"(?ix)\b(?:e|ep|episode|серия|сер)\s*0*(?P<episode>\d+)\b")
 _QUALITY = re.compile(r"(?i)\b(2160p|1440p|1080p|720p|480p|4k|web[- ]?dl|blu[- ]?ray|hdr)\b")
 _AGE = re.compile(r"(?i)(?:\(|\[|\b)(?P<age>\d{1,2}\+)(?:\)|\]|\b)")
-_DUB_BRACKET = re.compile(r"[\[(]([^\[\]()]+?)(?:\s+\d{1,2}\+)?[\])]\s*$")
+_DUB_BRACKET = re.compile(r"\[([^\]]+)\]\s*$")
 
 
 def _clean_title(raw: str) -> str:
@@ -21,7 +21,18 @@ def _clean_title(raw: str) -> str:
     value = re.sub(r"\s+", " ", value).strip(" -_")
     value = re.sub(r"(?i)\b(?:s\s*[-_]?\s*season|с\s*[-_]?\s*сезон)\b.*$", "", value).strip(" -_")
     value = re.sub(r"(?i)\b(?:season|сезон)\s*\d+.*$", "", value).strip(" -_")
+    value = re.sub(r"(?i)\b\d+\s*(?:season|сезон(?:а|е)?)\b.*$", "", value).strip(" -_")
+    value = re.sub(r"(?i)\s*[-–—]?\s*все\s+серии\b.*$", "", value).strip(" -_")
     return value or "Без названия"
+
+
+def clean_candidate_title(raw: str) -> str:
+    return _clean_title(Path(raw).stem)
+
+
+def is_weak_title(title: str) -> bool:
+    compact = "".join(char for char in title if char.isalnum())
+    return len(compact) < 3 or compact.isdigit() or title == "Без названия"
 
 
 def _clean_movie_title(stem: str) -> str:
@@ -49,7 +60,7 @@ def parse_filename(path: str | Path) -> MediaFileInfo:
     quality_match = _QUALITY.search(stem)
     age_match = _AGE.search(stem)
     dub_match = _DUB_BRACKET.search(stem)
-    dub = dub_match.group(1).strip() if dub_match else None
+    dub = re.sub(r"\s*\(\s*\d{1,2}\+\s*\)\s*$", "", dub_match.group(1)).strip() if dub_match else None
     if dub and _QUALITY.fullmatch(dub):
         dub = None
 

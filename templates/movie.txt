@@ -1,4 +1,5 @@
 {title} — {year}
+{original_title}
 
 {ratings}
 
@@ -6,5 +7,6 @@
 
 В ролях: {actors}
 
-{description}
+Дубляж: {dub}
 
+{description}

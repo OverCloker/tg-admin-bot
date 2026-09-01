@@ -1,4 +1,5 @@
 {title} — {season_number} сезон — {year}
+{original_title}
 
 {ratings}
 
@@ -9,4 +10,3 @@
 Дубляж: {dub}
 
 {description}
-

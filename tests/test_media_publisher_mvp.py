@@ -11,6 +11,7 @@ from media_publisher.providers.base import Metadata, MetadataProvider
 from media_publisher.providers.rezka_provider import RezkaProvider, _solve_anubis_pow
 from media_publisher.services.metadata_service import MetadataService
 from media_publisher.services.publication_service import PublicationService
+from media_publisher.services.template_renderer import TemplateRenderer
 from media_publisher.telegram.base_transport import TelegramTransport
 
 
@@ -60,6 +61,17 @@ def test_filename_parser_extracts_series_data(tmp_path: Path):
     assert item.media_type == "series"
 
 
+def test_filename_parser_handles_exported_rezka_series_name(tmp_path: Path):
+    path = tmp_path / "Миротворец - все серии 1 сезона в озвучке HDrezka Studio s-Сезон 2 ep-Серия 8 [HDrezka Studio (18+)].mp4"
+    path.touch()
+    item = parse_filename(path)
+    assert item.title == "Миротворец"
+    assert item.season_number == 2
+    assert item.episode_number == 8
+    assert item.dub == "HDrezka Studio"
+    assert item.age_rating == "18+"
+
+
 def test_filename_parser_treats_file_without_episode_markers_as_movie(tmp_path: Path):
     path = tmp_path / "Властелины вселенной s- ep- [Лостфильм].mp4"
     path.touch()
@@ -85,6 +97,23 @@ def test_group_media_keeps_movies_out_of_season_zero(tmp_path: Path):
     groups = group_media(scan_folder(tmp_path))
     assert groups[0].seasons == []
     assert [item.filename for item in groups[0].movies] == ["Кино.mp4"]
+
+
+def test_scanner_uses_series_folder_when_filename_title_is_only_number(tmp_path: Path):
+    folder = tmp_path / "Мандалорец"
+    folder.mkdir()
+    (folder / "1 S01E01.mp4").touch()
+    item = scan_folder(tmp_path)[0]
+    assert item.title == "Мандалорец"
+
+
+def test_metadata_lookup_rejects_numeric_title(tmp_path: Path):
+    database = PublisherDatabase(tmp_path / "publisher.sqlite3")
+    try:
+        result = asyncio.run(MetadataService(database, [StaticMetadataProvider()]).find("1"))
+    finally:
+        database.close()
+    assert result == []
 
 
 def test_settings_round_trip_uses_utf8(tmp_path: Path):
@@ -280,5 +309,72 @@ def test_publication_sends_metadata_card_before_movie(tmp_path: Path):
     result = asyncio.run(service.publish_media(movie, metadata=metadata))
     assert len(result) == 2
     assert transport.calls[0][0] == "photo"
-    assert "Кино (2025)" in transport.calls[0][2]
+    assert "Кино — 2025" in transport.calls[0][2]
     assert transport.calls[1][0] == "video"
+
+
+def test_confirmed_metadata_selection_is_reused(tmp_path: Path):
+    database = PublisherDatabase(tmp_path / "publisher.sqlite3")
+    selected = Metadata(title="Мандалорец", external_id="82856", source="TMDB")
+    try:
+        service = MetadataService(database, [StaticMetadataProvider()])
+        service.save_selection("Мандалорец", 1, selected)
+        result = asyncio.run(service.find("Мандалорец", 1))
+    finally:
+        database.close()
+    assert len(result) == 1
+    assert result[0].external_id == "82856"
+
+
+def test_templates_render_complete_season_card_and_media_caption():
+    renderer = TemplateRenderer()
+    metadata = Metadata(
+        title="Миротворец", season_year="2025", imdb_rating="8.3", imdb_votes="123 456",
+        genres=["Боевик", "Комедия"], cast=["Джон Сина"], dub="HDrezka Studio",
+        season_overview="Описание второго сезона.",
+    )
+    season = SeasonGroup("Миротворец", 2, dub="HDrezka Studio")
+    card = renderer.season(metadata, season)
+    media = renderer.media_group(season, 1, 8)
+    assert "Миротворец — 2 сезон — 2025" in card
+    assert "IMDb: 8.3 (123 456)" in card
+    assert "В ролях: Джон Сина" in card
+    assert "Описание второго сезона." in card
+    assert media == "2 сезон\nСерии 1-8\nДубляж: HDrezka Studio"
+
+
+def test_publication_retry_does_not_send_card_twice(tmp_path: Path):
+    class FailFirstGroupTransport(RecordingTransport):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+
+        async def send_media_group(self, files, caption, chat_id, thread_id=""):
+            self.calls.append(("group", files, caption, chat_id, thread_id))
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("temporary error")
+            return [{"message_id": index + 1} for index in range(len(files))]
+
+    paths = []
+    episodes = []
+    for number in (1, 2):
+        path = tmp_path / f"Demo S01E{number:02}.mp4"
+        path.touch()
+        paths.append(path)
+        episodes.append(MediaFileInfo(path=path, filename=path.name, title="Demo", season_number=1, episode_number=number, media_type="series"))
+    metadata = Metadata(title="Demo", poster_url="https://example.test/poster.jpg")
+    database = PublisherDatabase(tmp_path / "publisher.sqlite3")
+    transport = FailFirstGroupTransport()
+    key = PublicationService.make_operation_key("-1001", "149", paths, metadata)
+    service = PublicationService(transport, "-1001", "149", database, key)
+    try:
+        try:
+            asyncio.run(service.publish_season(SeasonGroup("Demo", 1, episodes), metadata=metadata))
+        except RuntimeError:
+            pass
+        asyncio.run(service.publish_season(SeasonGroup("Demo", 1, episodes), metadata=metadata))
+    finally:
+        database.close()
+    assert [call[0] for call in transport.calls].count("photo") == 1
+    assert [call[0] for call in transport.calls].count("group") == 2

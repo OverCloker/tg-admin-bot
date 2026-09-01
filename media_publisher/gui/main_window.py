@@ -20,6 +20,7 @@ from ..providers.omdb_provider import OmdbProvider
 from ..providers.rezka_provider import RezkaProvider
 from ..providers.tmdb_provider import TmdbProvider
 from ..services.metadata_service import MetadataService
+from ..services.poster_cache import PosterCache
 from ..services.publication_service import PublicationService
 from ..telegram.bot_api_transport import BotApiTransport, TelegramApiError
 from .metadata_dialog import MetadataPreviewDialog
@@ -85,25 +86,45 @@ class PublishWorker(QThread):
             self.failed.emit(str(exc))
 
     async def _publish(self) -> list[dict]:
-        service = PublicationService(BotApiTransport(self.token), self.chat_id, self.thread_id)
-        if self.target_type == "media":
-            return await service.publish_media(self.target, metadata=self.metadata)
-        if self.target_type == "season":
-            return await service.publish_season(self.target, metadata=self.metadata)
-        if self.target_type == "show":
+        database = PublisherDatabase(default_database_path())
+        try:
+            if not self.metadata.poster_path:
+                try:
+                    await PosterCache(default_settings_path().with_name("posters")).cache(self.metadata)
+                except Exception as exc:
+                    raise ValueError(f"Не удалось загрузить постер для Telegram: {exc}") from exc
+            if self.target_type == "media":
+                paths = [self.target.path]
+            elif self.target_type == "season":
+                paths = [item.path for item in self.target.episodes]
+            elif self.target_type == "show":
+                paths = [item.path for item in self.target.movies]
+                paths += [item.path for season in self.target.seasons for item in season.episodes]
+            else:
+                raise ValueError("Неизвестный тип публикации.")
+            operation_key = PublicationService.make_operation_key(self.chat_id, self.thread_id, paths, self.metadata)
+            service = PublicationService(BotApiTransport(self.token), self.chat_id, self.thread_id, database, operation_key)
+            if self.target_type == "media":
+                return await service.publish_media(self.target, metadata=self.metadata)
+            if self.target_type == "season":
+                return await service.publish_season(self.target, metadata=self.metadata)
             return await service.publish_show(self.target, metadata=self.metadata)
-        raise ValueError("Неизвестный тип публикации.")
+        finally:
+            database.close()
 
 
 class MetadataWorker(QThread):
     completed = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, title: str, season: int | None, settings: PublisherSettings):
+    def __init__(self, title: str, season: int | None, settings: PublisherSettings, dub: str = "", episodes: list[int] | None = None, force: bool = False):
         super().__init__()
         self.title = title
         self.season = season
         self.settings = settings
+        self.dub = dub
+        self.episodes = episodes or []
+        self.force = force
 
     def run(self) -> None:
         database = None
@@ -114,7 +135,15 @@ class MetadataWorker(QThread):
                 providers.append(TmdbProvider(self.settings.tmdb_api_key))
             if self.settings.omdb_api_key:
                 providers.append(OmdbProvider(self.settings.omdb_api_key))
-            results = asyncio.run(MetadataService(database, providers).find(self.title, self.season))
+            results = asyncio.run(MetadataService(database, providers).find(self.title, self.season, force=self.force))
+            poster_cache = PosterCache(default_settings_path().with_name("posters"))
+            for item in results:
+                item.dub = item.dub or self.dub
+                item.episode_numbers = item.episode_numbers or self.episodes
+                try:
+                    asyncio.run(poster_cache.cache(item))
+                except Exception:
+                    pass
             self.completed.emit(results)
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -135,6 +164,9 @@ class MainWindow(QMainWindow):
         self.publish_worker: PublishWorker | None = None
         self.metadata_worker: MetadataWorker | None = None
         self.pending_publication: tuple[str, object] | None = None
+        self._metadata_target: tuple[str, object] | None = None
+        self._metadata_results: list[Metadata] = []
+        self._lookup_for_publish = False
         self._build_ui()
         self._load_settings()
 
@@ -159,6 +191,14 @@ class MainWindow(QMainWindow):
         self.rezka_edit = QLineEdit()
         self.rezka_edit.setPlaceholderText("необязательно: своё рабочее зеркало")
         form.addRow("Домен Rezka", self.rezka_edit)
+        self.tmdb_edit = QLineEdit()
+        self.tmdb_edit.setEchoMode(QLineEdit.Password)
+        self.tmdb_edit.setPlaceholderText("необязательно, для данных конкретного сезона")
+        form.addRow("TMDB API key", self.tmdb_edit)
+        self.omdb_edit = QLineEdit()
+        self.omdb_edit.setEchoMode(QLineEdit.Password)
+        self.omdb_edit.setPlaceholderText("необязательно, для IMDb и голосов")
+        form.addRow("OMDb API key", self.omdb_edit)
         self.destination_combo = QComboBox()
         self.destination_combo.addItems(PUBLISH_DESTINATIONS)
         self.destination_combo.currentTextChanged.connect(self.destination_changed)
@@ -176,9 +216,12 @@ class MainWindow(QMainWindow):
         self.message_button.clicked.connect(self.send_test)
         self.publish_button = QPushButton("Опубликовать выбранное")
         self.publish_button.clicked.connect(self.publish_selected)
+        self.preview_button = QPushButton("Предпросмотр")
+        self.preview_button.clicked.connect(self.preview_selected)
         actions.addWidget(self.scan_button)
         actions.addWidget(self.connection_button)
         actions.addWidget(self.message_button)
+        actions.addWidget(self.preview_button)
         actions.addWidget(self.publish_button)
         layout.addLayout(actions)
         self.progress = QProgressBar()
@@ -190,7 +233,12 @@ class MainWindow(QMainWindow):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Релиз", "Сезон / серия", "Файл", "Статус"])
         self.tree.setAlternatingRowColors(True)
+        self.tree.currentItemChanged.connect(self.selection_changed)
         layout.addWidget(self.tree, 1)
+        self.metadata_summary = QLabel("Карточка появится автоматически после выбора фильма или сезона.")
+        self.metadata_summary.setWordWrap(True)
+        self.metadata_summary.setStyleSheet("padding: 8px; border: 1px solid #556; border-radius: 6px;")
+        layout.addWidget(self.metadata_summary)
         self.setCentralWidget(root)
 
     def _load_settings(self) -> None:
@@ -198,6 +246,8 @@ class MainWindow(QMainWindow):
         self.token_edit.setText(self.settings.bot_token)
         self.chat_edit.setText(self.settings.chat_id)
         self.rezka_edit.setText(self.settings.rezka_domain)
+        self.tmdb_edit.setText(self.settings.tmdb_api_key)
+        self.omdb_edit.setText(self.settings.omdb_api_key)
         destination = self.settings.selected_destination
         if destination not in PUBLISH_DESTINATIONS:
             destination = PUBLISH_DESTINATIONS[0]
@@ -212,6 +262,8 @@ class MainWindow(QMainWindow):
         self.settings.bot_token = self.token_edit.text().strip()
         self.settings.chat_id = self.chat_edit.text().strip()
         self.settings.rezka_domain = self.rezka_edit.text().strip()
+        self.settings.tmdb_api_key = self.tmdb_edit.text().strip()
+        self.settings.omdb_api_key = self.omdb_edit.text().strip()
         destination = self.destination_combo.currentText()
         topic_id = self.thread_edit.text().strip()
         self.settings.selected_destination = destination
@@ -273,6 +325,9 @@ class MainWindow(QMainWindow):
                     episode_item.setData(0, Qt.ItemDataRole.UserRole, ("media", media))
             show_item.setExpanded(True)
         self.status.setText(f"Найдено релизов: {len(groups)}")
+        if self.tree.topLevelItemCount():
+            first = self.tree.topLevelItem(0)
+            self.tree.setCurrentItem(first.child(0) if first.childCount() else first)
 
     def scan_failed(self, message: str) -> None:
         self.status.setText("Ошибка сканирования")
@@ -317,19 +372,68 @@ class MainWindow(QMainWindow):
         if not self.settings.thread_id:
             QMessageBox.warning(self, "Публикация", "Укажите ID выбранной темы. Отправка в основную тему отключена.")
             return
-        item = self.tree.currentItem()
-        target_data = item.data(0, Qt.ItemDataRole.UserRole) if item else None
+        target_data = self._selected_target()
         if not target_data:
             QMessageBox.warning(self, "Публикация", "Выберите фильм, сезон, серию или весь сериал в таблице.")
             return
-        target_type, target = target_data
-        self.pending_publication = (target_type, target)
-        self.publish_button.setEnabled(False)
-        self.progress.show()
-        self.status.setText("Поиск постера и описания…")
+        self.pending_publication = target_data
+        self._lookup_for_publish = True
+        if self._metadata_target == target_data and self._metadata_results:
+            self._open_preview(self._metadata_results)
+        else:
+            self._start_metadata_lookup(target_data, for_publish=True)
+
+    def _selected_target(self) -> tuple[str, object] | None:
+        item = self.tree.currentItem()
+        return item.data(0, Qt.ItemDataRole.UserRole) if item else None
+
+    @staticmethod
+    def _target_context(target: object) -> tuple[str, int | None, str, list[int]]:
         title = getattr(target, "title", "")
         season = getattr(target, "season_number", None)
-        self.metadata_worker = MetadataWorker(title, season, self.settings)
+        dub = getattr(target, "dub", "") or ""
+        episodes = []
+        if hasattr(target, "episodes"):
+            episodes = [item.episode_number for item in target.episodes if item.episode_number is not None]
+        elif getattr(target, "episode_number", None) is not None:
+            episodes = [target.episode_number]
+        return title, season, dub, episodes
+
+    def selection_changed(self, current, previous=None) -> None:
+        target_data = current.data(0, Qt.ItemDataRole.UserRole) if current else None
+        if not target_data:
+            return
+        target_type, target = target_data
+        if target_type == "show" and len(getattr(target, "seasons", [])) + len(getattr(target, "movies", [])) != 1:
+            self.metadata_summary.setText("Выберите конкретный сезон или фильм.")
+            return
+        self._start_metadata_lookup(target_data, for_publish=False)
+
+    def preview_selected(self) -> None:
+        target_data = self._selected_target()
+        if not target_data:
+            QMessageBox.warning(self, "Предпросмотр", "Выберите фильм или сезон.")
+            return
+        self.pending_publication = target_data
+        self._lookup_for_publish = False
+        if self._metadata_target == target_data and self._metadata_results:
+            self._open_preview(self._metadata_results)
+        else:
+            self._start_metadata_lookup(target_data, for_publish=False)
+
+    def _start_metadata_lookup(self, target_data: tuple[str, object], *, for_publish: bool, force: bool = False) -> None:
+        if self.metadata_worker and self.metadata_worker.isRunning():
+            self.metadata_summary.setText("Дождитесь завершения текущего поиска метаданных.")
+            return
+        self._save_settings()
+        self._metadata_target = target_data
+        self._metadata_results = []
+        self._lookup_for_publish = for_publish
+        target_type, target = target_data
+        title, season, dub, episodes = self._target_context(target)
+        self.progress.show()
+        self.status.setText(f"Ищу точную карточку: {title}" + (f", сезон {season}" if season else "") + "…")
+        self.metadata_worker = MetadataWorker(title, season, self.settings, dub, episodes, force)
         self.metadata_worker.completed.connect(self.metadata_ready)
         self.metadata_worker.failed.connect(self.metadata_failed)
         self.metadata_worker.start()
@@ -345,12 +449,40 @@ class MainWindow(QMainWindow):
                 "Rezka и резервные источники не вернули карточку. Проверьте домен Rezka или название — публикация остановлена.",
             )
             return
-        dialog = MetadataPreviewDialog(results, self)
-        if not dialog.exec():
+        self._metadata_results = results
+        first = results[0]
+        season_text = f" · сезон {first.season_number}" if first.season_number else ""
+        year = first.season_year or first.year
+        self.metadata_summary.setText(
+            f"Найдена карточка: {first.title}{season_text}" + (f" · {year}" if year else "")
+            + f"\nИсточник: {first.source}. Вариантов: {len(results)}. "
+            + "Откройте предпросмотр, чтобы проверить постер и данные."
+        )
+        self.status.setText("Метаданные загружены. Проверьте готовую карточку перед публикацией.")
+        if self._lookup_for_publish:
+            self._open_preview(results)
+
+    def _open_preview(self, results: list[Metadata]) -> None:
+        if not self._metadata_target:
+            return
+        target_type, target = self._metadata_target
+        dialog = MetadataPreviewDialog(results, target, self)
+        result = dialog.exec()
+        if result == MetadataPreviewDialog.RetrySearch:
+            self._start_metadata_lookup(self._metadata_target, for_publish=self._lookup_for_publish, force=True)
+            return
+        if not result:
             self.publish_button.setEnabled(True)
-            self.status.setText("Публикация отменена")
+            self.status.setText("Предпросмотр закрыт без публикации")
             return
         metadata = dialog.metadata()
+        title, season, _, _ = self._target_context(target)
+        database = PublisherDatabase(default_database_path())
+        try:
+            MetadataService(database).save_selection(title, season, metadata)
+        finally:
+            database.close()
+        self._metadata_results = [metadata]
         self.start_publication(metadata)
 
     def metadata_failed(self, message: str) -> None:

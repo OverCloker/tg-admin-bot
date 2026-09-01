@@ -23,6 +23,19 @@ create table if not exists metadata_cache (
     payload text not null,
     updated_at text not null
 );
+create table if not exists metadata_selections (
+    lookup_key text primary key,
+    payload text not null,
+    updated_at text not null
+);
+create table if not exists publication_state (
+    operation_key text primary key,
+    card_sent integer not null default 0,
+    next_batch integer not null default 0,
+    completed integer not null default 0,
+    error_text text,
+    updated_at text not null
+);
 create table if not exists publications (
     id integer primary key,
     season_key text not null,
@@ -72,3 +85,24 @@ class PublisherDatabase:
         self.connection.execute("update media_files set status=?, updated_at=? where path=?", (status, _now(), str(Path(path).resolve())))
         self.connection.commit()
 
+    def load_metadata_selection(self, lookup_key: str) -> str | None:
+        row = self.connection.execute("select payload from metadata_selections where lookup_key=?", (lookup_key,)).fetchone()
+        return str(row["payload"]) if row else None
+
+    def save_metadata_selection(self, lookup_key: str, payload: str) -> None:
+        self.connection.execute(
+            "insert or replace into metadata_selections(lookup_key,payload,updated_at) values(?,?,?)",
+            (lookup_key, payload, _now()),
+        )
+        self.connection.commit()
+
+    def publication_state(self, operation_key: str) -> dict:
+        row = self.connection.execute("select * from publication_state where operation_key=?", (operation_key,)).fetchone()
+        return dict(row) if row else {"card_sent": 0, "next_batch": 0, "completed": 0, "error_text": None}
+
+    def save_publication_state(self, operation_key: str, *, card_sent: int, next_batch: int, completed: int, error_text: str | None = None) -> None:
+        self.connection.execute(
+            "insert or replace into publication_state(operation_key,card_sent,next_batch,completed,error_text,updated_at) values(?,?,?,?,?,?)",
+            (operation_key, card_sent, next_batch, completed, error_text, _now()),
+        )
+        self.connection.commit()

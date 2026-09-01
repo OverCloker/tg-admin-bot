@@ -40,7 +40,7 @@ def _normalise_title(value: str) -> str:
 def _is_relevant(query: str, candidate: str) -> bool:
     expected = _normalise_title(query)
     actual = _normalise_title(candidate)
-    if not expected or not actual:
+    if not expected or not actual or len(expected.replace(" ", "")) < 3 or expected.replace(" ", "").isdigit():
         return False
     if expected in actual or actual in expected:
         return True
