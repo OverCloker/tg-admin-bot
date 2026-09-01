@@ -83,6 +83,30 @@ def test_filename_parser_treats_file_without_episode_markers_as_movie(tmp_path: 
     assert item.title == "Властелины вселенной"
 
 
+def test_filename_parser_extracts_movie_dub_before_trailing_quality(tmp_path: Path):
+    path = tmp_path / "Миньоны и монстры s- ep- [Украинский дубляж] [1080p].mp4"
+    path.touch()
+    item = parse_filename(path)
+    assert item.title == "Миньоны и монстры"
+    assert item.dub == "Украинский дубляж"
+
+
+def test_filename_parser_extracts_named_voice_phrase(tmp_path: Path):
+    path = tmp_path / "Зверополис 2 в озвучке Украинский дубляж.mp4"
+    path.touch()
+    item = parse_filename(path)
+    assert item.title == "Зверополис 2"
+    assert item.dub == "Украинский дубляж"
+
+
+def test_filename_parser_extracts_unbracketed_dub_suffix(tmp_path: Path):
+    path = tmp_path / "Зверополис 2 - Дубляж официальный.mp4"
+    path.touch()
+    item = parse_filename(path)
+    assert item.title == "Зверополис 2"
+    assert item.dub == "Дубляж официальный"
+
+
 def test_scan_and_group_reports_missing_episode(tmp_path: Path):
     (tmp_path / "Demo S01E01.mp4").touch()
     (tmp_path / "Demo S01E03.mp4").touch()
@@ -337,8 +361,10 @@ def test_templates_render_complete_season_card_and_media_caption():
     card = renderer.season(metadata, season)
     media = renderer.media_group(season, 1, 8)
     assert "Миротворец — 2 сезон — 2025" in card
+    assert "Рейтинги:" in card
     assert "IMDb: 8.3 (123 456)" in card
     assert "В ролях: Джон Сина" in card
+    assert "HDrezka Studio" in card
     assert "Описание второго сезона." in card
     assert media == "2 сезон\nСерии 1-8\nДубляж: HDrezka Studio"
 

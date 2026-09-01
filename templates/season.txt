@@ -1,12 +1,13 @@
 {title} — {season_number} сезон — {year}
 {original_title}
-
+────────────
+{dub}
+────────────
+Рейтинги:
 {ratings}
-
+────────────
 Жанр: {genres}
-
+────────────
 В ролях: {actors}
-
-Дубляж: {dub}
-
+────────────
 {description}

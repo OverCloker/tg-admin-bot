@@ -13,7 +13,17 @@ _SEASON = re.compile(r"(?ix)\b(?:s(?:eason)?|с(?:езон)?)\s*0*(?P<season>\d+
 _EPISODE = re.compile(r"(?ix)\b(?:e|ep|episode|серия|сер)\s*0*(?P<episode>\d+)\b")
 _QUALITY = re.compile(r"(?i)\b(2160p|1440p|1080p|720p|480p|4k|web[- ]?dl|blu[- ]?ray|hdr)\b")
 _AGE = re.compile(r"(?i)(?:\(|\[|\b)(?P<age>\d{1,2}\+)(?:\)|\]|\b)")
-_DUB_BRACKET = re.compile(r"\[([^\]]+)\]\s*$")
+_BRACKET = re.compile(r"\[([^\]]+)\]")
+_DUB_PHRASE = re.compile(
+    r"(?ix)\b(?:в\s+озвучке|озвучка|озвучення|voice|dub(?:bed)?)\s*[:=-]?\s*"
+    r"(?P<dub>.+?)(?=\s+(?:s(?:eason)?|сезон|e(?:p(?:isode)?)?|серия)\s*[-_. ]*\d*\b|$)"
+)
+_DUB_SUFFIX = re.compile(
+    r"(?ix)(?P<dub>"
+    r"(?:(?:украинский|український|русский|официальный|профессиональный|многоголосый|одноголосый)\s+)*"
+    r"(?:дубляж|озвучка|озвучення|lostfilm|hdrezka(?:\s+studio)?|newstudio|coldfilm|alexfilm|baibako|кубик(?:\s+в\s+кубе)?|анилибрия)"
+    r"(?:\s+(?:официальный|профессиональный|многоголосый|одноголосый|studio)){0,3})\s*$"
+)
 
 
 def _clean_title(raw: str) -> str:
@@ -23,6 +33,7 @@ def _clean_title(raw: str) -> str:
     value = re.sub(r"(?i)\b(?:season|сезон)\s*\d+.*$", "", value).strip(" -_")
     value = re.sub(r"(?i)\b\d+\s*(?:season|сезон(?:а|е)?)\b.*$", "", value).strip(" -_")
     value = re.sub(r"(?i)\s*[-–—]?\s*все\s+серии\b.*$", "", value).strip(" -_")
+    value = re.sub(r"(?i)\s+(?:в\s+озвучке|озвучка|озвучення|voice|dub(?:bed)?)\s*[:=-]?.*$", "", value).strip(" -_")
     return value or "Без названия"
 
 
@@ -36,12 +47,38 @@ def is_weak_title(title: str) -> bool:
 
 
 def _clean_movie_title(stem: str) -> str:
-    value = _DUB_BRACKET.sub("", stem)
+    value = _BRACKET.sub("", stem)
+    value = _DUB_PHRASE.sub("", value)
+    suffix = _DUB_SUFFIX.search(value)
+    if suffix:
+        value = value[: suffix.start()].strip(" -_")
     value = _QUALITY.sub("", value)
     value = _AGE.sub("", value)
     # Some movie filenames contain empty S/E placeholders from export tools.
     value = re.sub(r"(?ix)\s+s\s*[-_. ]*\s*(?:e|ep)?\s*[-_. ]*$", "", value)
     return _clean_title(value)
+
+
+def _normalise_dub(value: str) -> str | None:
+    cleaned = re.sub(r"\s*\(\s*\d{1,2}\+\s*\)\s*$", "", value).strip(" -_")
+    if not cleaned or _QUALITY.fullmatch(cleaned) or _AGE.fullmatch(cleaned):
+        return None
+    return cleaned
+
+
+def _extract_dub(stem: str) -> str | None:
+    phrase = _DUB_PHRASE.search(stem)
+    if phrase:
+        candidate = _normalise_dub(phrase.group("dub"))
+        if candidate:
+            return candidate
+    for bracket in reversed(_BRACKET.findall(stem)):
+        candidate = _normalise_dub(bracket)
+        if candidate and not _QUALITY.search(candidate):
+            return candidate
+    suffix_source = _BRACKET.sub("", stem)
+    suffix = _DUB_SUFFIX.search(suffix_source)
+    return _normalise_dub(suffix.group("dub")) if suffix else None
 
 
 def parse_filename(path: str | Path) -> MediaFileInfo:
@@ -59,10 +96,7 @@ def parse_filename(path: str | Path) -> MediaFileInfo:
 
     quality_match = _QUALITY.search(stem)
     age_match = _AGE.search(stem)
-    dub_match = _DUB_BRACKET.search(stem)
-    dub = re.sub(r"\s*\(\s*\d{1,2}\+\s*\)\s*$", "", dub_match.group(1)).strip() if dub_match else None
-    if dub and _QUALITY.fullmatch(dub):
-        dub = None
+    dub = _extract_dub(stem)
 
     title_source = stem
     if match:

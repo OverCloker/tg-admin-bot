@@ -16,7 +16,11 @@ class TemplateRenderer:
         for key, value in values.items():
             rendered = rendered.replace("{" + key + "}", str(value or ""))
         rendered = re.sub(r"^.*\{[a-z_]+\}.*$", "", rendered, flags=re.M)
-        rendered = re.sub(r"(?m)^(?:Рейтинги|Жанр|В ролях|Дубляж):\s*$", "", rendered)
+        if not values.get("ratings"):
+            rendered = re.sub(r"(?m)^Рейтинги:\s*$", "", rendered)
+        rendered = re.sub(r"(?m)^(?:Жанр|В ролях|Дубляж|Озвучка):\s*$", "", rendered)
+        rendered = re.sub(r"(?:\n\s*────────────\s*){2,}", "\n────────────\n", rendered)
+        rendered = re.sub(r"^(?:\s*────────────\s*)+|(?:\s*────────────\s*)+$", "", rendered)
         return re.sub(r"\n{3,}", "\n\n", rendered).strip()[:1024]
 
     @staticmethod
