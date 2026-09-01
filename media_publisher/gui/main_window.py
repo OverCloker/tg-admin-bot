@@ -135,7 +135,7 @@ class MainWindow(QMainWindow):
                 season_item = QTreeWidgetItem(["", f"Сезон {season.season_number}", "", ", ".join(season.warnings)])
                 show_item.addChild(season_item)
                 for media in season.episodes:
-                    QTreeWidgetItem(season_item, ["", f"Серия {media.episode or '—'}", media.path.name, "найдено"])
+                    QTreeWidgetItem(season_item, ["", f"Серия {media.episode_number or '—'}", media.filename, "найдено"])
             show_item.setExpanded(True)
         self.status.setText(f"Найдено релизов: {len(groups)}")
 
