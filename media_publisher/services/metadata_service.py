@@ -16,7 +16,7 @@ def _score(left: Metadata, right: Metadata) -> float:
 
 
 def _merge(primary: Metadata, fallback: Metadata) -> Metadata:
-    list_fields = {"genres", "cast", "episode_numbers", "poster_options"}
+    list_fields = {"genres", "cast", "rankings", "episode_numbers", "poster_options"}
     for descriptor in fields(Metadata):
         name = descriptor.name
         if name in {"source", "source_url", "external_id", "media_type"}:
@@ -40,7 +40,7 @@ class MetadataService:
 
     @staticmethod
     def lookup_key(title: str, season: int | None = None) -> str:
-        return f"{title.casefold().strip()}:{season or 0}"
+        return f"v2:{title.casefold().strip()}:{season or 0}"
 
     async def find(self, title: str, season: int | None = None, *, force: bool = False) -> list[Metadata]:
         compact_title = "".join(char for char in title if char.isalnum())
@@ -51,7 +51,7 @@ class MetadataService:
             selected = self.database.load_metadata_selection(lookup_key)
             if selected:
                 return [Metadata(**json.loads(selected))]
-        cache_key = f"v3:{lookup_key}"
+        cache_key = f"v4:{lookup_key}"
         if not force:
             row = self.database.connection.execute("select payload from metadata_cache where cache_key=?", (cache_key,)).fetchone()
             if row:

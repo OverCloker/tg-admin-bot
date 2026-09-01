@@ -34,12 +34,12 @@ class TemplateRenderer:
 
     def movie(self, metadata: Metadata, dub: str = "") -> str:
         original = metadata.original_title if metadata.original_title.casefold() != metadata.title.casefold() else ""
-        return self._render("movie.txt", {"title": metadata.title, "original_title": original, "year": metadata.year, "ratings": self._ratings(metadata), "genres": ", ".join(metadata.genres), "actors": ", ".join(metadata.cast[:12]), "dub": dub or metadata.dub, "description": metadata.overview})
+        return self._render("movie.txt", {"title": metadata.title, "original_title": original, "year": metadata.year, "ratings": self._ratings(metadata), "rankings": "\n".join(metadata.rankings), "genres": ", ".join(metadata.genres), "actors": ", ".join(metadata.cast[:12]) + (" и другие" if len(metadata.cast) > 12 else ""), "dub": dub or metadata.dub, "description": metadata.overview})
 
     def season(self, metadata: Metadata, season: SeasonGroup) -> str:
         title = metadata.title or season.title
         original = metadata.original_title if metadata.original_title.casefold() != title.casefold() else ""
-        return self._render("season.txt", {"title": title, "original_title": original, "season_number": season.season_number, "year": metadata.season_year or metadata.year, "ratings": self._ratings(metadata), "genres": ", ".join(metadata.genres), "actors": ", ".join(metadata.cast[:12]), "dub": metadata.dub or season.dub, "description": metadata.season_overview or metadata.overview})
+        return self._render("season.txt", {"title": title, "original_title": original, "season_number": season.season_number, "year": metadata.season_year or metadata.year, "ratings": self._ratings(metadata), "rankings": "\n".join(metadata.rankings), "genres": ", ".join(metadata.genres), "actors": ", ".join(metadata.cast[:12]) + (" и другие" if len(metadata.cast) > 12 else ""), "dub": metadata.dub or season.dub, "description": metadata.season_overview or metadata.overview})
 
     def media_group(self, season: SeasonGroup, first: int, last: int) -> str:
         return self._render("media_group.txt", {"season_number": season.season_number, "episode_from": first, "episode_to": last, "dub": season.dub})

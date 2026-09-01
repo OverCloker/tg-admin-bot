@@ -223,8 +223,29 @@ class RezkaProvider(MetadataProvider):
 
         year_match = re.search(r"(?:19|20)\d{2}", info_value("год", "рік", "дата выхода", "дата виходу"))
         genres_raw = info_value("жанр")
-        cast_raw = info_value("актер", "актёр", "в ролях", "у ролях", "актори")
-        rating_nodes = soup.select(".b-post__rating, .b-post__rating_table, .b-post__rating_table_wrap")
+        cast = [
+            _clean(node.get_text(" ", strip=True))
+            for node in soup.select(".persons-list-holder [itemprop='actor'] [itemprop='name']")
+            if _clean(node.get_text(" ", strip=True))
+        ]
+        if not cast:
+            cast_raw = info_value("актер", "актёр", "в ролях", "у ролях", "актори")
+            cast = [part.strip() for part in cast_raw.split(",") if part.strip()]
+        rankings: list[str] = []
+        for row in soup.select(".b-post__info tr"):
+            cells = row.select("td")
+            if len(cells) < 2 or "входит в списки" not in cells[0].get_text(" ", strip=True).casefold():
+                continue
+            for anchor in cells[-1].select("a"):
+                suffix = ""
+                sibling = anchor.next_sibling
+                if sibling is not None:
+                    suffix_match = re.search(r"\([^)]*мест[^)]*\)", str(sibling), re.I)
+                    suffix = f" {suffix_match.group(0)}" if suffix_match else ""
+                value = _clean(anchor.get_text(" ", strip=True) + suffix)
+                if value and value not in rankings:
+                    rankings.append(value)
+        rating_nodes = soup.select(".b-post__info_rates, .b-post__rating, .b-post__rating_table, .b-post__rating_table_wrap")
         rating_text = _clean(" ".join(node.get_text(" ", strip=True) for node in rating_nodes))
         if not rating_text:
             rating_text = _clean(soup.get_text(" ", strip=True))
@@ -238,7 +259,8 @@ class RezkaProvider(MetadataProvider):
             overview=_clean(overview_node.get_text(" ", strip=True)) if overview_node else "",
             poster_url=poster_url,
             genres=[part.strip() for part in re.split(r"[,/]", genres_raw) if part.strip()],
-            cast=[part.strip() for part in cast_raw.split(",") if part.strip()],
+            cast=cast,
+            rankings=rankings,
             imdb_rating=imdb.group(1) if imdb else "",
             imdb_votes=imdb.group(2) if imdb and imdb.group(2) else "",
             kinopoisk_rating=kinopoisk.group(1) if kinopoisk else "",

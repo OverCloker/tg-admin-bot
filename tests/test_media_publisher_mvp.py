@@ -292,6 +292,41 @@ def test_rezka_parser_extracts_card_fields():
     assert item.overview == "Описание сериала."
 
 
+def test_rezka_parser_extracts_real_rating_cast_and_best_lists_markup():
+    html = """
+    <div class="b-post__title"><h1>Монстры-коммандос</h1></div>
+    <div class="b-post__origtitle">Creature Commandos</div>
+    <div class="b-sidecover"><img src="/poster.jpg"></div>
+    <table class="b-post__info">
+      <tr><td class="l"><h2>Год</h2>:</td><td>2024</td></tr>
+      <tr><td class="l"><h2>Жанр</h2>:</td><td>Боевики, Приключения</td></tr>
+      <tr><td class="l"><h2>Рейтинги</h2>:</td><td>
+        <span class="b-post__info_rates imdb">IMDb: <span class="bold">7.8</span> <i>(29 181)</i></span>
+        <span class="b-post__info_rates kp">Кинопоиск: <span class="bold">7.64</span> <i>(9 130)</i></span>
+      </td></tr>
+      <tr><td class="l"><h2>Входит в списки</h2>:</td><td class="rd">
+        <a href="/best/action/">Лучшие мультфильмы боевики 2024 года</a> (11 место)<br/>
+        <a href="/best/fantasy/">Лучшие мультфильмы фэнтези 2024 года</a> (23 место)
+      </td></tr>
+      <tr><td colspan="2"><div class="persons-list-holder">
+        <span itemprop="actor"><span itemprop="name">Индира Варма</span></span>
+        <span itemprop="actor"><span itemprop="name">Шон Ганн</span></span>
+      </div></td></tr>
+    </table>
+    <div class="b-post__description_text">Описание мультсериала.</div>
+    """
+    item = RezkaProvider.parse_detail_html(html, "https://rezka.example/cartoons/commandos.html")
+    assert item.imdb_rating == "7.8"
+    assert item.imdb_votes == "29 181"
+    assert item.kinopoisk_rating == "7.64"
+    assert item.kinopoisk_votes == "9 130"
+    assert item.cast == ["Индира Варма", "Шон Ганн"]
+    assert item.rankings == [
+        "Лучшие мультфильмы боевики 2024 года (11 место)",
+        "Лучшие мультфильмы фэнтези 2024 года (23 место)",
+    ]
+
+
 def test_rezka_search_does_not_accept_unrelated_homepage_cards():
     html = """
     <div class="b-content__inline_item">
@@ -355,7 +390,7 @@ def test_templates_render_complete_season_card_and_media_caption():
     metadata = Metadata(
         title="Миротворец", season_year="2025", imdb_rating="8.3", imdb_votes="123 456",
         genres=["Боевик", "Комедия"], cast=["Джон Сина"], dub="HDrezka Studio",
-        season_overview="Описание второго сезона.",
+        rankings=["Лучшие сериалы 2025 года (3 место)"], season_overview="Описание второго сезона.",
     )
     season = SeasonGroup("Миротворец", 2, dub="HDrezka Studio")
     card = renderer.season(metadata, season)
@@ -365,6 +400,7 @@ def test_templates_render_complete_season_card_and_media_caption():
     assert "IMDb: 8.3 (123 456)" in card
     assert "В ролях: Джон Сина" in card
     assert "HDrezka Studio" in card
+    assert "Лучшие сериалы 2025 года (3 место)" in card
     assert "Описание второго сезона." in card
     assert media == "2 сезон\nСерии 1-8\nДубляж: HDrezka Studio"
 

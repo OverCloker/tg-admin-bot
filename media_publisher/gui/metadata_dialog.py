@@ -59,13 +59,16 @@ class MetadataPreviewDialog(QDialog):
         self.original_title_edit = QLineEdit()
         self.year_edit = QLineEdit()
         self.season_year_edit = QLineEdit()
-        self.genres_edit = QLineEdit()
+        self.genres_edit = QPlainTextEdit()
+        self.genres_edit.setMaximumHeight(65)
         self.cast_edit = QPlainTextEdit()
         self.cast_edit.setMaximumHeight(75)
         self.imdb_edit = QLineEdit()
         self.imdb_votes_edit = QLineEdit()
         self.kinopoisk_edit = QLineEdit()
         self.kinopoisk_votes_edit = QLineEdit()
+        self.rankings_edit = QPlainTextEdit()
+        self.rankings_edit.setMaximumHeight(100)
         self.dub_edit = QLineEdit()
         self.season_edit = QLineEdit()
         self.episodes_edit = QLineEdit()
@@ -80,6 +83,7 @@ class MetadataPreviewDialog(QDialog):
             ("Жанры", self.genres_edit), ("Актёры", self.cast_edit),
             ("IMDb", self.imdb_edit), ("Голоса IMDb", self.imdb_votes_edit),
             ("Кинопоиск", self.kinopoisk_edit), ("Голоса Кинопоиск", self.kinopoisk_votes_edit),
+            ("Входит в списки", self.rankings_edit),
             ("Дубляж", self.dub_edit), ("Сезон", self.season_edit),
             ("Серии", self.episodes_edit), ("Общее описание", self.overview_edit),
             ("Описание сезона", self.season_overview_edit), ("URL / файл постера", self.poster_edit),
@@ -112,10 +116,12 @@ class MetadataPreviewDialog(QDialog):
         buttons.addWidget(publish)
         root.addLayout(buttons)
         self.poster_edit.editingFinished.connect(lambda: self._load_poster(self.poster_edit.text()))
-        for widget in (self.title_edit, self.year_edit, self.genres_edit, self.dub_edit, self.season_edit, self.episodes_edit):
+        for widget in (self.title_edit, self.year_edit, self.dub_edit, self.season_edit, self.episodes_edit):
             widget.textChanged.connect(self._refresh_ready_preview)
+        self.genres_edit.textChanged.connect(self._refresh_ready_preview)
         self.overview_edit.textChanged.connect(self._refresh_ready_preview)
         self.season_overview_edit.textChanged.connect(self._refresh_ready_preview)
+        self.rankings_edit.textChanged.connect(self._refresh_ready_preview)
         self._load_result(0)
 
     def _load_result(self, index: int) -> None:
@@ -125,7 +131,7 @@ class MetadataPreviewDialog(QDialog):
         values = {
             self.title_edit: item.title, self.original_title_edit: item.original_title,
             self.year_edit: item.year, self.season_year_edit: item.season_year,
-            self.genres_edit: ", ".join(item.genres), self.imdb_edit: item.imdb_rating,
+            self.imdb_edit: item.imdb_rating,
             self.imdb_votes_edit: item.imdb_votes, self.kinopoisk_edit: item.kinopoisk_rating,
             self.kinopoisk_votes_edit: item.kinopoisk_votes, self.dub_edit: item.dub,
             self.season_edit: str(item.season_number or ""),
@@ -134,7 +140,9 @@ class MetadataPreviewDialog(QDialog):
         }
         for widget, value in values.items():
             widget.setText(value)
+        self.genres_edit.setPlainText(", ".join(item.genres))
         self.cast_edit.setPlainText(", ".join(item.cast))
+        self.rankings_edit.setPlainText("\n".join(item.rankings))
         self.overview_edit.setPlainText(item.overview)
         self.season_overview_edit.setPlainText(item.season_overview)
         self.source_label.setText(" · ".join(part for part in (item.source, item.source_url) if part))
@@ -223,10 +231,11 @@ class MetadataPreviewDialog(QDialog):
             original,
             title=self.title_edit.text().strip(), original_title=self.original_title_edit.text().strip(),
             year=self.year_edit.text().strip(), season_year=self.season_year_edit.text().strip(),
-            genres=[value.strip() for value in self.genres_edit.text().split(",") if value.strip()],
+            genres=[value.strip() for value in self.genres_edit.toPlainText().split(",") if value.strip()],
             cast=[value.strip() for value in self.cast_edit.toPlainText().split(",") if value.strip()],
             imdb_rating=self.imdb_edit.text().strip(), imdb_votes=self.imdb_votes_edit.text().strip(),
             kinopoisk_rating=self.kinopoisk_edit.text().strip(), kinopoisk_votes=self.kinopoisk_votes_edit.text().strip(),
+            rankings=[value.strip() for value in self.rankings_edit.toPlainText().splitlines() if value.strip()],
             dub=self.dub_edit.text().strip(), season_number=int(self.season_edit.text()) if self.season_edit.text().isdigit() else None,
             episode_numbers=[int(value.strip()) for value in self.episodes_edit.text().split(",") if value.strip().isdigit()],
             overview=self.overview_edit.toPlainText().strip(), season_overview=self.season_overview_edit.toPlainText().strip(),

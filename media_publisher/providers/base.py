@@ -12,6 +12,7 @@ class Metadata:
     poster_url: str = ""
     genres: list[str] = field(default_factory=list)
     cast: list[str] = field(default_factory=list)
+    rankings: list[str] = field(default_factory=list)
     imdb_rating: str = ""
     imdb_votes: str = ""
     kinopoisk_rating: str = ""
