@@ -15,7 +15,7 @@ class TelegramApiError(RuntimeError):
 class BotApiTransport(TelegramTransport):
     """Outgoing-only Bot API transport; it never calls getUpdates/webhooks."""
 
-    def __init__(self, token: str, timeout_seconds: int = 60):
+    def __init__(self, token: str, timeout_seconds: int = 1800):
         self.token = token.strip()
         self.timeout = aiohttp.ClientTimeout(total=timeout_seconds)
 
@@ -57,12 +57,33 @@ class BotApiTransport(TelegramTransport):
             form = aiohttp.FormData()
             for key, value in self._chat_data(chat_id, thread_id).items():
                 form.add_field(key, value)
-            form.add_field("photo", path.open("rb"), filename=path.name)
-            form.add_field("caption", caption)
-            return await self._request("sendPhoto", form=form)
+            with path.open("rb") as handle:
+                form.add_field("photo", handle, filename=path.name)
+                form.add_field("caption", caption)
+                return await self._request("sendPhoto", form=form)
         data = self._chat_data(chat_id, thread_id)
         data.update({"photo": str(photo), "caption": caption})
         return await self._request("sendPhoto", data=data)
+
+    async def _send_file(self, method: str, field: str, source: str | Path, caption: str, chat_id: str, thread_id: str) -> dict:
+        path = Path(source)
+        if not path.is_file():
+            raise TelegramApiError(f"Файл не найден: {path}")
+        form = aiohttp.FormData()
+        for key, value in self._chat_data(chat_id, thread_id).items():
+            form.add_field(key, value)
+        with path.open("rb") as handle:
+            content_type = "video/mp4" if method == "sendVideo" else "application/octet-stream"
+            form.add_field(field, handle, filename=path.name, content_type=content_type)
+            if caption:
+                form.add_field("caption", caption)
+            return await self._request(method, form=form)
+
+    async def send_video(self, video: str | Path, caption: str, chat_id: str, thread_id: str = "") -> dict:
+        return await self._send_file("sendVideo", "video", video, caption, chat_id, thread_id)
+
+    async def send_document(self, document: str | Path, caption: str, chat_id: str, thread_id: str = "") -> dict:
+        return await self._send_file("sendDocument", "document", document, caption, chat_id, thread_id)
 
     async def send_media_group(self, files: list[Path], caption: str, chat_id: str, thread_id: str = "") -> list[dict]:
         if not files:
@@ -89,4 +110,3 @@ class BotApiTransport(TelegramTransport):
         finally:
             for handle in handles:
                 handle.close()
-

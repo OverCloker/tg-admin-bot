@@ -18,6 +18,13 @@ class TelegramTransport(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def send_media_group(self, files: list[Path], caption: str, chat_id: str, thread_id: str = "") -> list[dict]:
+    async def send_video(self, video: str | Path, caption: str, chat_id: str, thread_id: str = "") -> dict:
         raise NotImplementedError
 
+    @abstractmethod
+    async def send_document(self, document: str | Path, caption: str, chat_id: str, thread_id: str = "") -> dict:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def send_media_group(self, files: list[Path], caption: str, chat_id: str, thread_id: str = "") -> list[dict]:
+        raise NotImplementedError

@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from media_publisher.config.settings import PublisherSettings
@@ -5,6 +6,36 @@ from media_publisher.media.grouper import group_media
 from media_publisher.media.scanner import scan_folder
 from media_publisher.models import MediaFileInfo, SeasonGroup, ShowGroup
 from media_publisher.parsers.filename_parser import parse_filename
+from media_publisher.services.publication_service import PublicationService
+from media_publisher.telegram.base_transport import TelegramTransport
+
+
+class RecordingTransport(TelegramTransport):
+    def __init__(self):
+        self.calls = []
+
+    async def test_connection(self):
+        return {}
+
+    async def send_message(self, text, chat_id, thread_id=""):
+        self.calls.append(("message", text, chat_id, thread_id))
+        return {"message_id": 1}
+
+    async def send_photo(self, photo, caption, chat_id, thread_id=""):
+        self.calls.append(("photo", photo, caption, chat_id, thread_id))
+        return {"message_id": 1}
+
+    async def send_video(self, video, caption, chat_id, thread_id=""):
+        self.calls.append(("video", video, caption, chat_id, thread_id))
+        return {"message_id": 1}
+
+    async def send_document(self, document, caption, chat_id, thread_id=""):
+        self.calls.append(("document", document, caption, chat_id, thread_id))
+        return {"message_id": 1}
+
+    async def send_media_group(self, files, caption, chat_id, thread_id=""):
+        self.calls.append(("group", files, caption, chat_id, thread_id))
+        return [{"message_id": index + 1} for index in range(len(files))]
 
 
 def test_filename_parser_extracts_series_data(tmp_path: Path):
@@ -84,6 +115,8 @@ def test_main_window_renders_model_tree(monkeypatch, tmp_path: Path):
     assert season_item.text(1) == "Сезон 1"
     assert episode_item.text(1) == "Серия 2"
     assert episode_item.text(2) == "Demo S01E02.mp4"
+    assert episode_item.data(0, 256)[0] == "media"
+    assert window.publish_button.text() == "Опубликовать выбранное"
     window.close()
     del app
 
@@ -135,3 +168,34 @@ def test_main_window_keeps_separate_topic_ids(monkeypatch, tmp_path: Path):
     assert loaded.topic_ids["Сериалы"] == "202"
     window.close()
     del app
+
+
+def test_publication_service_sends_movie_to_selected_topic(tmp_path: Path):
+    path = tmp_path / "Кино.mp4"
+    path.touch()
+    movie = MediaFileInfo(path=path, filename=path.name, title="Кино", media_type="movie")
+    transport = RecordingTransport()
+    service = PublicationService(transport, "-1002208538552", "2")
+    result = asyncio.run(service.publish_media(movie))
+    assert len(result) == 1
+    assert transport.calls == [("video", path, "Кино", "-1002208538552", "2")]
+
+
+def test_publication_service_sends_single_series_file_without_media_group(tmp_path: Path):
+    path = tmp_path / "Demo S01E01.mkv"
+    path.touch()
+    episode = MediaFileInfo(
+        path=path,
+        filename=path.name,
+        title="Demo",
+        season_number=1,
+        episode_number=1,
+        media_type="series",
+    )
+    season = SeasonGroup("Demo", 1, [episode])
+    transport = RecordingTransport()
+    service = PublicationService(transport, "-1001", "149")
+    result = asyncio.run(service.publish_season(season))
+    assert len(result) == 1
+    assert transport.calls[0][0] == "document"
+    assert transport.calls[0][-1] == "149"

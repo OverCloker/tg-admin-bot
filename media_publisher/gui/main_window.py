@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from PySide6.QtCore import QStandardPaths, QThread, Signal
+from PySide6.QtCore import Qt, QStandardPaths, QThread, Signal
 from PySide6.QtGui import QPalette, QColor
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from ..config.settings import PublisherSettings
 from ..media.grouper import group_media
 from ..media.scanner import scan_folder
+from ..services.publication_service import PublicationService
 from ..telegram.bot_api_transport import BotApiTransport, TelegramApiError
 
 
@@ -52,6 +53,36 @@ class ScanWorker(QThread):
             self.failed.emit(str(exc))
 
 
+class PublishWorker(QThread):
+    completed = Signal(int)
+    failed = Signal(str)
+
+    def __init__(self, token: str, chat_id: str, thread_id: str, target_type: str, target: object):
+        super().__init__()
+        self.token = token
+        self.chat_id = chat_id
+        self.thread_id = thread_id
+        self.target_type = target_type
+        self.target = target
+
+    def run(self) -> None:
+        try:
+            result = asyncio.run(self._publish())
+            self.completed.emit(len(result))
+        except Exception as exc:  # Telegram/network errors must return to the UI
+            self.failed.emit(str(exc))
+
+    async def _publish(self) -> list[dict]:
+        service = PublicationService(BotApiTransport(self.token), self.chat_id, self.thread_id)
+        if self.target_type == "media":
+            return await service.publish_media(self.target)
+        if self.target_type == "season":
+            return await service.publish_season(self.target)
+        if self.target_type == "show":
+            return await service.publish_show(self.target)
+        raise ValueError("Неизвестный тип публикации.")
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -61,6 +92,7 @@ class MainWindow(QMainWindow):
         self.settings = PublisherSettings.load(self.settings_path)
         self._active_destination = self.settings.selected_destination
         self.worker: ScanWorker | None = None
+        self.publish_worker: PublishWorker | None = None
         self._build_ui()
         self._load_settings()
 
@@ -97,9 +129,12 @@ class MainWindow(QMainWindow):
         self.connection_button.clicked.connect(self.test_connection)
         self.message_button = QPushButton("Отправить тест")
         self.message_button.clicked.connect(self.send_test)
+        self.publish_button = QPushButton("Опубликовать выбранное")
+        self.publish_button.clicked.connect(self.publish_selected)
         actions.addWidget(self.scan_button)
         actions.addWidget(self.connection_button)
         actions.addWidget(self.message_button)
+        actions.addWidget(self.publish_button)
         layout.addLayout(actions)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
@@ -172,18 +207,23 @@ class MainWindow(QMainWindow):
             if show.movies and not show.seasons and len(show.movies) == 1:
                 movie = show.movies[0]
                 show_item = QTreeWidgetItem([show.title, "Фильм", movie.filename, movie.warning or "найдено"])
+                show_item.setData(0, Qt.ItemDataRole.UserRole, ("media", movie))
                 self.tree.addTopLevelItem(show_item)
                 continue
             show_item = QTreeWidgetItem([show.title, "Сериал" if show.seasons else "Фильмы", "", ""])
+            show_item.setData(0, Qt.ItemDataRole.UserRole, ("show", show))
             self.tree.addTopLevelItem(show_item)
             for movie in show.movies:
-                QTreeWidgetItem(show_item, ["", "Фильм", movie.filename, movie.warning or "найдено"])
+                movie_item = QTreeWidgetItem(show_item, ["", "Фильм", movie.filename, movie.warning or "найдено"])
+                movie_item.setData(0, Qt.ItemDataRole.UserRole, ("media", movie))
             for season in show.seasons:
                 season_label = f"Сезон {season.season_number}" if season.season_number else "Сезон не определён"
                 season_item = QTreeWidgetItem(["", season_label, "", ", ".join(season.warnings)])
+                season_item.setData(0, Qt.ItemDataRole.UserRole, ("season", season))
                 show_item.addChild(season_item)
                 for media in season.episodes:
-                    QTreeWidgetItem(season_item, ["", f"Серия {media.episode_number or '—'}", media.filename, "найдено"])
+                    episode_item = QTreeWidgetItem(season_item, ["", f"Серия {media.episode_number or '—'}", media.filename, "найдено"])
+                    episode_item.setData(0, Qt.ItemDataRole.UserRole, ("media", media))
             show_item.setExpanded(True)
         self.status.setText(f"Найдено релизов: {len(groups)}")
 
@@ -221,6 +261,54 @@ class MainWindow(QMainWindow):
                 transport.send_message(f"Тестовое сообщение Media Publisher · {destination}", self.settings.chat_id, self.settings.thread_id),
                 f"Сообщение отправлено в тему «{destination}».",
             )
+
+    def publish_selected(self) -> None:
+        self._save_settings()
+        if not self.settings.bot_token or not self.settings.chat_id:
+            QMessageBox.warning(self, "Публикация", "Заполните токен бота и Chat ID.")
+            return
+        if not self.settings.thread_id:
+            QMessageBox.warning(self, "Публикация", "Укажите ID выбранной темы. Отправка в основную тему отключена.")
+            return
+        item = self.tree.currentItem()
+        target_data = item.data(0, Qt.ItemDataRole.UserRole) if item else None
+        if not target_data:
+            QMessageBox.warning(self, "Публикация", "Выберите фильм, сезон, серию или весь сериал в таблице.")
+            return
+        target_type, target = target_data
+        label = item.text(0) or item.text(1) or item.text(2)
+        answer = QMessageBox.question(
+            self,
+            "Подтверждение публикации",
+            f"Опубликовать «{label}» в тему «{self.settings.selected_destination}»\n"
+            f"Chat ID: {self.settings.chat_id}\nID темы: {self.settings.thread_id}?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.publish_button.setEnabled(False)
+        self.progress.show()
+        self.status.setText(f"Публикация в тему «{self.settings.selected_destination}»…")
+        self.publish_worker = PublishWorker(
+            self.settings.bot_token,
+            self.settings.chat_id,
+            self.settings.thread_id,
+            target_type,
+            target,
+        )
+        self.publish_worker.completed.connect(self.publish_completed)
+        self.publish_worker.failed.connect(self.publish_failed)
+        self.publish_worker.finished.connect(lambda: (self.publish_button.setEnabled(True), self.progress.hide()))
+        self.publish_worker.start()
+
+    def publish_completed(self, count: int) -> None:
+        self.status.setText(f"Публикация завершена: отправлено сообщений — {count}.")
+        QMessageBox.information(self, "Публикация", "Материал успешно опубликован.")
+
+    def publish_failed(self, message: str) -> None:
+        self.status.setText("Ошибка публикации")
+        QMessageBox.critical(self, "Публикация", message)
 
 
 def apply_dark_palette(app: QApplication) -> None:
