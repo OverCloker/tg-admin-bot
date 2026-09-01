@@ -47,11 +47,18 @@ def test_group_media_keeps_movies_out_of_season_zero(tmp_path: Path):
 
 def test_settings_round_trip_uses_utf8(tmp_path: Path):
     path = tmp_path / "settings.json"
-    settings = PublisherSettings(folder="D:/Медиа", chat_id="-1001")
+    settings = PublisherSettings(
+        folder="D:/Медиа",
+        chat_id="-1001",
+        selected_destination="Сериалы",
+        topic_ids={"Фильмы": "101", "Сериалы": "202"},
+    )
     settings.save(path)
     loaded = PublisherSettings.load(path)
     assert loaded.folder == "D:/Медиа"
     assert loaded.chat_id == "-1001"
+    assert loaded.selected_destination == "Сериалы"
+    assert loaded.topic_ids == {"Фильмы": "101", "Сериалы": "202"}
 
 
 def test_main_window_renders_model_tree(monkeypatch, tmp_path: Path):
@@ -102,5 +109,29 @@ def test_main_window_renders_movie_without_fake_season(monkeypatch, tmp_path: Pa
     assert item.text(1) == "Фильм"
     assert item.text(2) == "Кино.mp4"
     assert item.childCount() == 0
+    window.close()
+    del app
+
+
+def test_main_window_keeps_separate_topic_ids(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from media_publisher.gui import main_window
+
+    monkeypatch.setattr(main_window, "default_settings_path", lambda: tmp_path / "settings.json")
+    app = QApplication.instance() or QApplication([])
+    window = main_window.MainWindow()
+    window.thread_edit.setText("101")
+    window.destination_combo.setCurrentText("Сериалы")
+    window.thread_edit.setText("202")
+    window.destination_combo.setCurrentText("Фильмы")
+    assert window.thread_edit.text() == "101"
+    window.destination_combo.setCurrentText("Сериалы")
+    assert window.thread_edit.text() == "202"
+    window._save_settings()
+    loaded = PublisherSettings.load(tmp_path / "settings.json")
+    assert loaded.topic_ids["Фильмы"] == "101"
+    assert loaded.topic_ids["Сериалы"] == "202"
     window.close()
     del app

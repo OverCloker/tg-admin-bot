@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QStandardPaths, QThread, Signal
 from PySide6.QtGui import QPalette, QColor
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QMessageBox, QProgressBar, QPushButton, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
@@ -15,6 +15,20 @@ from ..config.settings import PublisherSettings
 from ..media.grouper import group_media
 from ..media.scanner import scan_folder
 from ..telegram.bot_api_transport import BotApiTransport, TelegramApiError
+
+
+PUBLISH_DESTINATIONS = (
+    "Фильмы",
+    "Мульты",
+    "Пожелания",
+    "Музыка",
+    "Фото",
+    "Аниме",
+    "Сериалы",
+    "Сверхъестественное",
+    "Извне",
+    "Властелин Колец",
+)
 
 
 def default_settings_path() -> Path:
@@ -45,6 +59,7 @@ class MainWindow(QMainWindow):
         self.resize(980, 680)
         self.settings_path = default_settings_path()
         self.settings = PublisherSettings.load(self.settings_path)
+        self._active_destination = self.settings.selected_destination
         self.worker: ScanWorker | None = None
         self._build_ui()
         self._load_settings()
@@ -67,8 +82,13 @@ class MainWindow(QMainWindow):
         self.chat_edit = QLineEdit()
         self.chat_edit.setPlaceholderText("например, -1001234567890")
         form.addRow("Chat ID", self.chat_edit)
+        self.destination_combo = QComboBox()
+        self.destination_combo.addItems(PUBLISH_DESTINATIONS)
+        self.destination_combo.currentTextChanged.connect(self.destination_changed)
+        form.addRow("Направление", self.destination_combo)
         self.thread_edit = QLineEdit()
-        form.addRow("Тема (необязательно)", self.thread_edit)
+        self.thread_edit.setPlaceholderText("ID темы из ссылки на сообщение")
+        form.addRow("ID темы", self.thread_edit)
         layout.addLayout(form)
         actions = QHBoxLayout()
         self.scan_button = QPushButton("Сканировать")
@@ -97,14 +117,34 @@ class MainWindow(QMainWindow):
         self.folder_edit.setText(self.settings.folder)
         self.token_edit.setText(self.settings.bot_token)
         self.chat_edit.setText(self.settings.chat_id)
-        self.thread_edit.setText(self.settings.thread_id)
+        destination = self.settings.selected_destination
+        if destination not in PUBLISH_DESTINATIONS:
+            destination = PUBLISH_DESTINATIONS[0]
+        self.destination_combo.blockSignals(True)
+        self.destination_combo.setCurrentText(destination)
+        self.destination_combo.blockSignals(False)
+        self._active_destination = destination
+        self.thread_edit.setText(self.settings.topic_ids.get(destination, self.settings.thread_id))
 
     def _save_settings(self) -> None:
         self.settings.folder = self.folder_edit.text().strip()
         self.settings.bot_token = self.token_edit.text().strip()
         self.settings.chat_id = self.chat_edit.text().strip()
-        self.settings.thread_id = self.thread_edit.text().strip()
+        destination = self.destination_combo.currentText()
+        topic_id = self.thread_edit.text().strip()
+        self.settings.selected_destination = destination
+        self.settings.topic_ids[destination] = topic_id
+        self.settings.thread_id = topic_id
         self.settings.save(self.settings_path)
+
+    def destination_changed(self, destination: str) -> None:
+        if self._active_destination:
+            self.settings.topic_ids[self._active_destination] = self.thread_edit.text().strip()
+        self._active_destination = destination
+        self.settings.selected_destination = destination
+        topic_id = self.settings.topic_ids.get(destination, "")
+        self.settings.thread_id = topic_id
+        self.thread_edit.setText(topic_id)
 
     def choose_folder(self) -> None:
         selected = QFileDialog.getExistingDirectory(self, "Выберите папку с медиа", self.folder_edit.text())
@@ -173,7 +213,14 @@ class MainWindow(QMainWindow):
     def send_test(self) -> None:
         transport = self._transport()
         if transport:
-            self._run_async(transport.send_message("Тестовое сообщение Media Publisher", self.settings.chat_id, self.settings.thread_id), "Сообщение отправлено.")
+            if not self.settings.thread_id:
+                QMessageBox.warning(self, "Telegram", "Укажите ID выбранной темы. Отправка в основную тему отключена.")
+                return
+            destination = self.settings.selected_destination
+            self._run_async(
+                transport.send_message(f"Тестовое сообщение Media Publisher · {destination}", self.settings.chat_id, self.settings.thread_id),
+                f"Сообщение отправлено в тему «{destination}».",
+            )
 
 
 def apply_dark_palette(app: QApplication) -> None:
