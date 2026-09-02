@@ -69,6 +69,7 @@ from .youtube_media import (
 )
 from .staff import StaffService
 from .staff_handlers import configure_staff, staff_error_handler, staff_router
+from .telegram_client import bot_api_method_url, create_bot
 from .user_profile import build_user_profile, profile_chat_text
 from .keyboards import (
     QUOTES_PAGE_SIZE,
@@ -4050,7 +4051,7 @@ async def send_quiet_media_to_chat(
 
 
 async def telegram_api_call(bot: Bot, method: str, payload: dict) -> dict:
-    url = f"https://api.telegram.org/bot{bot.token}/{method}"
+    url = bot_api_method_url(str(bot.token), method, load_config().bot_api_url)
     timeout = aiohttp.ClientTimeout(total=8)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.post(url, json=payload) as response:
@@ -4062,7 +4063,7 @@ async def telegram_api_call(bot: Bot, method: str, payload: dict) -> dict:
 
 
 async def telegram_api_get(bot: Bot, method: str) -> dict:
-    url = f"https://api.telegram.org/bot{bot.token}/{method}"
+    url = bot_api_method_url(str(bot.token), method, load_config().bot_api_url)
     timeout = aiohttp.ClientTimeout(total=8)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.get(url) as response:
@@ -12632,7 +12633,7 @@ async def main() -> None:
     if awarded:
         logging.info("Backfilled dig achievements: %s", awarded)
 
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher()
     staff_router.message.middleware(StaffTopicMiddleware())
     router.message.middleware(DropStaleMessagesMiddleware())

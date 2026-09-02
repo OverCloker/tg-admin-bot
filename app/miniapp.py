@@ -46,6 +46,7 @@ from .dig_game import (
 )
 from .miniapp_ui import MINI_APP_HTML as MINI_APP_UI_HTML
 from .premium import PremiumService
+from .telegram_client import create_bot
 from .user_profile import build_user_profile
 
 router = APIRouter()
@@ -697,7 +698,7 @@ def _miniapp_is_app_admin(db: Database, user_id: int) -> bool:
 
 
 async def _refresh_miniapp_telegram_admins(db: Database) -> list[dict[str, Any]]:
-    bot = Bot(token=load_config().bot_token)
+    bot = create_bot(load_config())
     refreshed: list[dict[str, Any]] = []
     try:
         for chat in db.list_chats():
@@ -1155,7 +1156,7 @@ async def _media_duration_seconds(path: Path) -> float:
 
 
 async def _store_trigger_media_in_telegram(user_id: int, media_type: str, path: Path, filename: str | None = None) -> tuple[str, str] | None:
-    bot = Bot(token=load_config().bot_token)
+    bot = create_bot(load_config())
     sent = None
     upload = FSInputFile(path, filename=filename or path.name)
     try:
@@ -1427,7 +1428,7 @@ async def _ensure_miniapp_avatar(user_id: int) -> str | None:
         return path
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    bot = Bot(token=load_config().bot_token)
+    bot = create_bot(load_config())
     tmp_path = f"{path}.tmp"
     try:
         photos = await bot.get_user_profile_photos(user_id=user_id, limit=1)
@@ -2201,7 +2202,7 @@ async def miniapp_shop_star_invoice(
         db.close()
 
     title, description, price = game.dig_star_invoice(payload.item_key)
-    bot = Bot(token=load_config().bot_token)
+    bot = create_bot(load_config())
     try:
         link = await bot.create_invoice_link(
             title=title,
@@ -3502,7 +3503,7 @@ def super_game_start(x_telegram_init_data: str | None = Header(default=None, ali
 @router.post("/miniapp/super-game/invoice")
 async def super_game_invoice(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict[str, str]:
     user = _telegram_user(x_telegram_init_data)
-    bot = Bot(token=load_config().bot_token)
+    bot = create_bot(load_config())
     try:
         link = await bot.create_invoice_link(
             title="Супер-игра 9×9",

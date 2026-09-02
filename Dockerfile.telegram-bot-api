@@ -1,0 +1,36 @@
+FROM debian:stable-slim AS build
+
+ARG TELEGRAM_BOT_API_REF=master
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        cmake \
+        g++ \
+        gperf \
+        git \
+        make \
+        libssl-dev \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --recursive https://github.com/tdlib/telegram-bot-api.git /src/telegram-bot-api \
+    && cd /src/telegram-bot-api \
+    && git checkout "${TELEGRAM_BOT_API_REF}" \
+    && git submodule update --init --recursive \
+    && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/telegram-bot-api \
+    && cmake --build build --target install --parallel
+
+FROM debian:stable-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl libssl-dev zlib1g \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --home-dir /var/lib/telegram-bot-api --create-home telegram-bot-api
+
+COPY --from=build /opt/telegram-bot-api/bin/telegram-bot-api /usr/local/bin/telegram-bot-api
+
+USER telegram-bot-api
+WORKDIR /var/lib/telegram-bot-api
+
+EXPOSE 8081

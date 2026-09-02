@@ -36,6 +36,7 @@ from .media_tasks import MediaTaskService
 from .media_processor import find_ffmpeg
 from .premium import PLANS, PREMIUM_PERIOD_DAYS, PremiumError, PremiumLimitError, PremiumRequiredError, PremiumService, plan_public_dict
 from .staff import StaffService
+from .telegram_client import create_bot
 from .user_profile import build_user_profile
 from .youtube_media import DOWNLOAD_TYPES, YoutubeMediaError, cleanup_youtube_file, download_youtube, inspect_youtube
 from .miniapp import router as miniapp_router
@@ -133,7 +134,7 @@ ADMIN_PERMISSION_IDS = ADMIN_FEATURE_IDS | {item["id"] for items in ADMIN_SUBFEA
 async def notify_staff_autoreply_change(description: str) -> None:
     config = load_config()
     staff = StaffService(config.db_path, config.owner_id)
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         await staff.auto_reply_changed(bot, description)
     except Exception:
@@ -146,7 +147,7 @@ async def notify_staff_autoreply_change(description: str) -> None:
 async def notify_staff_api_audit(actor_name: str, action: str, chat_title: str | None, details: str) -> None:
     config = load_config()
     staff = StaffService(config.db_path, config.owner_id)
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     lines = [
         f"<b>{escape(action)}</b>",
         f"Кто: {escape(actor_name)}",
@@ -166,7 +167,7 @@ async def notify_staff_api_audit(actor_name: str, action: str, chat_title: str |
 async def notify_staff_critical(text: str) -> None:
     config = load_config()
     staff = StaffService(config.db_path, config.owner_id)
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         await staff.log(bot, "CRITICAL", text, notify=True)
     finally:
@@ -3027,7 +3028,7 @@ async def ensure_user_avatar(user_id: int) -> str | None:
 
     config = load_config()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     tmp_path = f"{path}.tmp"
     try:
         photos = await bot.get_user_profile_photos(user_id=user_id, limit=1)
@@ -3332,7 +3333,7 @@ async def live_chat_admin(user_id: int, chat_id: int) -> bool:
     if cached and cached[0] > now and not cached[1]:
         return False
     config = load_config()
-    bot = Bot(token=config.bot_token)
+    bot = create_bot(config)
     allowed = False
     try:
         member = await bot.get_chat_member(chat_id, user_id)
@@ -3585,7 +3586,7 @@ async def user_premium_invoice(plan_key: str, user: Annotated[dict[str, Any], De
         raise HTTPException(status_code=404, detail="Premium plan not found")
     config = load_config()
     payload = f"premium_plan:{plan.key}:{int(user['userId'])}:{secrets.token_hex(8)}"
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         url = await bot.create_invoice_link(
             title=plan.title,
@@ -3744,7 +3745,7 @@ async def user_auth_start() -> dict[str, Any]:
     with open_db() as db:
         db.create_user_login_request(login_id, hash_secret(secret), expires_at.isoformat(timespec="seconds"))
     config = load_config()
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         me = await bot.get_me()
     finally:
@@ -4167,7 +4168,7 @@ def user_logout(user: Annotated[dict[str, Any], Depends(require_user)]) -> dict[
 async def user_subscription_invoice(user: Annotated[dict[str, Any], Depends(require_user)]) -> dict[str, Any]:
     config = load_config()
     payload = f"user_subscription:{int(user['userId'])}:{secrets.token_hex(8)}"
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         url = await bot.create_invoice_link(
             title="Подписка MonkeyDin",
@@ -4414,7 +4415,7 @@ async def status() -> dict[str, Any]:
         permissions = feature_permissions_for_actor(db)
         feature_permissions = feature_permission_modes_for_actor(db)
 
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         me = await bot.get_me()
     finally:
@@ -4587,7 +4588,7 @@ async def chat_admins(chat_id: int) -> dict[str, Any]:
     config = load_config()
     with open_db() as db:
         require_chat(db, chat_id)
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         members = await bot.get_chat_administrators(chat_id)
     except (TelegramBadRequest, TelegramForbiddenError) as exc:
@@ -4635,7 +4636,7 @@ async def send_message(chat_id: int, payload: TextPayload) -> dict[str, Any]:
     with open_db() as db:
         require_admin_feature(db, "send.text")
         require_chat(db, chat_id)
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         message = await bot.send_message(chat_id=chat_id, text=payload.text, parse_mode=None)
     finally:
@@ -4661,7 +4662,7 @@ async def send_media(chat_id: int, payload: MediaPayload) -> dict[str, Any]:
     filename = payload.filename.strip() or "file"
     mime = payload.mimeType.lower().strip()
     file = BufferedInputFile(data, filename=filename)
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         if payload.asVoice:
             message = await bot.send_voice(chat_id=chat_id, voice=file, caption=payload.caption, parse_mode=None)
@@ -4697,7 +4698,7 @@ async def feedback(payload: TextPayload) -> dict[str, Any]:
         if actor_id is not None
         else None
     )
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     sent = 0
     try:
         for admin_id in config.bot_admin_ids:
@@ -4723,7 +4724,7 @@ async def check_access(chat_id: int) -> dict[str, Any]:
         if not chat:
             raise HTTPException(status_code=404, detail="Chat not found")
 
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         me = await bot.get_me()
         member = await bot.get_chat_member(chat_id, me.id)
@@ -4851,7 +4852,7 @@ def update_quiet(chat_id: int, payload: QuietPayload) -> dict[str, Any]:
 @app.post("/admin/chats/{chat_id}/quiet/manual", dependencies=[Depends(require_admin)])
 async def quiet_manual(chat_id: int, payload: QuietManualPayload) -> dict[str, Any]:
     config = load_config()
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         with open_db() as db:
             require_admin_feature(db, "quiet.manual")
@@ -4911,7 +4912,7 @@ async def set_quiet_media(chat_id: int, payload: QuietMediaPayload) -> dict[str,
     filename = payload.filename.strip() or "quiet-media"
     mime = payload.mimeType.lower().strip()
     file = BufferedInputFile(data, filename=filename)
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         with open_db() as db:
             require_admin_feature(db, "quiet.mediaSave")
@@ -5078,7 +5079,7 @@ async def add_advertisement(chat_id: int, payload: AdvertisementPayload) -> dict
         require_admin_feature(db, "ads.settings")
         require_chat(db, chat_id)
     config = load_config()
-    bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         attachments = await upload_advertisement_attachments(bot, actor_id, payload.attachments)
     finally:
@@ -5098,7 +5099,7 @@ async def add_advertisement(chat_id: int, payload: AdvertisementPayload) -> dict
         )
         db.replace_advertisement_attachments(ad_id, attachments)
     if payload.enabled and payload.startMode == "now":
-        bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         try:
             with open_db() as db:
                 await publish_advertisement_now(bot, db, ad_id)
@@ -5120,7 +5121,7 @@ async def edit_advertisement(chat_id: int, ad_id: int, payload: AdvertisementPay
     attachments: list[tuple[str, str, str]] | None = None
     if payload.replaceAttachments:
         config = load_config()
-        bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         try:
             attachments = await upload_advertisement_attachments(bot, actor_id, payload.attachments)
         finally:
@@ -5142,7 +5143,7 @@ async def edit_advertisement(chat_id: int, ad_id: int, payload: AdvertisementPay
             db.replace_advertisement_attachments(ad_id, attachments)
     if changed and payload.enabled and payload.startMode == "now":
         config = load_config()
-        bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         try:
             with open_db() as db:
                 await publish_advertisement_now(bot, db, ad_id)

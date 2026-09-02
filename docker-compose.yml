@@ -1,4 +1,30 @@
 services:
+  telegram-bot-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.telegram-bot-api
+    image: otveto4ka-telegram-bot-api:latest
+    env_file:
+      - .env
+    command:
+      - telegram-bot-api
+      - --local
+      - --http-ip-address=0.0.0.0
+      - --http-port=8081
+      - --dir=/var/lib/telegram-bot-api
+    ports:
+      - "${BOT_API_PORT_BIND:-127.0.0.1}:8081:8081"
+    volumes:
+      - telegram_bot_api_data:/var/lib/telegram-bot-api
+    profiles:
+      - local-bot-api
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
   bot:
     build:
       context: .
@@ -84,6 +110,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  telegram_bot_api_data:
   bot_data:
   bot_downloads:
   bot_logs:

@@ -83,6 +83,21 @@ SPOTIFY_CLIENT_ID=
 SPOTIFY_CLIENT_SECRET=
 ```
 
+Optional local Telegram Bot API server for publishing videos larger than 50 MB:
+
+```env
+TELEGRAM_API_ID=123456
+TELEGRAM_API_HASH=your_api_hash_from_my_telegram_org
+BOT_API_URL=http://telegram-bot-api:8081
+BOT_API_PORT_BIND=127.0.0.1
+```
+
+`BOT_API_URL` is used by the Docker `bot` and `api` containers. Keep
+`BOT_API_PORT_BIND=127.0.0.1` if only the Docker services need the local Bot API.
+For the Windows Media Publisher over Tailscale, set `BOT_API_PORT_BIND` to the
+server Tailscale IP and put `http://TAILSCALE_IP:8081` into the desktop app's
+`Bot API URL` field.
+
 Build and start:
 
 ```bash
@@ -91,6 +106,26 @@ docker compose ps
 docker compose logs -f --tail=100 bot
 docker compose logs -f --tail=100 api
 ```
+
+To build and start the optional local Telegram Bot API server too:
+
+```bash
+docker compose --profile local-bot-api up -d --build
+```
+
+Before switching the production bot token to the local server, stop all running
+bot processes that use the same token, then deregister the token from Telegram's
+cloud Bot API once:
+
+```bash
+docker compose stop bot api
+curl -fsS "https://api.telegram.org/bot$BOT_TOKEN/logOut"
+docker compose --profile local-bot-api up -d --build
+```
+
+After this switch, keep all project processes on the same local Bot API endpoint.
+Running the same token against both `https://api.telegram.org` and a local server
+can break update delivery.
 
 Short smoke check:
 

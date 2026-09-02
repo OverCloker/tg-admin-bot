@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 @dataclass(frozen=True)
 class Config:
     bot_token: str
+    bot_api_url: str
     db_path: str
     bot_admin_ids: set[int]
     owner_id: int | None
@@ -35,6 +36,7 @@ def load_config() -> Config:
 
     return Config(
         bot_token=token,
+        bot_api_url=os.getenv("BOT_API_URL", "https://api.telegram.org").strip().rstrip("/") or "https://api.telegram.org",
         db_path=os.getenv("DB_PATH", "bot.sqlite3").strip() or "bot.sqlite3",
         bot_admin_ids=admin_ids,
         owner_id=owner_id,
