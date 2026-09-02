@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from ..models import MediaFileInfo, SeasonGroup
 from ..providers.base import Metadata
 from ..services.template_renderer import TemplateRenderer
+from ..services.publication_service import PublicationService
 
 
 class MetadataPreviewDialog(QDialog):
@@ -94,7 +95,7 @@ class MetadataPreviewDialog(QDialog):
         scroll.setWidget(body)
         root.addWidget(scroll, 1)
 
-        root.addWidget(QLabel("Так будет выглядеть подпись карточки в Telegram:"))
+        root.addWidget(QLabel("Полный текст публикации (сверх лимита подписи будет отправлен продолжением):"))
         self.ready_preview = QPlainTextEdit()
         self.ready_preview.setReadOnly(True)
         self.ready_preview.setMaximumHeight(180)
@@ -207,11 +208,16 @@ class MetadataPreviewDialog(QDialog):
             text = renderer.season(metadata, self.target)
             numbers = [item.episode_number for item in self.target.episodes if item.episode_number is not None]
             first, last = (min(numbers), max(numbers)) if numbers else (1, len(self.target.episodes))
-            next_text = renderer.media_group(self.target, first, last) + f"\n\n{len(self.target.episodes)} видео"
+            media_text = renderer.media_group(self.target, first, last) + f"\n\n{len(self.target.episodes)} видео"
         else:
             dub = self.target.dub if isinstance(self.target, MediaFileInfo) else ""
             text = renderer.movie(metadata, dub or "")
-            next_text = "Следующее сообщение: видеофайл"
+            media_text = "Видеофайл"
+        continuations = max(0, len(PublicationService.card_parts(text)) - 1)
+        next_text = (
+            f"После постера: продолжений текста — {continuations}. Затем: {media_text}"
+            if continuations else f"После постера: {media_text}"
+        )
         self.ready_preview.setPlainText(text)
         self.next_message.setText(next_text)
 

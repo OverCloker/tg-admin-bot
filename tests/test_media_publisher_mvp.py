@@ -13,6 +13,7 @@ from media_publisher.services.metadata_service import MetadataService
 from media_publisher.services.publication_service import PublicationService
 from media_publisher.services.template_renderer import TemplateRenderer
 from media_publisher.telegram.base_transport import TelegramTransport
+from media_publisher.telegram.bot_api_transport import BotApiTransport, TelegramApiError
 
 
 class RecordingTransport(TelegramTransport):
@@ -145,6 +146,7 @@ def test_settings_round_trip_uses_utf8(tmp_path: Path):
     settings = PublisherSettings(
         folder="D:/Медиа",
         chat_id="-1001",
+        bot_api_url="http://127.0.0.1:8081",
         selected_destination="Сериалы",
         topic_ids={"Фильмы": "101", "Сериалы": "202"},
     )
@@ -152,6 +154,7 @@ def test_settings_round_trip_uses_utf8(tmp_path: Path):
     loaded = PublisherSettings.load(path)
     assert loaded.folder == "D:/Медиа"
     assert loaded.chat_id == "-1001"
+    assert loaded.bot_api_url == "http://127.0.0.1:8081"
     assert loaded.selected_destination == "Сериалы"
     assert loaded.topic_ids == {"Фильмы": "101", "Сериалы": "202"}
 
@@ -440,3 +443,102 @@ def test_publication_retry_does_not_send_card_twice(tmp_path: Path):
         database.close()
     assert [call[0] for call in transport.calls].count("photo") == 1
     assert [call[0] for call in transport.calls].count("group") == 2
+
+
+def test_long_card_is_sent_as_photo_caption_and_continuation_before_video(tmp_path: Path):
+    path = tmp_path / "Кино.mp4"
+    path.touch()
+    movie = MediaFileInfo(path=path, filename=path.name, title="Кино", media_type="movie")
+    metadata = Metadata(
+        title="Кино", year="2025", poster_url="https://example.test/poster.jpg",
+        overview="Очень длинное описание. " * 100,
+    )
+    transport = RecordingTransport()
+    result = asyncio.run(PublicationService(transport, "-1001", "2").publish_media(movie, metadata=metadata))
+    assert len(result) == 3
+    assert [call[0] for call in transport.calls] == ["photo", "message", "video"]
+    assert len(transport.calls[0][2]) <= 1024
+    assert "Очень длинное описание" in transport.calls[1][1]
+
+
+def test_card_text_split_respects_telegram_limits_without_losing_tail():
+    text = ("Строка карточки с данными\n" * 300) + "КОНЕЦ"
+    parts = PublicationService.card_parts(text)
+    assert len(parts[0]) <= 1024
+    assert all(len(part) <= 4096 for part in parts[1:])
+    assert parts[-1].endswith("КОНЕЦ")
+
+
+def test_cloud_bot_api_rejects_large_file_before_upload(tmp_path: Path):
+    path = tmp_path / "large.mp4"
+    with path.open("wb") as handle:
+        handle.truncate(51 * 1024 * 1024)
+    transport = BotApiTransport("test-token")
+    try:
+        transport.validate_uploads([path])
+    except TelegramApiError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Cloud upload limit was not enforced")
+    assert "51.0 МБ" in message
+    assert "локальный Bot API server" in message
+
+
+def test_local_bot_api_accepts_file_under_two_gigabytes(tmp_path: Path):
+    path = tmp_path / "episode.mp4"
+    with path.open("wb") as handle:
+        handle.truncate(220 * 1024 * 1024)
+    transport = BotApiTransport("test-token", api_url="http://127.0.0.1:8081")
+    transport.validate_uploads([path])
+
+
+def test_size_preflight_happens_before_poster_is_sent(tmp_path: Path):
+    class LimitedTransport(RecordingTransport):
+        def validate_uploads(self, paths):
+            raise TelegramApiError("слишком большой файл")
+
+    path = tmp_path / "movie.mp4"
+    path.touch()
+    movie = MediaFileInfo(path=path, filename=path.name, title="Кино", media_type="movie")
+    transport = LimitedTransport()
+    try:
+        asyncio.run(PublicationService(transport, "-1001").publish_media(movie, metadata=Metadata(title="Кино", poster_url="poster")))
+    except TelegramApiError:
+        pass
+    else:
+        raise AssertionError("Expected preflight failure")
+    assert transport.calls == []
+
+
+def test_retry_after_failed_text_continuation_does_not_duplicate_photo(tmp_path: Path):
+    class FailContinuationOnceTransport(RecordingTransport):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+
+        async def send_message(self, text, chat_id, thread_id=""):
+            self.calls.append(("message", text, chat_id, thread_id))
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("temporary message error")
+            return {"message_id": 2}
+
+    path = tmp_path / "movie.mp4"
+    path.touch()
+    movie = MediaFileInfo(path=path, filename=path.name, title="Кино", media_type="movie")
+    metadata = Metadata(title="Кино", poster_url="poster", overview="Длинное описание. " * 100)
+    database = PublisherDatabase(tmp_path / "publisher.sqlite3")
+    transport = FailContinuationOnceTransport()
+    key = PublicationService.make_operation_key("-1001", "2", [path], metadata)
+    service = PublicationService(transport, "-1001", "2", database, key)
+    try:
+        try:
+            asyncio.run(service.publish_media(movie, metadata=metadata))
+        except RuntimeError:
+            pass
+        asyncio.run(service.publish_media(movie, metadata=metadata))
+    finally:
+        database.close()
+    assert [call[0] for call in transport.calls].count("photo") == 1
+    assert [call[0] for call in transport.calls].count("message") == 2
+    assert [call[0] for call in transport.calls].count("video") == 1

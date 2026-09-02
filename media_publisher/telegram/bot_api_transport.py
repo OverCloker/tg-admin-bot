@@ -15,13 +15,36 @@ class TelegramApiError(RuntimeError):
 class BotApiTransport(TelegramTransport):
     """Outgoing-only Bot API transport; it never calls getUpdates/webhooks."""
 
-    def __init__(self, token: str, timeout_seconds: int = 1800):
+    CLOUD_UPLOAD_LIMIT = 50 * 1024 * 1024
+    LOCAL_UPLOAD_LIMIT = 2000 * 1024 * 1024
+
+    def __init__(self, token: str, timeout_seconds: int = 1800, api_url: str = "https://api.telegram.org"):
         self.token = token.strip()
         self.timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        self.api_url = (api_url.strip() or "https://api.telegram.org").rstrip("/")
 
     @property
     def base_url(self) -> str:
-        return f"https://api.telegram.org/bot{self.token}"
+        return f"{self.api_url}/bot{self.token}"
+
+    @property
+    def max_upload_bytes(self) -> int:
+        return self.CLOUD_UPLOAD_LIMIT if self.api_url.casefold() == "https://api.telegram.org" else self.LOCAL_UPLOAD_LIMIT
+
+    def validate_uploads(self, paths: list[Path]) -> None:
+        oversized = [(path, path.stat().st_size) for path in paths if path.is_file() and path.stat().st_size > self.max_upload_bytes]
+        if not oversized:
+            return
+        path, size = max(oversized, key=lambda item: item[1])
+        current = size / (1024 * 1024)
+        limit = self.max_upload_bytes / (1024 * 1024)
+        if self.max_upload_bytes == self.CLOUD_UPLOAD_LIMIT:
+            raise TelegramApiError(
+                f"Видео «{path.name}» занимает {current:.1f} МБ, облачный Telegram Bot API допускает до {limit:.0f} МБ. "
+                "Карточка не отправлена. Настройте локальный Bot API server и укажите его адрес в поле «Bot API URL» — "
+                "он поддерживает файлы до 2000 МБ."
+            )
+        raise TelegramApiError(f"Видео «{path.name}» занимает {current:.1f} МБ и превышает лимит текущего Bot API server: {limit:.0f} МБ.")
 
     async def _request(self, method: str, data: dict | None = None, form: aiohttp.FormData | None = None):
         if not self.token:
@@ -31,8 +54,18 @@ class BotApiTransport(TelegramTransport):
                 try:
                     payload = await response.json(content_type=None)
                 except (ValueError, aiohttp.ClientError) as exc:
+                    if response.status == 413:
+                        raise TelegramApiError(
+                            "Bot API отклонил загрузку: файл или HTTP-запрос слишком большой. "
+                            "Проверьте лимит сервера и reverse proxy (HTTP 413)."
+                        ) from exc
                     raise TelegramApiError(f"Telegram вернул некорректный ответ (HTTP {response.status}).") from exc
         if not payload.get("ok"):
+            if response.status == 413:
+                raise TelegramApiError(
+                    "Bot API отклонил загрузку: файл или HTTP-запрос слишком большой (HTTP 413). "
+                    "Для видео больше 50 МБ используйте локальный Bot API server; для своего reverse proxy увеличьте лимит тела запроса."
+                )
             raise TelegramApiError(str(payload.get("description") or f"Ошибка Telegram API: {method}"))
         return payload.get("result")
 

@@ -10,6 +10,7 @@ from pathlib import Path
 class PublisherSettings:
     folder: str = ""
     bot_token: str = ""
+    bot_api_url: str = "https://api.telegram.org"
     chat_id: str = ""
     thread_id: str = ""
     selected_destination: str = "Фильмы"

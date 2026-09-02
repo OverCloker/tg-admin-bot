@@ -21,7 +21,7 @@ class TemplateRenderer:
         rendered = re.sub(r"(?m)^(?:Жанр|В ролях|Дубляж|Озвучка):\s*$", "", rendered)
         rendered = re.sub(r"(?:\n\s*────────────\s*){2,}", "\n────────────\n", rendered)
         rendered = re.sub(r"^(?:\s*────────────\s*)+|(?:\s*────────────\s*)+$", "", rendered)
-        return re.sub(r"\n{3,}", "\n\n", rendered).strip()[:1024]
+        return re.sub(r"\n{3,}", "\n\n", rendered).strip()
 
     @staticmethod
     def _ratings(metadata: Metadata) -> str:

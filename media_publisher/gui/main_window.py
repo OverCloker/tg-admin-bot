@@ -69,9 +69,10 @@ class PublishWorker(QThread):
     completed = Signal(int)
     failed = Signal(str)
 
-    def __init__(self, token: str, chat_id: str, thread_id: str, target_type: str, target: object, metadata: Metadata):
+    def __init__(self, token: str, api_url: str, chat_id: str, thread_id: str, target_type: str, target: object, metadata: Metadata):
         super().__init__()
         self.token = token
+        self.api_url = api_url
         self.chat_id = chat_id
         self.thread_id = thread_id
         self.target_type = target_type
@@ -103,7 +104,7 @@ class PublishWorker(QThread):
             else:
                 raise ValueError("Неизвестный тип публикации.")
             operation_key = PublicationService.make_operation_key(self.chat_id, self.thread_id, paths, self.metadata)
-            service = PublicationService(BotApiTransport(self.token), self.chat_id, self.thread_id, database, operation_key)
+            service = PublicationService(BotApiTransport(self.token, api_url=self.api_url), self.chat_id, self.thread_id, database, operation_key)
             if self.target_type == "media":
                 return await service.publish_media(self.target, metadata=self.metadata)
             if self.target_type == "season":
@@ -185,6 +186,9 @@ class MainWindow(QMainWindow):
         self.token_edit.setEchoMode(QLineEdit.Password)
         self.token_edit.setPlaceholderText("Токен хранится только локально")
         form.addRow("Токен бота", self.token_edit)
+        self.bot_api_edit = QLineEdit()
+        self.bot_api_edit.setPlaceholderText("https://api.telegram.org или адрес локального Bot API server")
+        form.addRow("Bot API URL", self.bot_api_edit)
         self.chat_edit = QLineEdit()
         self.chat_edit.setPlaceholderText("например, -1001234567890")
         form.addRow("Chat ID", self.chat_edit)
@@ -244,6 +248,7 @@ class MainWindow(QMainWindow):
     def _load_settings(self) -> None:
         self.folder_edit.setText(self.settings.folder)
         self.token_edit.setText(self.settings.bot_token)
+        self.bot_api_edit.setText(self.settings.bot_api_url)
         self.chat_edit.setText(self.settings.chat_id)
         self.rezka_edit.setText(self.settings.rezka_domain)
         self.tmdb_edit.setText(self.settings.tmdb_api_key)
@@ -260,6 +265,7 @@ class MainWindow(QMainWindow):
     def _save_settings(self) -> None:
         self.settings.folder = self.folder_edit.text().strip()
         self.settings.bot_token = self.token_edit.text().strip()
+        self.settings.bot_api_url = self.bot_api_edit.text().strip() or "https://api.telegram.org"
         self.settings.chat_id = self.chat_edit.text().strip()
         self.settings.rezka_domain = self.rezka_edit.text().strip()
         self.settings.tmdb_api_key = self.tmdb_edit.text().strip()
@@ -338,7 +344,7 @@ class MainWindow(QMainWindow):
         if not self.settings.bot_token or not self.settings.chat_id:
             QMessageBox.warning(self, "Telegram", "Заполните токен и Chat ID.")
             return None
-        return BotApiTransport(self.settings.bot_token)
+        return BotApiTransport(self.settings.bot_token, api_url=self.settings.bot_api_url)
 
     def _run_async(self, operation, success: str) -> None:
         try:
@@ -500,6 +506,7 @@ class MainWindow(QMainWindow):
         self.status.setText(f"Публикация в тему «{self.settings.selected_destination}»…")
         self.publish_worker = PublishWorker(
             self.settings.bot_token,
+            self.settings.bot_api_url,
             self.settings.chat_id,
             self.settings.thread_id,
             target_type,
