@@ -198,7 +198,7 @@ MINI_APP_HTML = r"""<!doctype html>
     body[data-theme="classic"] {
       font-family: Arial, "MS Sans Serif", sans-serif;
     }
-    body[data-theme="classic"] :is(.panel, .stat, .profile-card, .achievement-card, .inventory-group, .bag-summary, .mine-admin-card, .mine-admin-row, .admin-list-row, .role-row, .friend-row, .reminder-item, .trigger-media-box) {
+    body[data-theme="classic"] :is(.panel:not(.bg-lava):not(.bg-old-mine):not(.bg-stars), .shop-screen, .stat, .profile-card, .achievement-card, .inventory-group, .bag-summary, .mine-admin-card, .mine-admin-row, .admin-list-row, .role-row, .friend-row, .reminder-item, .trigger-media-box) {
       border: 3px solid !important;
       border-color: #fff #808080 #808080 #fff !important;
       border-radius: 0 !important;
@@ -235,10 +235,7 @@ MINI_APP_HTML = r"""<!doctype html>
       color: #000 !important;
       box-shadow: none !important;
     }
-    body[data-theme="classic"] :is(.profile-hero, .profile-hero.bg-lava, .profile-hero.bg-old-mine) {
-      background: #c0c0c0 !important;
-    }
-    body[data-theme="classic"] .profile-avatar {
+    body[data-theme="classic"] .profile-avatar:not(.frame-copper):not(.frame-crystal):not(.frame-couple):not(.frame-aurora) {
       border: 3px solid !important;
       border-color: #fff #808080 #808080 #fff !important;
       border-radius: 0 !important;
@@ -423,6 +420,11 @@ MINI_APP_HTML = r"""<!doctype html>
     .profile-hero.bg-old-mine { --profile-glow: #d3a55d; background:
       radial-gradient(circle at 16% 4%, #d3a55d38, transparent 34%),
       linear-gradient(135deg, #2b2217, #132436 62%); }
+    .profile-hero:is(.bg-lava, .bg-old-mine, .bg-stars) {
+      --text: #fff;
+      --muted: #e5edf6;
+      color: var(--text);
+    }
     .profile-avatar {
       position: relative;
       display: grid;
@@ -1169,9 +1171,12 @@ MINI_APP_HTML = r"""<!doctype html>
       min-height: calc(100vh - 112px);
       margin-top: 14px;
       overflow: hidden;
-      border: 1px solid #604224;
-      border-radius: 8px;
-      background: #100d0b;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      color: var(--text);
+      box-shadow: var(--panel-shadow);
+      backdrop-filter: var(--surface-blur);
     }
     .shop-hero {
       position: relative;
@@ -1181,21 +1186,20 @@ MINI_APP_HTML = r"""<!doctype html>
       justify-content: space-between;
       gap: 12px;
       padding: 18px;
-      background:
-        linear-gradient(180deg, #0806041a 15%, #100d0bf2 100%),
-        url("/miniapp/shop-bg.png") center 28% / cover;
+      background: var(--panel-2);
     }
     .shop-hero-copy { position: relative; z-index: 1; max-width: 68%; }
-    .shop-kicker { margin-bottom: 4px; color: #f2c987; font-size: 13px; font-weight: 800; text-transform: uppercase; }
+    .shop-kicker { margin-bottom: 4px; color: var(--accent-2); font-size: 13px; font-weight: 800; text-transform: uppercase; }
     .shop-hero h2 { margin: 0; font-size: 25px; }
-    .shop-hero p { margin: 5px 0 0; color: #e1d5c7; font-size: 14px; line-height: 1.35; }
+    .shop-hero p { margin: 5px 0 0; color: var(--muted); font-size: 14px; line-height: 1.35; }
     .shop-coins {
       position: relative;
       z-index: 1;
       padding: 8px 10px;
-      border: 1px solid #d49a50;
-      border-radius: 8px;
-      background: #15100cef;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--panel-color);
+      color: var(--text);
       font-weight: 800;
       white-space: nowrap;
     }
@@ -1204,8 +1208,9 @@ MINI_APP_HTML = r"""<!doctype html>
       top: 0;
       z-index: 5;
       padding: 10px 12px;
-      border-bottom: 1px solid #48321f;
-      background: #100d0bf7;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-color);
+      backdrop-filter: var(--surface-blur);
     }
     .shop-tabs {
       display: flex;
@@ -1213,40 +1218,40 @@ MINI_APP_HTML = r"""<!doctype html>
       overflow-x: auto;
       padding-bottom: 4px;
       scrollbar-width: thin;
-      scrollbar-color: #c98e49 #211811;
+      scrollbar-color: var(--accent) var(--panel-color);
       scroll-snap-type: x proximity;
     }
     .shop-tabs::-webkit-scrollbar { height: 6px; }
-    .shop-tabs::-webkit-scrollbar-track { background: #211811; border-radius: 999px; }
-    .shop-tabs::-webkit-scrollbar-thumb { background: #c98e49; border-radius: 999px; }
+    .shop-tabs::-webkit-scrollbar-track { background: var(--panel-color); border-radius: 999px; }
+    .shop-tabs::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 999px; }
     .shop-tab {
       flex: 0 0 auto;
       min-height: 38px;
       padding: 8px 12px;
-      border: 1px solid #c98e49;
-      border-radius: 8px;
-      background: #211811;
-      color: white;
+      border: 1px solid var(--line);
+      border-radius: var(--button-radius);
+      background: var(--panel-2);
+      color: var(--text);
       font-weight: 700;
       scroll-snap-align: start;
     }
-    .shop-tab.active { background: #a9652d; }
+    .shop-tab.active { outline: 2px solid var(--accent); outline-offset: -3px; font-weight: 900; }
     .shop-products { padding: 0 14px; }
     .product {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 6px 12px;
       padding: 14px 0;
-      border-bottom: 1px solid #48321f;
+      border-bottom: 1px solid var(--line);
     }
     .product:last-child { border-bottom: 0; }
     .product-name { min-width: 0; font-weight: 800; }
-    .price { color: #ffd37d; font-weight: 800; white-space: nowrap; }
+    .price { color: var(--accent-2); font-weight: 800; white-space: nowrap; }
     .description {
       grid-column: 1 / -1;
       display: -webkit-box;
       overflow: hidden;
-      color: #d0c6bb;
+      color: var(--muted);
       font-size: 14px;
       line-height: 1.4;
       -webkit-box-orient: vertical;
@@ -1261,7 +1266,6 @@ MINI_APP_HTML = r"""<!doctype html>
       margin: 0;
       padding: 8px 13px;
       align-self: end;
-      background: #b66c2c;
       font-size: 14px;
       white-space: nowrap;
     }
