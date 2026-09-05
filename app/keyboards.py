@@ -211,7 +211,8 @@ def social_request_menu(kind: str, chat_id: int, requester_id: int, target_id: i
                     text="Отклонить",
                     callback_data=f"soc:{prefix}d:{chat_id}:{requester_id}:{target_id}",
                 ),
-            ]
+            ],
+            *([[InlineKeyboardButton(text="Отменить предложение", callback_data=f"soc:pc:{chat_id}:{requester_id}:{target_id}")]] if kind == "couple" else []),
         ]
     )
 

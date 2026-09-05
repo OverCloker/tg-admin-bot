@@ -1563,6 +1563,7 @@ def chat_help_text() -> str:
     return (
         "<b>Помощь</b>\n"
         "Основное: <code>профиль</code>, <code>лс @ник</code>, <code>напоминание</code>.\n"
+        "Отношения: <code>пара @ник</code> или ответом <code>пара</code>; <code>отношения</code>; <code>расстаться</code>.\n"
         "Шахта: <code>копай</code>, <code>сумка</code>, <code>достижения</code>, <code>топ копания</code>.\n"
         "Погода: <code>погода Кривой Рог</code>, <code>автопогода Кривой Рог</code>, <code>автопогода выкл</code>.\n"
         "Развлекуха: <code>кто пидор</code>, <code>roll mute</code>, <code>цитата</code>.\n"
@@ -1579,6 +1580,7 @@ def build_help_rich_message() -> InputRichMessage:
                 cells=[
                     [rich_cell("Раздел", header=True), rich_cell("Главное", header=True)],
                     [rich_cell("Профиль"), rich_cell("профиль · лс @ник · напоминание")],
+                    [rich_cell("Отношения"), rich_cell("пара @ник · отношения · расстаться")],
                     [rich_cell("Шахта"), rich_cell("копай · сумка · достижения · топы")],
                     [rich_cell("Погода"), rich_cell("погода · автопогода · автопогода выкл")],
                     [rich_cell("Игры"), rich_cell("кто пидор · roll mute · цитата")],
@@ -5209,6 +5211,65 @@ def telegram_user_profile_text(
     return profile_chat_text(profile, short=short)
 
 
+@router.message(Command("pair", "relationship", "breakup"))
+@router.message(F.text.regexp(re.compile(r"^/?(?:пара|отношения|расстаться)(?:\s|$)", re.IGNORECASE)))
+async def relationship_command(message: Message) -> None:
+    if not message.from_user or message.chat.type not in SUPPORTED_CHAT_TYPES:
+        await message.answer("Команды отношений работают в группе: пара @ник, отношения, расстаться.")
+        return
+    await remember_sender(message)
+    chat_id, actor = message.chat.id, message.from_user.id
+    parts = (message.text or "").split(maxsplit=1)
+    action = parts[0].lstrip("/").split("@")[0].casefold()
+    target_text = parts[1].strip() if len(parts) > 1 else ""
+    if action in {"расстаться", "breakup"}:
+        partner = db.get_chat_partner(chat_id, actor)
+        if not partner:
+            await message.answer("У тебя пока нет пары в этой группе.")
+            return
+        await message.answer(f"Подтвердить расставание с {escape(partner.full_name)}? Подарки сохранятся, дружба останется.", reply_markup=social_couple_end_menu(chat_id, actor, partner.user_id))
+        return
+    if action in {"отношения", "relationship"} or (not target_text and not message.reply_to_message):
+        partner = db.get_chat_partner(chat_id, actor)
+        couple = db.get_chat_couple(chat_id, actor)
+        text = "💕 <b>Отношения в этой группе</b>\n"
+        if partner and couple:
+            days = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(couple.created_at)).days)
+            text += f"Пара: {profile_link(partner.user_id, partner.username, partner.full_name)}\nВместе с {couple.created_at[:10]} · дней: {days}\nПодарки паре: Mini App → профиль → подарок паре.\n"
+        else:
+            text += "Пока без пары.\n"
+        text += "\nПредложение: <code>пара @ник</code>, <code>пара user_id</code> или ответом <code>пара</code>.\nПросмотр: <code>отношения</code> · завершение: <code>расстаться</code>.\nОдна пара на группу. Предложение действует 24 часа."
+        await message.answer(text, disable_web_page_preview=True)
+        for request in db.list_couple_requests(chat_id, actor):
+            sender, target = request["requester_id"], request["target_id"]
+            await message.answer(f"Предложение пары: {profile_link(sender, None, str(sender))} → {profile_link(target, None, str(target))}", reply_markup=social_request_menu("couple", chat_id, sender, target))
+        return
+    if target_text.isdecimal():
+        target_id, error = int(target_text), None
+    else:
+        target_id, _, error = await resolve_command_target(message, target_text.lstrip("@") if target_text else None)
+    if error or target_id is None:
+        await message.answer(error or "Укажи получателя предложения.")
+        return
+    if target_id == actor:
+        await message.answer("Нельзя предложить отношения самому себе.")
+        return
+    target = await active_social_user(message.bot, chat_id, target_id)
+    if target is None or target.is_bot:
+        await message.answer("Предложение можно отправить только пользователю этой группы, не боту.")
+        return
+    result = db.create_couple_request(chat_id, actor, target_id)
+    if result != "created":
+        notices = {"couple": "Вы уже пара.", "user_busy": "У тебя уже есть пара в этой группе.", "target_busy": "У этого пользователя уже есть пара.", "incoming": "Этот пользователь уже предложил тебе отношения. Напиши «отношения», чтобы ответить.", "outgoing": "Предложение уже отправлено. Напиши «отношения», чтобы посмотреть или отменить его."}
+        await message.answer(notices.get(result, "Не удалось создать предложение."))
+        return
+    try:
+        await message.answer(f"💕 {profile_link(target.id, target.username, target.full_name)}, {profile_link(actor, message.from_user.username, message.from_user.full_name)} предлагает стать парой.\nТолько получатель может согласиться или отказаться. Срок — 24 часа.", reply_markup=social_request_menu("couple", chat_id, actor, target_id), disable_web_page_preview=True)
+    except Exception:
+        db.decline_couple_request(chat_id, actor, target_id)
+        raise
+
+
 def social_profile_markup(chat_id: int, viewer_id: int, target_id: int) -> InlineKeyboardMarkup:
     return social_profile_menu(
         chat_id,
@@ -5485,7 +5546,7 @@ async def cb_secret_message_open(callback: CallbackQuery) -> None:
     await callback.answer("Отправил в личку.")
 
 
-@router.callback_query(F.data.regexp(re.compile(r"^soc:(?:fq|fr|fa|fd|pq|pa|pd|pe|px):")))
+@router.callback_query(F.data.regexp(re.compile(r"^soc:(?:fq|fr|fa|fd|pq|pa|pd|pc|pe|px):")))
 async def cb_social_action(callback: CallbackQuery) -> None:
     parsed = social_callback_ids(callback)
     if not parsed or not callback.message:
@@ -5507,9 +5568,21 @@ async def cb_social_action(callback: CallbackQuery) -> None:
         )
         return
 
+    if action == "pc":
+        cancelled = db.decline_couple_request(chat_id, requester_id, target_id)
+        await safe_edit(callback, "Предложение отменено." if cancelled else "Предложение уже не действует.", reply_markup=None)
+        await callback.answer()
+        return
+
+    if action == "px":
+        ended = db.end_chat_couple(chat_id, requester_id, target_id)
+        await safe_edit(callback, "Отношения завершены. Подарки и дружба сохранены." if ended else "Эта связь уже завершена.", reply_markup=None)
+        await callback.answer()
+        return
+
     requester = await active_social_user(callback.bot, chat_id, requester_id)
     target = await active_social_user(callback.bot, chat_id, target_id)
-    if requester is None or target is None:
+    if requester is None or target is None or requester.is_bot or target.is_bot:
         await callback.answer("Один из участников больше не состоит в этой группе.", show_alert=True)
         return
     requester_link = profile_link(requester.id, requester.username, requester.full_name)
@@ -5638,19 +5711,6 @@ async def cb_social_action(callback: CallbackQuery) -> None:
         )
         await callback.answer()
         return
-
-    if action == "px":
-        ended = db.end_chat_couple(chat_id, requester_id, target_id)
-        await safe_edit(
-            callback,
-            f"{requester_link} и {target_link} больше не пара."
-            if ended
-            else "Эта связь уже завершена.",
-            reply_markup=None,
-            disable_web_page_preview=True,
-        )
-        await callback.answer()
-
 
 @router.callback_query(F.data.startswith("user:bag:"))
 async def cb_user_bag(callback: CallbackQuery) -> None:

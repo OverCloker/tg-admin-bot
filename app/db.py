@@ -2935,15 +2935,22 @@ class Database:
                 (requester_id = ? and target_id = ?)
                 or (requester_id = ? and target_id = ?)
             )
+            and created_at > ?
             limit 1
             """,
-            (chat_id, user_id, other_id, other_id, user_id),
+            (chat_id, user_id, other_id, other_id, user_id, (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(timespec="seconds")),
         ).fetchone()
         if not row:
             return "none"
         return "outgoing" if int(row["requester_id"]) == user_id else "incoming"
 
     def create_couple_request(self, chat_id: int, requester_id: int, target_id: int) -> str:
+        with self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._conn.execute("delete from chat_couple_requests where created_at <= ?", ((datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(timespec="seconds"),))
+            return self._create_couple_request(chat_id, requester_id, target_id)
+
+    def _create_couple_request(self, chat_id: int, requester_id: int, target_id: int) -> str:
         state = self.couple_state(chat_id, requester_id, target_id)
         if state != "none":
             return state
@@ -2958,12 +2965,18 @@ class Database:
         return "created"
 
     def accept_couple_request(self, chat_id: int, requester_id: int, target_id: int) -> str:
+        with self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            return self._accept_couple_request(chat_id, requester_id, target_id)
+
+    def _accept_couple_request(self, chat_id: int, requester_id: int, target_id: int) -> str:
         row = self._conn.execute(
             """
             select 1 from chat_couple_requests
             where chat_id = ? and requester_id = ? and target_id = ?
+            and created_at > ?
             """,
-            (chat_id, requester_id, target_id),
+            (chat_id, requester_id, target_id, (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(timespec="seconds")),
         ).fetchone()
         if not row:
             return "missing"
@@ -3006,6 +3019,10 @@ class Database:
         )
         self._conn.commit()
         return cur.rowcount > 0
+
+    def list_couple_requests(self, chat_id: int, user_id: int) -> list[dict]:
+        rows = self._conn.execute("select requester_id,target_id,created_at from chat_couple_requests where chat_id=? and (requester_id=? or target_id=?) and created_at>? order by created_at desc limit 10", (chat_id, user_id, user_id, (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(timespec="seconds"))).fetchall()
+        return [dict(row) for row in rows]
 
     def end_chat_couple(self, chat_id: int, user_id: int, partner_id: int) -> bool:
         user1_id, user2_id = self._social_pair(user_id, partner_id)

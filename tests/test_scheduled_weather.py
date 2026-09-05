@@ -25,7 +25,7 @@ def test_chat_help_rich_message_is_compact_table_with_details() -> None:
     assert blocks[0]["type"] == "paragraph"
     assert blocks[2]["type"] == "table"
     assert blocks[2]["cells"][0][0]["text"] == "Раздел"
-    assert blocks[2]["cells"][3][0]["text"] == "Погода"
+    assert any(row[0]["text"] == "Погода" for row in blocks[2]["cells"])
     assert blocks[3]["type"] == "details"
     assert blocks[3]["summary"] == "Подробнее ниже"
     assert blocks[3]["is_open"] is False
