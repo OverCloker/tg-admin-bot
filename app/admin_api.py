@@ -4313,12 +4313,12 @@ def admin_actor_id() -> int | None:
 def owner_actions_allowed() -> bool:
     config = load_config()
     actor_id = current_actor_id()
-    return actor_id is not None and actor_id in config.bot_admin_ids
+    return config.owner_id is not None and actor_id == config.owner_id
 
 
 def require_owner_action() -> None:
     if not owner_actions_allowed():
-        raise HTTPException(status_code=403, detail="Only bot owner admins can do this")
+        raise HTTPException(status_code=403, detail="Это действие доступно только владельцу бота.")
 
 
 def require_owner_only() -> None:

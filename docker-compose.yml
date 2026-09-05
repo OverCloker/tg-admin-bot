@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.telegram-bot-api
+      args:
+        CMAKE_BUILD_PARALLEL_LEVEL: ${CMAKE_BUILD_PARALLEL_LEVEL:-1}
     image: otveto4ka-telegram-bot-api:latest
     env_file:
       - .env

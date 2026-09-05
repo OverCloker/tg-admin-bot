@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-TEXT_ROOTS = (Path("app"), Path("tests"))
+TEXT_ROOTS = (Path("app"), Path("tests"), Path("media_publisher"))
 TEXT_SUFFIXES = {".cmd", ".css", ".html", ".ini", ".js", ".json", ".md", ".ps1", ".py", ".sh", ".toml", ".txt", ".yaml", ".yml"}
 MOJIBAKE_MARKERS = (
     "\ufffd",

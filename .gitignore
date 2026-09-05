@@ -6,6 +6,9 @@ __pycache__/
 .venv/
 venv/
 .pytest-tmp/
+.pytest-tmp-*/
+.pytest_cache/
+*.sqlite3.backup*
 bot.lock
 downloads/
 media_storage/

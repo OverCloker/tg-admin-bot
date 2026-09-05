@@ -114,7 +114,11 @@ docker compose --profile local-bot-api up -d --build
 ```
 
 The first build can take a long time because Docker compiles the official
-`telegram-bot-api` binary. If SSH is unstable, run the build in the background:
+`telegram-bot-api` binary. Compilation uses one job by default to reduce peak
+memory usage on small servers. To increase it on a server with enough RAM, set
+`CMAKE_BUILD_PARALLEL_LEVEL=2` before the compose command; Compose passes this
+value into the Docker build. One job still requires enough free RAM and disk.
+If SSH is unstable, run the build in the background:
 
 ```bash
 nohup sh -c 'docker compose --profile local-bot-api up -d --build' > local-bot-api-build.log 2>&1 &

@@ -1,6 +1,7 @@
 FROM debian:stable-slim AS build
 
 ARG TELEGRAM_BOT_API_REF=master
+ARG CMAKE_BUILD_PARALLEL_LEVEL=1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -19,7 +20,7 @@ RUN git clone --recursive https://github.com/tdlib/telegram-bot-api.git /src/tel
     && git checkout "${TELEGRAM_BOT_API_REF}" \
     && git submodule update --init --recursive \
     && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/telegram-bot-api \
-    && cmake --build build --target install --parallel
+    && cmake --build build --target install --parallel "${CMAKE_BUILD_PARALLEL_LEVEL}"
 
 FROM debian:stable-slim
 
