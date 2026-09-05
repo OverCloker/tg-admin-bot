@@ -441,6 +441,10 @@ MINI_APP_HTML = r"""<!doctype html>
     .profile-avatar.frame-crystal { border-color: #9fdcff; box-shadow: 0 0 24px #78d8ff44, 0 0 0 1px #ffffff66 inset; }
     .profile-avatar.frame-copper { border-color: #d58d54; box-shadow: 0 0 20px #d58d5430, 0 0 0 1px #ffd8af55 inset; }
     .profile-avatar.frame-couple { border-color: #ff8fd1; box-shadow: 0 0 22px #ff8fd144, 0 0 0 1px #ffffff66 inset; }
+    .profile-avatar.frame-aurora { border-color:#63ffe4; box-shadow:0 0 18px #63ffe477; animation:aurora-glow 5s ease-in-out infinite alternate; }
+    @keyframes aurora-glow { to {border-color:#df8fff;box-shadow:0 0 25px #b668ff99;} }
+    .profile-hero.bg-stars {background:radial-gradient(circle at 20% 25%,#fff 0 1px,transparent 2px),radial-gradient(circle at 80% 70%,#8feaff 0 2px,transparent 3px),linear-gradient(135deg,#18253f,#30204d);background-size:51px 63px,87px 91px,100% 100%;color:#fff;}
+    @media (prefers-reduced-motion:reduce) {.profile-avatar.frame-aurora {animation:none;}}
     .profile-avatar > * { grid-area: 1 / 1; }
     .profile-avatar img { position: relative; z-index: 2; width: 100%; height: 100%; object-fit: cover; background: var(--panel-2); }
     .profile-avatar.has-image .profile-avatar-fallback { display: none; }
@@ -2216,6 +2220,7 @@ MINI_APP_HTML = r"""<!doctype html>
   function profileAvatarHtml(user, cosmetics = {}, small = false) {
     const frame = cosmetics.frame && cosmetics.frame.key ? cosmetics.frame.key : "";
     const frameClass =
+      frame === "profile_frame_aurora" ? "frame-aurora" :
       frame === "profile_frame_crystal" ? "frame-crystal" :
       frame === "profile_frame_copper" ? "frame-copper" :
       frame === "couple_frame" ? "frame-couple" : "";
@@ -2229,6 +2234,7 @@ MINI_APP_HTML = r"""<!doctype html>
   function profileHeroClass(cosmetics = {}) {
     const bg = cosmetics.background && cosmetics.background.key ? cosmetics.background.key : "";
     if (bg === "profile_bg_lava") return "bg-lava";
+    if (bg === "profile_bg_stars") return "bg-stars";
     if (bg === "profile_bg_old_mine") return "bg-old-mine";
     return "";
   }
@@ -3137,6 +3143,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <div class="profile-actions">
         <button class="btn secondary" onclick="showFriendsInfo()">${friends.length ? `Друзья: ${friends.length}` : "Друзья"}</button>
         ${isSelf ? `<button class="btn secondary" onclick="showBag()">Сумка</button>` : `<button class="btn secondary" onclick="showProfile()">Мой профиль</button>`}
+        ${isSelf ? `<button class="btn secondary" onclick="showWardrobe()">Оформить профиль</button><button class="btn secondary" onclick="showShop('gifts')">Купить подарок</button>` : ""}
         ${adminPanelButtonHtml(viewer)}
         ${mineAdminButtonHtml(viewer)}
       </div>
@@ -3149,6 +3156,9 @@ MINI_APP_HTML = r"""<!doctype html>
       <p class="muted">Достижения: <b>${mine.achievementsTotal || 0}/${mine.achievementsKnown || 0}</b></p>
     </section>
     ${cosmeticsHtml}
+    ${social.partner ? `<section class="panel"><h2>💕 Отношения</h2><p>Пара: <b>${escapeHtml(social.partner.fullName || 'Игрок')}</b></p><p class="muted">Цветы, парный кристалл и приглашение на свидание остаются памятными подарками в профиле.</p>${isSelf ? `<button class="btn" onclick="showShop('relationships')">Подарок паре</button>` : ''}</section>` : ''}
+    <section class="panel"><h2>🎁 Витрина подарков</h2><p class="muted">Подарки остаются в коллекции. Закреплённые показываются первыми.</p>
+    ${(mine.gifts || []).map(gift => `<div class="profile-card" style="margin-bottom:12px"><b>${gift.pinned ? "📌 " : ""}${escapeHtml(gift.title)}</b><p>От: ${escapeHtml(gift.sender)} · ${escapeHtml(new Date(gift.createdAt).toLocaleDateString())}</p>${isSelf ? `<button class="btn secondary" onclick="pinGift(${Number(gift.id)}, ${!gift.pinned})">${gift.pinned ? "Открепить" : "Закрепить"}</button>` : ""}</div>`).join("") || '<p class="muted">Здесь появятся подарки от друзей и пары.</p>'}</section>
     ${rareAchievements ? `<section class="panel"><h2>Редчайшие достижения</h2><div class="achievement-showcase">${rareAchievements}</div></section>` : ""}
     <section class="panel"><button class="btn secondary" style="margin:0" onclick="${isSelf ? "renderMine()" : "showProfile()"}">${isSelf ? "Назад в шахту" : "Назад к моему профилю"}</button></section>`;
     scrollToTop();
@@ -3347,6 +3357,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <div class="minesweeper-legend muted"><span>Число — мин рядом</span><span>★ — событие</span><span>🎁 — находка</span></div>
       <div class="game-result" id="minesweeperResult" aria-live="polite"></div>
       <button class="btn danger" onclick="exitMinesweeper()">Завершить раунд</button>
+      <button class="btn secondary" onclick="buyMineHint()">Безопасная клетка · 60 кот.</button><p class="muted">Одна подсказка на раунд. Повторный запрос бесплатный.</p>
     </section>`;
   }
 
@@ -3999,15 +4010,34 @@ MINI_APP_HTML = r"""<!doctype html>
     }
   }
 
+  async function buyMineHint() {
+    if (busy || !confirm('Показать безопасную клетку? Первая подсказка стоит 60 котоинов, повтор — бесплатно.')) return;
+    busy=true;
+    try {
+      const result = await api('/miniapp/minesweeper/hint', {method:'POST'});
+      state=result.state;
+      renderMine();
+      const cell=Number(result.cell);
+      const button=document.querySelectorAll('.minesweeper-grid .minesweeper-cell')[cell];
+      if (button) {button.style.outline='3px solid #48d98c';button.scrollIntoView({block:'center'});}
+      showNotice(`Безопасная клетка: строка ${Math.floor(cell/9)+1}, столбец ${cell%9+1}`);
+    } catch(error) {alert(error.message);}
+    finally {busy=false;}
+  }
+
+  let pendingGiftRequest = null;
   async function sendGift(itemKey, targetUserId) {
     if (busy || !confirm("Отправить этот подарок?")) return;
     busy = true;
+    const requestKey = `${itemKey}:${targetUserId}`;
+    if (!pendingGiftRequest || pendingGiftRequest.key !== requestKey) pendingGiftRequest = {key: requestKey, id: crypto.randomUUID()};
     try {
       const result = await api("/miniapp/shop/gift", {
         method: "POST",
-        body: JSON.stringify({ item_key: itemKey, target_user_id: targetUserId })
+        body: JSON.stringify({ item_key: itemKey, target_user_id: targetUserId, request_id: pendingGiftRequest.id })
       });
       state = result.state;
+      pendingGiftRequest = null;
       await showBag();
       showNotice(result.message || "Подарок отправлен.");
     } catch (error) {
@@ -4015,6 +4045,42 @@ MINI_APP_HTML = r"""<!doctype html>
     } finally {
       busy = false;
     }
+  }
+
+  async function pinGift(id, pinned) {
+    try {
+      await api('/miniapp/profile/gift-pin', {method:'POST', body:JSON.stringify({gift_id:id,pinned})});
+      await showProfile();
+    } catch (error) { showError(error); }
+  }
+
+  let wardrobeData = null;
+  async function showWardrobe() {
+    try {
+      wardrobeData = await api('/miniapp/profile/wardrobe');
+      renderWardrobe();
+    } catch (error) { showError(error); }
+  }
+  function wardrobePreview() {
+    const selection = wardrobeData.selection;
+    const find = key => wardrobeData.items.find(item => item.key === key) || null;
+    const cosmetic = {frame:find(selection.frame),background:find(selection.background)};
+    document.getElementById('wardrobe-preview').innerHTML = `<div class="panel profile-hero ${profileHeroClass(cosmetic)}">${profileAvatarHtml((currentProfile || {}).user || {}, cosmetic)}<h2>${escapeHtml(((currentProfile || {}).user || {}).fullName || 'Ваш профиль')}</h2><p>${escapeHtml((find(selection.badge) || {}).title || '')}</p></div>`;
+  }
+  function renderWardrobe() {
+    content.innerHTML = `<section class="panel"><h2>Гардероб</h2><p>Примерка бесплатна. Для сохранения купите выбранные украшения.</p><div id="wardrobe-preview"></div>${[['frame','Рамка'],['background','Фон'],['badge','Значок']].map(([slot,title]) => `<label>${title}<select onchange="wardrobeData.selection['${slot}']=this.value;wardrobePreview()"><option value="">Без украшения</option>${wardrobeData.items.filter(item => item.slot===slot).map(item => `<option value="${escapeHtml(item.key)}" ${wardrobeData.selection[slot]===item.key?'selected':''}>${escapeHtml(item.title)} · ${item.owned?'куплено':item.price+' кот.'}</option>`).join('')}</select></label>`).join('')}<button class="btn" onclick="saveWardrobe()">Сохранить оформление</button><button class="btn secondary" onclick="showShop('profile')">Магазин украшений</button><button class="btn secondary" onclick="showProfile()">Назад</button></section>`;
+    wardrobePreview();
+    scrollToTop();
+  }
+  async function saveWardrobe() {
+    if (busy) return;
+    busy=true;
+    try {
+      await api('/miniapp/profile/style', {method:'POST',body:JSON.stringify(wardrobeData.selection)});
+      await showProfile();
+      showNotice('Оформление сохранено');
+    } catch (error) { alert(error.message); }
+    finally {busy=false;}
   }
 
   setInterval(() => {

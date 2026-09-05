@@ -349,15 +349,17 @@ DIG_SHOP_ITEMS = {
     "profile_bg_lava": ("Фон профиля: Лавовые тоннели", 3000, "Дорогой фон профиля для тех, кто дошёл до горячих глубин."),
     "profile_badge_pickaxe": ("Значок профиля: ⛏️", 400, "Постоянный значок шахтёра рядом с оформлением профиля."),
     "profile_badge_gem": ("Значок профиля: 💎", 1500, "Постоянный кристальный значок для профиля."),
-    "gift_tea_friend": ("Подарок: Чай другу", 50, "Маленький подарок для будущей отправки другу. Хороший способ потратить мелочь с теплом."),
+    "gift_tea_friend": ("Подарок: Чай другу", 50, "Тёплый знак внимания другу на витрину профиля."),
     "gift_yarn": ("Подарок: Клубок котику", 100, "Милый подарок другу в коллекцию подарков."),
-    "gift_crystal": ("Подарок: Маленький кристалл", 300, "Редкий сувенир, который можно будет подарить другу."),
+    "gift_crystal": ("Подарок: Маленький кристалл", 300, "Кристальный сувенир другу на витрину профиля."),
     "gift_anonymous": ("Анонимный подарок", 500, "Подарок без подписи. Для случаев, когда хочется быть загадочным котом."),
-    "gift_chest": ("Сундук другу", 750, "Подарочный сундук для будущей отправки другу."),
+    "gift_chest": ("Сундук другу", 750, "Коллекционный сувенир другу. Не содержит монет или ресурсов."),
     "couple_flower": ("Подарок паре: Цветок", 150, "Небольшой знак внимания для пары."),
     "couple_crystal": ("Подарок паре: Парный кристалл", 1000, "Дорогой сувенир для отношений."),
-    "couple_frame": ("Парная рамка профиля", 3500, "Постоянная косметика для будущего оформления пары."),
-    "couple_date": ("Свидание в шахте", 800, "Расходник для будущего парного события."),
+    "couple_frame": ("Парная рамка профиля", 3500, "Романтическая рамка для своего аватара. Выбирается в гардеробе."),
+    "couple_date": ("Свидание в шахте", 800, "Приглашение текущей паре: памятное свидание на витрине подарков."),
+    "profile_frame_aurora": ("Рамка: Северное сияние", 7500, "Переливающаяся рамка аватара. Навсегда, без бонусов к добыче."),
+    "profile_bg_stars": ("Фон: Звёздная пещера", 10000, "Коллекционное оформление карточки профиля."),
 }
 DIG_SHOP_ITEMS["golden_ticket"] = (
     "Золотой билет",
@@ -367,6 +369,7 @@ DIG_SHOP_ITEMS["golden_ticket"] = (
 DYNAMITE_MISHAP_CHANCE = 20
 DYNAMITE_MISHAP_MESSAGE = "Из-за неосторожного обращения динамит взорвался в руках. Метр не пробит."
 DIG_ITEM_ORDER = [
+    "profile_frame_aurora", "profile_bg_stars",
     "tea", "insurance", "dynamite", "safe", "compass", "scanner", "drill", "medkit", "map", "talisman", "camp", "repair_kit", "mystery_chest",
     "shovel_1", "shovel_2", "shovel_3", "helmet_1", "helmet_2", "helmet_3",
     "flashlight_1", "flashlight_2", "flashlight_3", "cart", "cart_2", "cart_3", "backpack_1", "backpack_2", "backpack_3",
@@ -406,7 +409,7 @@ DIG_SHOP_CATEGORIES = {
     ),
     "profile": (
         "Профиль",
-        ["profile_frame_copper", "profile_frame_crystal", "profile_bg_old_mine", "profile_bg_lava", "profile_badge_pickaxe", "profile_badge_gem"],
+        ["profile_frame_copper", "profile_frame_crystal", "profile_bg_old_mine", "profile_bg_lava", "profile_badge_pickaxe", "profile_badge_gem", "profile_frame_aurora", "profile_bg_stars"],
     ),
     "gifts": (
         "Подарки",
@@ -432,6 +435,7 @@ DIG_SHOP_ITEM_CATEGORY = {
     for item_key in item_keys
 }
 DIG_PERMANENT_ITEMS = {
+    "profile_frame_aurora", "profile_bg_stars",
     "shovel_1", "shovel_2", "shovel_3", "helmet_1", "helmet_2", "helmet_3",
     "flashlight_1", "flashlight_2", "flashlight_3", "cart", "cart_2", "cart_3",
     "backpack_1", "backpack_2", "backpack_3", "rank_1", "rank_2", "rank_3", "rank_4",
@@ -439,6 +443,7 @@ DIG_PERMANENT_ITEMS = {
     "profile_badge_pickaxe", "profile_badge_gem", "couple_frame",
 }
 DIG_PROFILE_ITEMS = {
+    "profile_frame_aurora", "profile_bg_stars", "couple_frame",
     "profile_frame_copper", "profile_frame_crystal", "profile_bg_old_mine", "profile_bg_lava",
     "profile_badge_pickaxe", "profile_badge_gem",
 }

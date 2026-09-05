@@ -473,6 +473,26 @@ class Database:
     def init(self) -> None:
         self._conn.executescript(
             """
+            create table if not exists profile_style (
+                user_id integer primary key,
+                selection text not null
+            );
+            create table if not exists minesweeper_hint (
+                user_id integer primary key,
+                game_key text not null,
+                cell integer not null
+            );
+            create table if not exists profile_gifts (
+                id integer primary key autoincrement,
+                sender_id integer not null,
+                recipient_id integer not null,
+                item_key text not null,
+                created_at text not null,
+                request_id text not null,
+                pinned integer not null default 0,
+                unique(sender_id, request_id)
+            );
+            create index if not exists profile_gifts_recipient on profile_gifts(recipient_id, id);
             create table if not exists chats (
                 chat_id integer primary key,
                 title text not null,
@@ -5365,6 +5385,57 @@ class Database:
             (chat_id, user_id, item_key, max(1, int(quantity)), utc_now()),
         )
         self._conn.commit()
+
+    def get_profile_style(self, user_id: int) -> dict | None:
+        row = self._conn.execute("select selection from profile_style where user_id=?", (user_id,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def buy_minesweeper_hint(self, user_id: int) -> int:
+        with self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            game = self.get_minesweeper_game(user_id)
+            if not game:
+                raise ValueError("Сначала начните раунд.")
+            game_key = game["created_at"] + game["mines_json"]
+            previous = self._conn.execute("select cell from minesweeper_hint where user_id=? and game_key=?", (user_id, game_key)).fetchone()
+            if previous:
+                return int(previous[0])
+            mines = set(json.loads(game["mines_json"]))
+            opened = json.loads(game["opened_json"])
+            cell = next((cell for cell in range(81) if cell not in mines and str(cell) not in opened), None)
+            if cell is None:
+                raise ValueError("На поле не осталось закрытых безопасных клеток.")
+            changed = self._conn.execute("update dig_players set coins=coins-60 where chat_id=0 and user_id=? and coins>=60", (user_id,))
+            if not changed.rowcount:
+                raise ValueError("Для подсказки нужно 60 котоинов.")
+            self._conn.execute("insert into minesweeper_hint values(?,?,?) on conflict(user_id) do update set game_key=excluded.game_key,cell=excluded.cell", (user_id, game_key, cell))
+            return cell
+
+    def set_profile_style(self, user_id: int, selection: dict) -> None:
+        with self._conn:
+            self._conn.execute("insert into profile_style values(?,?) on conflict(user_id) do update set selection=excluded.selection", (user_id, json.dumps(selection)))
+
+    def deliver_profile_gift(self, sender: int, recipient: int, item: str, request_id: str) -> str:
+        with self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            previous = self._conn.execute("select recipient_id,item_key from profile_gifts where sender_id=? and request_id=?", (sender, request_id)).fetchone()
+            if previous:
+                if previous["recipient_id"] != recipient or previous["item_key"] != item:
+                    raise ValueError("Этот запрос уже использован для другого подарка.")
+                return "duplicate"
+            changed = self._conn.execute("update dig_items set quantity=quantity-1, updated_at=? where chat_id=0 and user_id=? and item_key=? and quantity>0", (utc_now(), sender, item))
+            if not changed.rowcount:
+                return "empty"
+            self._conn.execute("insert into profile_gifts(sender_id,recipient_id,item_key,created_at,request_id) values(?,?,?,?,?)", (sender, recipient, item, utc_now(), request_id))
+        return "sent"
+
+    def list_profile_gifts(self, user_id: int) -> list[dict]:
+        rows = self._conn.execute("select g.id,g.sender_id,g.item_key,g.created_at,g.pinned,p.username,p.full_name from profile_gifts g left join dig_players p on p.chat_id=0 and p.user_id=g.sender_id where g.recipient_id=? order by g.pinned desc,g.id desc limit 100", (user_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def pin_profile_gift(self, user_id: int, gift_id: int, pinned: bool) -> bool:
+        with self._conn:
+            return bool(self._conn.execute("update profile_gifts set pinned=? where id=? and recipient_id=?", (int(pinned), gift_id, user_id)).rowcount)
 
     def consume_dig_item(self, chat_id: int, user_id: int, item_key: str) -> bool:
         chat_id = DIG_GLOBAL_CHAT_ID

@@ -174,6 +174,18 @@ class MineAdminTarget(BaseModel):
 class ShopGiftSend(BaseModel):
     item_key: str = Field(min_length=1, max_length=64)
     target_user_id: int = Field(gt=0)
+    request_id: str = Field(min_length=16, max_length=64)
+
+
+class ProfileStyleSet(BaseModel):
+    frame: str = Field(default="", max_length=64)
+    background: str = Field(default="", max_length=64)
+    badge: str = Field(default="", max_length=64)
+
+
+class ProfileGiftPin(BaseModel):
+    gift_id: int = Field(gt=0)
+    pinned: bool
 
 
 class MerchantSale(BaseModel):
@@ -2356,9 +2368,12 @@ def miniapp_shop_gift(
                     raise HTTPException(400, "Этот подарок можно отправить только текущей паре.")
                 raise HTTPException(400, "Этого пользователя нет в списке друзей для подарка.")
 
-            if not db.consume_dig_item(0, user["id"], payload.item_key):
+            try:
+                status = db.deliver_profile_gift(user["id"], payload.target_user_id, payload.item_key, payload.request_id)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            if status == "empty":
                 raise HTTPException(400, "В сумке больше нет этого подарка.")
-            db.add_dig_item(0, payload.target_user_id, payload.item_key, 1)
 
             return {
                 "ok": True,
@@ -2370,6 +2385,55 @@ def miniapp_shop_gift(
             }
         finally:
             db.close()
+
+
+@router.get("/miniapp/profile/wardrobe")
+def profile_wardrobe(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict:
+    user = _telegram_user(x_telegram_init_data)
+    from . import bot as game
+    from .user_profile import _profile_cosmetics
+    db = _db()
+    try:
+        owned = _items_map(db, user["id"])
+        entries = []
+        for key in game.DIG_PROFILE_ITEMS:
+            slot = "frame" if "frame" in key else "background" if "_bg_" in key else "badge"
+            entries.append({"key": key, "slot": slot, "title": game.DIG_SHOP_ITEMS[key][0], "price": game.DIG_SHOP_ITEMS[key][1], "owned": owned.get(key, 0) > 0})
+        cosmetics = _profile_cosmetics(owned, db.get_profile_style(user["id"]))
+        return {"items": sorted(entries, key=lambda item: item["price"]), "selection": {"frame": (cosmetics["frame"] or {}).get("key", ""), "background": (cosmetics["background"] or {}).get("key", ""), "badge": next((badge["key"] for badge in cosmetics["badges"]), "")}}
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/style")
+def profile_style(payload: ProfileStyleSet, x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict:
+    user = _telegram_user(x_telegram_init_data)
+    from . import bot as game
+    with DIG_LOCK:
+        db = _db()
+        try:
+            owned = _items_map(db, user["id"])
+            selection = payload.model_dump()
+            for slot, key in selection.items():
+                expected = "frame" if "frame" in key else "background" if "_bg_" in key else "badge"
+                if key and (key not in game.DIG_PROFILE_ITEMS or expected != slot or owned.get(key, 0) < 1):
+                    raise HTTPException(400, "Сначала купите это украшение в магазине.")
+            db.set_profile_style(user["id"], selection)
+            return {"ok": True}
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/profile/gift-pin")
+def profile_gift_pin(payload: ProfileGiftPin, x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not db.pin_profile_gift(user["id"], payload.gift_id, payload.pinned):
+            raise HTTPException(404, "Подарок не найден.")
+        return {"ok": True}
+    finally:
+        db.close()
 
 
 def _settle_interactive_manual(
@@ -3733,6 +3797,22 @@ def minesweeper_start(
                 "game": _minesweeper_public(db, user["id"]),
                 "state": _state(db, user["id"]),
             }
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/minesweeper/hint")
+def minesweeper_hint(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict:
+    user = _telegram_user(x_telegram_init_data)
+    with DIG_LOCK:
+        db = _db()
+        try:
+            _ensure_mine_not_blocked(db, user["id"])
+            try:
+                cell = db.buy_minesweeper_hint(user["id"])
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            return {"cell": cell, "state": _state(db, user["id"])}
         finally:
             db.close()
 

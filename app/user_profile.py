@@ -73,6 +73,8 @@ ACHIEVEMENT_RARITY_BY_KEY = {
 }
 
 ITEM_NAMES = {
+    "profile_frame_aurora": "Рамка: Северное сияние",
+    "profile_bg_stars": "Фон: Звёздная пещера",
     "helmet": "Каска",
     "shovel": "Кирка",
     "bucket": "Ведро",
@@ -144,6 +146,8 @@ ITEM_NAMES = {
 }
 
 ITEM_GROUPS = {
+    "profile_frame_aurora": "profile",
+    "profile_bg_stars": "profile",
     "artifact_coin": "collection",
     "artifact_fossil": "collection",
     "artifact_crystal": "collection",
@@ -232,13 +236,15 @@ def _rank_name(items: dict[str, int]) -> str:
     return "Новичок"
 
 
-def _profile_cosmetics(items: dict[str, int]) -> dict[str, Any]:
+def _profile_cosmetics(items: dict[str, int], selection: dict | None = None) -> dict[str, Any]:
     frames = [
+        ("profile_frame_aurora", "Северное сияние"),
         ("profile_frame_crystal", "Кристальная рамка"),
         ("profile_frame_copper", "Медная рамка"),
         ("couple_frame", "Парная рамка"),
     ]
     backgrounds = [
+        ("profile_bg_stars", "Звёздная пещера"),
         ("profile_bg_lava", "Лавовые тоннели"),
         ("profile_bg_old_mine", "Старая шахта"),
     ]
@@ -253,6 +259,10 @@ def _profile_cosmetics(items: dict[str, int]) -> dict[str, Any]:
     ]
     frame = next(({"key": key, "title": title} for key, title in frames if items.get(key, 0) > 0), None)
     background = next(({"key": key, "title": title} for key, title in backgrounds if items.get(key, 0) > 0), None)
+    if selection is not None:
+        frame = next(({"key": key, "title": title} for key, title in frames if key == selection.get("frame") and items.get(key, 0) > 0), None)
+        background = next(({"key": key, "title": title} for key, title in backgrounds if key == selection.get("background") and items.get(key, 0) > 0), None)
+        owned_badges = [badge for badge in owned_badges if badge["key"] == selection.get("badge")]
     return {
         "frame": frame,
         "background": background,
@@ -399,7 +409,13 @@ def build_user_profile(
             "lastDigText": _format_dt(player.last_dig_at if player else None),
             "activeItems": active_items[:24],
             "activeItemsTotal": len(active_items),
-            "cosmetics": _profile_cosmetics(items),
+            "cosmetics": _profile_cosmetics(items, db.get_profile_style(user_id)),
+            "gifts": [
+                {"id": gift["id"], "title": ITEM_NAMES.get(gift["item_key"], gift["item_key"]),
+                 "sender": "Аноним" if gift["item_key"] == "gift_anonymous" else ("@" + gift["username"] if gift["username"] else gift["full_name"] or str(gift["sender_id"])),
+                 "createdAt": gift["created_at"], "pinned": bool(gift["pinned"])}
+                for gift in db.list_profile_gifts(user_id)
+            ],
             "achievements": owned_achievements[-8:],
             "rareAchievements": rare_achievements[:6],
             "achievementsTotal": len(owned_achievements),
