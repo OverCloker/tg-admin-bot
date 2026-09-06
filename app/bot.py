@@ -9,6 +9,7 @@ import secrets
 import socket
 import sys
 import time
+import unicodedata
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -623,7 +624,8 @@ PARTICIPANT_ACTIVITY_TOUCHES: dict[tuple[int, int], float] = {}
 KNOWN_TOPICS: set[tuple[int, int]] = set()
 TRIGGER_CACHE: dict[int, tuple[float, list]] = {}
 REPLY_CACHE: dict[int, tuple[float, dict[str, object]]] = {}
-BLACKLIST_CACHE: dict[int, tuple[float, list]] = {}
+BLACKLIST_CACHE: dict[int, tuple[tuple[int, int], list]] = {}
+BLACKLIST_NOTICE_AT: dict[int, float] = {}
 AUTO_TRIGGER_SENT_CACHE_SECONDS = 120
 AUTO_TRIGGER_SENT_MESSAGES: dict[tuple[int, int], float] = {}
 GIFT_FLOW_TTL_SECONDS = 10 * 60
@@ -755,12 +757,12 @@ def cached_replies_map(chat_id: int) -> dict[str, object]:
 
 
 def cached_blacklist_words(chat_id: int):
-    now = time.monotonic()
+    revision = db.change_revision()
     cached = BLACKLIST_CACHE.get(chat_id)
-    if cached and now - cached[0] < RUNTIME_CACHE_SECONDS:
+    if cached and revision == cached[0]:
         return cached[1]
     items = db.list_blacklist_rules(chat_id)
-    BLACKLIST_CACHE[chat_id] = (now, items)
+    BLACKLIST_CACHE[chat_id] = (revision, items)
     return items
 
 
@@ -10590,21 +10592,50 @@ async def handle_birthdays(message: Message) -> None:
         db.mark_birthday_sent(message.chat.id, birthday.id, sent_date)
 
 
+def normalize_blacklist_text(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text).casefold().replace("ё", "е")
+    return " ".join("".join(char for char in text if unicodedata.category(char) != "Cf").split())
+
+
+def install_blacklist_middleware(dispatcher: Dispatcher) -> None:
+    # Outer middleware runs even when a different router handles the command,
+    # or no text/caption handler matches the update.
+    dispatcher.message.outer_middleware(BlacklistMiddleware())
+    dispatcher.edited_message.outer_middleware(BlacklistMiddleware())
+
+
 async def handle_blacklist(message: Message) -> bool:
     content = message.text or message.caption
     if not content:
         return False
 
-    text = normalize_trigger(content)
+    text = normalize_blacklist_text(content)
     for item in cached_blacklist_words(message.chat.id):
         words = (item.word, *tuple(getattr(item, "variants", ()) or ()))
-        if any(has_trigger(text, word) for word in words):
-            try:
-                await message.delete()
-            except (TelegramBadRequest, TelegramForbiddenError):
-                pass
-
-            await message.answer("Данные выражения запрещены в чате.")
+        if any(has_normalized_trigger(text, normalize_blacklist_text(word)) for word in words):
+            deleted = False
+            for attempt in range(2):
+                try:
+                    await message.delete()
+                    deleted = True
+                    break
+                except TelegramRetryAfter as exc:
+                    if attempt == 0:
+                        await asyncio.sleep(exc.retry_after)
+                    else:
+                        logging.warning("Blacklist deletion rate-limited: chat=%s", message.chat.id)
+                except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound) as exc:
+                    logging.warning("Blacklist deletion failed: chat=%s error=%s", message.chat.id, exc.message)
+                    break
+            # Limit notices, never deletion checks: spam must not exhaust the
+            # sendMessage rate limit and interrupt filtering subsequent updates.
+            now = time.monotonic()
+            if deleted and now - BLACKLIST_NOTICE_AT.get(message.chat.id, float('-inf')) >= 30:
+                BLACKLIST_NOTICE_AT[message.chat.id] = now
+                try:
+                    await message.answer("Данные выражения запрещены в чате.")
+                except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
+                    logging.warning("Blacklist notice could not be delivered: chat=%s", message.chat.id)
             return True
 
     return False
@@ -12714,6 +12745,7 @@ async def main() -> None:
 
     bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher()
+    install_blacklist_middleware(dispatcher)
     staff_router.message.middleware(StaffTopicMiddleware())
     router.message.middleware(DropStaleMessagesMiddleware())
     router.message.middleware(StaffTopicMiddleware())
@@ -12721,7 +12753,6 @@ async def main() -> None:
     router.message.middleware(QuietAdminMiddleware())
     router.message.middleware(ChatLockMiddleware())
     router.message.middleware(AlarmRestrictedMessageMiddleware())
-    router.message.middleware(BlacklistMiddleware())
     router.callback_query.middleware(StaleCallbackQueryMiddleware())
     router.callback_query.middleware(AuditCallbackMiddleware())
     dispatcher.include_router(staff_router)

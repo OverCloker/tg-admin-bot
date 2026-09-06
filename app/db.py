@@ -4706,8 +4706,13 @@ class Database:
         variants: list[str],
         updated_by: int | None,
     ) -> None:
+        with self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._replace_blacklist_variants(chat_id, word, variants, updated_by)
+
+    def _replace_blacklist_variants(self, chat_id: int, word: str, variants: list[str], updated_by: int | None) -> None:
         normalized = normalize_trigger(word)
-        self.add_blacklist_word(chat_id, normalized, updated_by)
+        self._conn.execute("insert into blacklist_words(chat_id,word,added_by,created_at) values(?,?,?,?) on conflict(chat_id,word) do update set added_by=excluded.added_by,created_at=excluded.created_at", (chat_id, normalized, updated_by, utc_now()))
         self._conn.execute(
             "delete from blacklist_reply_variants where chat_id = ? and word = ?",
             (chat_id, normalized),
@@ -4742,6 +4747,10 @@ class Database:
             (chat_id, normalized),
         ).fetchall()
         return [BlacklistWordVariant(**dict(row)) for row in rows]
+
+    def change_revision(self) -> tuple[int, int]:
+        """Observe both this connection's writes and commits from other processes."""
+        return (self._conn.total_changes, int(self._conn.execute("PRAGMA data_version").fetchone()[0]))
 
     def list_blacklist_rules(self, chat_id: int) -> list[BlacklistRule]:
         words = self.list_blacklist_words(chat_id)
