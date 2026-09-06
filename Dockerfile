@@ -25,6 +25,11 @@ COPY app ./app
 COPY README.md ./
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
+# Read only HEAD/refs from the filtered context. Git metadata is not copied
+# into the image, and a later git pull cannot change this build identifier.
+RUN --mount=type=bind,target=/build-context \
+    python app/build_info.py --source /build-context --output /app/app/build-info.json
+
 RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app \
     && mkdir -p /data /app/downloads /app/logs /app/media_storage \

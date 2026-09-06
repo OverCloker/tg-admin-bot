@@ -2367,8 +2367,15 @@ MINI_APP_HTML = r"""<!doctype html>
       const data = await api("/miniapp/profile/admin");
       const summary = data.summary || {};
       const sections = data.sections || [];
+      const build = data.build || {};
       content.innerHTML = `<section class="panel">
         <h2>Админ-панель Mini App</h2>
+        <div class="profile-card" style="margin-bottom:14px">
+          <b>Сборка Mini App / API: <code>${escapeHtml(build.shortRevision || 'не определена')}</code></b>
+          <p class="muted">Собрана: ${build.builtAt ? escapeHtml(new Date(build.builtAt).toLocaleString()) : 'локальный запуск без сборки'}</p>
+          <p class="muted">API запущен: ${build.startedAt ? escapeHtml(new Date(build.startedAt).toLocaleString()) : 'нет данных'}</p>
+          <p class="muted">Это версия запущенного сервера, а не последнего скачанного обновления.</p>
+        </div>
         <p class="muted">Панель управления Mini App. Доступные разделы зависят от роли: владелец управляет ролями, модерация работает по правам в выбранном чате.</p>
         <div class="mine-admin-grid">
           <div class="mine-admin-card">Чаты<b>${Number(summary.chats || 0)}</b></div>

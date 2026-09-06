@@ -100,6 +100,17 @@ server Tailscale IP and put `http://TAILSCALE_IP:8081` into the desktop app's
 
 Build and start:
 
+The Mini App admin panel displays the running API image's Git revision, build
+time and API process start time. A normal `docker compose build` stamps these
+automatically from HEAD/refs in the checkout. Only Git reference metadata is
+allowed into the build context; Git config, objects and credentials stay excluded.
+The read-only build mount does not persist Git metadata in the final image.
+See [Docker build mounts](https://docs.docker.com/reference/dockerfile/#run---mounttypebind).
+A subsequent `git pull` does not change the running image's displayed revision.
+Archives without Git metadata display an unknown revision. This identifies the
+API/Mini App image, not the health or version of a separately running bot process,
+and does not claim that the revision is the latest one on GitHub.
+
 ```bash
 docker compose up -d --build
 docker compose ps

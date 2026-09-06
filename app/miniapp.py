@@ -22,6 +22,7 @@ from fastapi import APIRouter, File, Header, HTTPException, Query, Response, Upl
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from .config import load_config
+from .build_info import get_build_info
 from .db import Database, normalize_trigger
 from .dig_game import (
     INTERACTIVE_DIG_DURABILITY,
@@ -2744,6 +2745,7 @@ def miniapp_profile_admin_panel(
         return {
             "ok": True,
             "viewerRole": "owner" if is_owner else "admin" if is_app_admin else "moderator",
+            "build": get_build_info(),
             "canManageRoles": is_owner,
             "canManageMine": _miniapp_can_manage_mine_admin(db, user["id"]),
             "summary": {
