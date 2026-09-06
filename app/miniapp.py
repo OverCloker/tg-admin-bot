@@ -188,6 +188,10 @@ class ProfileGiftPin(BaseModel):
     pinned: bool
 
 
+class RelationshipCare(BaseModel):
+    chat_id: int
+
+
 class MerchantSale(BaseModel):
     item_key: str | None = Field(default=None, min_length=1, max_length=64)
 
@@ -2620,10 +2624,28 @@ async def miniapp_profile(
             "friendsCount": len([item for item in people if item["relation"] == "friend"]),
             "friends": people[:40],
             "partner": partner,
+            "relationships": [
+                {**progress, "partnerName": next((item["fullName"] for item in people if int(item["id"]) == progress["partnerId"]), "Пара")}
+                for progress in db.list_relationship_progress(target_id) if target_id == viewer_id
+            ],
         }
         return profile
     finally:
         premium.close()
+        db.close()
+
+
+@router.post("/miniapp/profile/relationship-care")
+def relationship_care(payload: RelationshipCare, x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        try:
+            added = db.care_for_partner(payload.chat_id, user["id"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"ok": True, "added": 20 if added else 0, "progress": db.relationship_progress(payload.chat_id, user["id"]), "message": "💕 Знак внимания: +20 опыта пары." if added else "Сегодня ты уже уделил внимание паре. Возвращайся завтра!"}
+    finally:
         db.close()
 
 

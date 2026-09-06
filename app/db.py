@@ -477,6 +477,12 @@ class Database:
                 user_id integer primary key,
                 selection text not null
             );
+            create table if not exists relationship_progress (
+                chat_id integer not null, user1_id integer not null, user2_id integer not null,
+                xp integer not null default 0, care1 text, care2 text,
+                gift_day text, gift_xp integer not null default 0,
+                primary key(chat_id,user1_id,user2_id)
+            );
             create table if not exists minesweeper_hint (
                 user_id integer primary key,
                 game_key text not null,
@@ -3026,6 +3032,7 @@ class Database:
 
     def end_chat_couple(self, chat_id: int, user_id: int, partner_id: int) -> bool:
         user1_id, user2_id = self._social_pair(user_id, partner_id)
+        self._conn.execute("delete from relationship_progress where chat_id=? and user1_id=? and user2_id=?", (chat_id, user1_id, user2_id))
         cur = self._conn.execute(
             """
             delete from chat_couples
@@ -5407,6 +5414,59 @@ class Database:
         row = self._conn.execute("select selection from profile_style where user_id=?", (user_id,)).fetchone()
         return json.loads(row[0]) if row else None
 
+    def relationship_progress(self, chat_id: int, user_id: int) -> dict | None:
+        from .relationships import relationship_level, relationship_day
+        couple = self.get_chat_couple(chat_id, user_id)
+        if not couple:
+            return None
+        row = self._conn.execute("select * from relationship_progress where chat_id=? and user1_id=? and user2_id=?", (chat_id, couple.user1_id, couple.user2_id)).fetchone()
+        result = relationship_level(row["xp"] if row else 0)
+        result.update({"chatId": chat_id, "since": couple.created_at, "canCare": not row or row["care1" if user_id == couple.user1_id else "care2"] != relationship_day()})
+        return result
+
+    def list_relationship_progress(self, user_id: int) -> list[dict]:
+        rows = self._conn.execute(
+            """select c.chat_id, h.title, case when c.user1_id=? then c.user2_id else c.user1_id end as partner_id
+            from chat_couples c join chats h on h.chat_id=c.chat_id
+            where c.user1_id=? or c.user2_id=? order by c.chat_id""", (user_id, user_id, user_id)
+        ).fetchall()
+        results = []
+        for row in rows:
+            progress = self.relationship_progress(row["chat_id"], user_id)
+            if progress:
+                progress.update({"chatTitle": row["title"], "partnerId": row["partner_id"]})
+                results.append(progress)
+        return results
+
+    def care_for_partner(self, chat_id: int, user_id: int) -> bool:
+        from .relationships import relationship_day
+        with self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            couple = self.get_chat_couple(chat_id, user_id)
+            if not couple:
+                raise ValueError("У тебя нет пары в этой группе.")
+            key = (chat_id, couple.user1_id, couple.user2_id)
+            self._conn.execute("insert or ignore into relationship_progress(chat_id,user1_id,user2_id) values(?,?,?)", key)
+            field = "care1" if user_id == couple.user1_id else "care2"
+            day = relationship_day()
+            return bool(self._conn.execute(f"update relationship_progress set xp=xp+20,{field}=? where chat_id=? and user1_id=? and user2_id=? and ({field} is null or {field}!=?)", (day, *key, day)).rowcount)
+
+    def _relationship_gift_xp(self, sender: int, recipient: int, item: str) -> None:
+        from .relationships import GIFT_XP, relationship_day
+        amount = GIFT_XP.get(item, 0)
+        if not amount:
+            return
+        first, second = self._social_pair(sender, recipient)
+        couples = self._conn.execute("select chat_id from chat_couples where user1_id=? and user2_id=?", (first, second)).fetchall()
+        for couple in couples:
+            key = (couple["chat_id"], first, second)
+            self._conn.execute("insert or ignore into relationship_progress(chat_id,user1_id,user2_id) values(?,?,?)", key)
+            row = self._conn.execute("select gift_day,gift_xp from relationship_progress where chat_id=? and user1_id=? and user2_id=?", key).fetchone()
+            day = relationship_day()
+            used = row["gift_xp"] if row["gift_day"] == day else 0
+            earned = min(amount, max(0, 100-used))
+            self._conn.execute("update relationship_progress set xp=xp+?,gift_day=?,gift_xp=? where chat_id=? and user1_id=? and user2_id=?", (earned, day, used+earned, *key))
+
     def buy_minesweeper_hint(self, user_id: int) -> int:
         with self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
@@ -5444,6 +5504,7 @@ class Database:
             if not changed.rowcount:
                 return "empty"
             self._conn.execute("insert into profile_gifts(sender_id,recipient_id,item_key,created_at,request_id) values(?,?,?,?,?)", (sender, recipient, item, utc_now(), request_id))
+            self._relationship_gift_xp(sender, recipient, item)
         return "sent"
 
     def list_profile_gifts(self, user_id: int) -> list[dict]:

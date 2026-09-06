@@ -1564,6 +1564,7 @@ def chat_help_text() -> str:
         "<b>Помощь</b>\n"
         "Основное: <code>профиль</code>, <code>лс @ник</code>, <code>напоминание</code>.\n"
         "Отношения: <code>пара @ник</code> или ответом <code>пара</code>; <code>отношения</code>; <code>расстаться</code>.\n"
+        "Развитие пары: <code>отношения внимание</code> — +20 опыта раз в день.\n"
         "Шахта: <code>копай</code>, <code>сумка</code>, <code>достижения</code>, <code>топ копания</code>.\n"
         "Погода: <code>погода Кривой Рог</code>, <code>автопогода Кривой Рог</code>, <code>автопогода выкл</code>.\n"
         "Развлекуха: <code>кто пидор</code>, <code>roll mute</code>, <code>цитата</code>.\n"
@@ -1593,6 +1594,7 @@ def build_help_rich_message() -> InputRichMessage:
                 summary="Подробнее ниже",
                 blocks=[
                     paragraph("Основное: помощь; профиль; профиль @ник; лс @ник или ответом лс; напоминание — открыть личный планировщик; напомни через 30м текст."),
+                    paragraph("Уровни пары: отношения внимание — бесплатно +20 опыта от каждого участника ежедневно. Цветок +10, кристалл +30, свидание-подарок +25; максимум 100 опыта от подарков за день. Новый день — по Киеву. Пропуски не отнимают опыт."),
                     paragraph("Шахта: копай; сумка; достижения; +кличка текст; топ копания; топ монет; топ рангов."),
                     paragraph("Погода: погода Кривой Рог; погода Кривой Рог завтра; погода Кривой Рог неделя; погода каждый день 08:00 Кривой Рог; погода завтра 21:00 Кривой Рог; погода выкл."),
                     paragraph("Автопогода: автопогода — статус; автопогода Кривой Рог — 08/12/15/18 и завтра в 21; автопогода выкл."),
@@ -5222,12 +5224,21 @@ async def relationship_command(message: Message) -> None:
     parts = (message.text or "").split(maxsplit=1)
     action = parts[0].lstrip("/").split("@")[0].casefold()
     target_text = parts[1].strip() if len(parts) > 1 else ""
+    if action in {"отношения", "relationship"} and target_text.casefold() in {"внимание", "care"}:
+        try:
+            added = db.care_for_partner(chat_id, actor)
+        except ValueError as exc:
+            await message.answer(str(exc))
+            return
+        progress = db.relationship_progress(chat_id, actor)
+        await message.answer(("💕 +20 опыта пары!" if added else "Сегодня ты уже уделил внимание паре.") + f"\nУровень {progress['level']}: {progress['title']} · {progress['xp']} опыта.")
+        return
     if action in {"расстаться", "breakup"}:
         partner = db.get_chat_partner(chat_id, actor)
         if not partner:
             await message.answer("У тебя пока нет пары в этой группе.")
             return
-        await message.answer(f"Подтвердить расставание с {escape(partner.full_name)}? Подарки сохранятся, дружба останется.", reply_markup=social_couple_end_menu(chat_id, actor, partner.user_id))
+        await message.answer(f"Подтвердить расставание с {escape(partner.full_name)}? Прогресс пары в этой группе сбросится. Подарки сохранятся, дружба останется.", reply_markup=social_couple_end_menu(chat_id, actor, partner.user_id))
         return
     if action in {"отношения", "relationship"} or (not target_text and not message.reply_to_message):
         partner = db.get_chat_partner(chat_id, actor)
@@ -5236,6 +5247,9 @@ async def relationship_command(message: Message) -> None:
         if partner and couple:
             days = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(couple.created_at)).days)
             text += f"Пара: {profile_link(partner.user_id, partner.username, partner.full_name)}\nВместе с {couple.created_at[:10]} · дней: {days}\nПодарки паре: Mini App → профиль → подарок паре.\n"
+            progress = db.relationship_progress(chat_id, actor)
+            text += f"\n💞 Уровень {progress['level']}: <b>{progress['title']}</b>\nОпыт: {progress['xp']}" + (f" / {progress['nextXp']} · до следующего: {progress['remaining']}" if progress['nextXp'] else " · максимальный уровень")
+            text += "\n<code>отношения внимание</code> — +20 опыта от каждого раз в день. Подарки паре: цветок +10, кристалл +30, свидание +25 (до 100 опыта в день). Пропуски без штрафов.\n"
         else:
             text += "Пока без пары.\n"
         text += "\nПредложение: <code>пара @ник</code>, <code>пара user_id</code> или ответом <code>пара</code>.\nПросмотр: <code>отношения</code> · завершение: <code>расстаться</code>.\nОдна пара на группу. Предложение действует 24 часа."
@@ -5705,7 +5719,7 @@ async def cb_social_action(callback: CallbackQuery) -> None:
             await callback.answer("Вы уже не пара.", show_alert=True)
             return
         await callback.message.answer(
-            f"{requester_link}, подтвердить расставание с {target_link}?",
+            f"{requester_link}, подтвердить расставание с {target_link}? Прогресс пары в этой группе сбросится; подарки сохранятся.",
             reply_markup=social_couple_end_menu(chat_id, requester_id, target_id),
             disable_web_page_preview=True,
         )

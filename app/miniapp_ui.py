@@ -3160,8 +3160,9 @@ MINI_APP_HTML = r"""<!doctype html>
       <p class="muted">Достижения: <b>${mine.achievementsTotal || 0}/${mine.achievementsKnown || 0}</b></p>
     </section>
     ${cosmeticsHtml}
+    ${(social.relationships || []).map(pair => `<section class="panel"><h2>💞 ${escapeHtml(pair.partnerName)}</h2><p class="muted">${escapeHtml(pair.chatTitle)} · вместе с ${escapeHtml(new Date(pair.since).toLocaleDateString())}</p><h3>Уровень ${pair.level}: ${escapeHtml(pair.title)}</h3><div class="meter" role="progressbar" aria-valuenow="${pair.percent}" aria-valuemin="0" aria-valuemax="100"><div class="fill" style="width:${pair.percent}%"></div></div><p>${pair.xp}${pair.nextXp ? ' / '+pair.nextXp+' опыта · осталось '+pair.remaining : ' опыта · максимальный уровень'}</p><button class="btn" ${pair.canCare?'':'disabled'} onclick="careForPartner(${Number(pair.chatId)})">${pair.canCare?'💕 Уделить внимание · +20 опыта':'Внимание сегодня уже уделено'}</button><p class="muted">Каждый может уделить внимание раз в день. Цветок: +10, кристалл: +30, свидание-подарок: +25. От подарков — до 100 опыта пары в день. Новый день по Киеву; пропуски без штрафов.</p><button class="btn secondary" onclick="showShop('relationships')">Подарки паре</button></section>`).join('')}
     ${isSelf ? `<section class="panel"><h2>Команды отношений</h2><p>В группе: <b>пара @ник</b> или ответом на сообщение <b>пара</b>. Получатель должен подтвердить предложение.</p><p><b>отношения</b> — пара и заявки; <b>расстаться</b> — завершить с подтверждением. Предложение действует 24 часа. В каждой группе — одна пара.</p></section>` : ''}
-    ${social.partner ? `<section class="panel"><h2>💕 Отношения</h2><p>Пара: <b>${escapeHtml(social.partner.fullName || 'Игрок')}</b></p><p class="muted">Цветы, парный кристалл и приглашение на свидание остаются памятными подарками в профиле.</p>${isSelf ? `<button class="btn" onclick="showShop('relationships')">Подарок паре</button>` : ''}</section>` : ''}
+    ${social.partner && !(social.relationships || []).length ? `<section class="panel"><h2>💕 Отношения</h2><p>Пара: <b>${escapeHtml(social.partner.fullName || 'Игрок')}</b></p><p class="muted">Цветы, парный кристалл и приглашение на свидание остаются памятными подарками в профиле.</p>${isSelf ? `<button class="btn" onclick="showShop('relationships')">Подарок паре</button>` : ''}</section>` : ''}
     <section class="panel"><h2>🎁 Витрина подарков</h2><p class="muted">Подарки остаются в коллекции. Закреплённые показываются первыми.</p>
     ${(mine.gifts || []).map(gift => `<div class="profile-card" style="margin-bottom:12px"><b>${gift.pinned ? "📌 " : ""}${escapeHtml(gift.title)}</b><p>От: ${escapeHtml(gift.sender)} · ${escapeHtml(new Date(gift.createdAt).toLocaleDateString())}</p>${isSelf ? `<button class="btn secondary" onclick="pinGift(${Number(gift.id)}, ${!gift.pinned})">${gift.pinned ? "Открепить" : "Закрепить"}</button>` : ""}</div>`).join("") || '<p class="muted">Здесь появятся подарки от друзей и пары.</p>'}</section>
     ${rareAchievements ? `<section class="panel"><h2>Редчайшие достижения</h2><div class="achievement-showcase">${rareAchievements}</div></section>` : ""}
@@ -4050,6 +4051,17 @@ MINI_APP_HTML = r"""<!doctype html>
     } finally {
       busy = false;
     }
+  }
+
+  async function careForPartner(chatId) {
+    if (busy) return;
+    busy=true;
+    try {
+      const result=await api('/miniapp/profile/relationship-care',{method:'POST',body:JSON.stringify({chat_id:chatId})});
+      await showProfile();
+      showNotice(result.message);
+    } catch(error) {alert(error.message);}
+    finally {busy=false;}
   }
 
   async function pinGift(id, pinned) {
