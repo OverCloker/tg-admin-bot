@@ -21,6 +21,7 @@ from app.miniapp import (
     MiniAppTriggerVariant,
     _gift_recipients,
     _gift_target_kind,
+    _miniapp_can_manage_blacklist,
     _miniapp_can_manage_mine_admin,
     _miniapp_can_manage_triggers,
     _miniapp_can_view_admin_panel,
@@ -679,18 +680,23 @@ def test_miniapp_trigger_text_variants_are_limited_to_ten(tmp_path, monkeypatch)
         raise AssertionError("Expected HTTP 400 for eleven text variants")
 
 
-def test_miniapp_trigger_management_is_owner_or_app_admin(tmp_path, monkeypatch) -> None:
+def test_miniapp_trigger_management_is_owner_app_or_telegram_admin(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("OWNER_ID", "42")
     db = Database(str(tmp_path / "bot.sqlite3"))
     db.init()
     db.upsert_chat(-100, "Chat", "supergroup", None)
     db.set_miniapp_profile_role(8, "Админ", 42)
     db.set_admin_feature_permission(-100, 10, "triggers.manage", True, 42)
+    db.replace_chat_telegram_admins(
+        -100,
+        [{"user_id": 11, "username": "tgadmin", "full_name": "Telegram Admin", "status": "administrator", "is_bot": False}],
+    )
 
     try:
         assert _miniapp_can_manage_triggers(db, 42) is True
         assert _miniapp_can_manage_triggers(db, 8) is True
-        assert _miniapp_can_manage_triggers(db, 10) is True
+        assert _miniapp_can_manage_triggers(db, 10) is False
+        assert _miniapp_can_manage_triggers(db, 11) is True
         assert _miniapp_can_manage_triggers(db, 9) is False
     finally:
         db.close()
@@ -806,6 +812,20 @@ def test_miniapp_telegram_admin_cache_grants_app_admin_access(tmp_path, monkeypa
     try:
         assert _miniapp_can_view_admin_panel(db, 9) is True
         assert _miniapp_can_manage_triggers(db, 9) is True
+    finally:
+        db.close()
+
+
+def test_miniapp_delegated_bot_feature_does_not_open_admin_panel(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.upsert_chat(-100, "Main Chat", "supergroup", None)
+    db.set_admin_feature_permission(-100, 9, "triggers.manage", True, 42)
+    try:
+        assert _miniapp_can_view_admin_panel(db, 9) is False
+        assert _miniapp_can_manage_triggers(db, 9) is False
+        assert _miniapp_can_manage_blacklist(db, 9) is False
     finally:
         db.close()
 

@@ -709,7 +709,6 @@ def _miniapp_is_app_admin(db: Database, user_id: int) -> bool:
     role = db.get_miniapp_profile_role(user_id)
     return (
         bool(role and role.label == MINIAPP_ADMIN_PROFILE_LABEL)
-        or bool(db.user_admin_chat_ids(user_id))
         or bool(db.user_telegram_admin_chat_ids(user_id))
     )
 
