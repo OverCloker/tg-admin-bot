@@ -75,10 +75,11 @@ def test_handle_blacklist_uses_latest_rule_from_other_process(rules):
     app_bot.cached_blacklist_words(-100)
     writer = Database(str(path))
     try:
-        writer.replace_blacklist_variants(-100, 'вась', ['василий', 'вася'], 1)
-        msg = SimpleNamespace(text='Вась', caption=None, chat=SimpleNamespace(id=-100), delete=AsyncMock(), answer=AsyncMock())
-        assert asyncio.run(app_bot.handle_blacklist(msg))
-        msg.delete.assert_awaited_once()
+        writer.replace_blacklist_variants(-100, 'вась', ['василий', 'вася', 'васька'], 1)
+        for content in ('Вась', 'а вась', 'васька'):
+            msg = SimpleNamespace(text=content, caption=None, chat=SimpleNamespace(id=-100), delete=AsyncMock(), answer=AsyncMock())
+            assert asyncio.run(app_bot.handle_blacklist(msg))
+            msg.delete.assert_awaited_once()
     finally:
         writer.close()
 
