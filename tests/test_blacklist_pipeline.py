@@ -1,4 +1,6 @@
 import asyncio
+import ast
+import inspect
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -11,6 +13,18 @@ from aiogram.types import Message, Update
 
 from app import bot as app_bot
 from app.db import Database
+
+
+def test_production_polling_requests_edited_messages_from_telegram():
+    # Feeding an Update into a test dispatcher bypasses getUpdates. Validate
+    # the real startup call too, so an omitted subscription cannot hide edits.
+    startup = ast.parse(inspect.getsource(app_bot.main))
+    calls = [node for node in ast.walk(startup) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and node.func.attr == 'start_polling']
+    assert len(calls) == 1
+    allowed = next(keyword.value for keyword in calls[0].keywords if keyword.arg == 'allowed_updates')
+    assert {'message', 'edited_message', 'callback_query', 'message_reaction',
+            'pre_checkout_query', 'my_chat_member'} <= set(ast.literal_eval(allowed))
 
 
 @pytest.fixture

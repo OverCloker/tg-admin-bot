@@ -12776,7 +12776,7 @@ async def main() -> None:
         personal_notifications_task = asyncio.create_task(personal_notifications_loop(bot))
         await dispatcher.start_polling(
             bot,
-            allowed_updates=["message", "callback_query", "message_reaction", "pre_checkout_query", "my_chat_member"],
+            allowed_updates=["message", "edited_message", "callback_query", "message_reaction", "pre_checkout_query", "my_chat_member"],
         )
     except TelegramNotFound as exc:
         raise RuntimeError("Telegram rejected BOT_TOKEN. Check .env and paste the real token from BotFather.") from exc
