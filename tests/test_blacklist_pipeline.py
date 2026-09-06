@@ -70,6 +70,19 @@ def test_cache_observes_api_process_changes_immediately(rules):
         writer.close()
 
 
+def test_handle_blacklist_uses_latest_rule_from_other_process(rules):
+    db, path = rules
+    app_bot.cached_blacklist_words(-100)
+    writer = Database(str(path))
+    try:
+        writer.replace_blacklist_variants(-100, 'вась', ['василий', 'вася'], 1)
+        msg = SimpleNamespace(text='Вась', caption=None, chat=SimpleNamespace(id=-100), delete=AsyncMock(), answer=AsyncMock())
+        assert asyncio.run(app_bot.handle_blacklist(msg))
+        msg.delete.assert_awaited_once()
+    finally:
+        writer.close()
+
+
 def test_all_messages_and_edits_are_checked_before_any_router(rules, monkeypatch):
     delete, answer, handler = AsyncMock(), AsyncMock(), AsyncMock()
     monkeypatch.setattr(Message, 'delete', delete)

@@ -10640,7 +10640,7 @@ async def handle_blacklist(message: Message) -> bool:
     matched_chat_id = None
     matched = False
     for rules_chat_id in await blacklist_rule_chat_ids(message):
-        for item in cached_blacklist_words(rules_chat_id):
+        for item in db.list_blacklist_rules(rules_chat_id):
             words = (item.word, *tuple(getattr(item, "variants", ()) or ()))
             if any(has_normalized_trigger(text, normalize_blacklist_text(word)) for word in words):
                 matched_chat_id = rules_chat_id
