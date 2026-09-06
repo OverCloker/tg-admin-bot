@@ -136,6 +136,7 @@ ADMIN_STATUSES = {ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR}
 ADMIN_STATUS_TEXTS = {"creator", "administrator"}
 ACTIVE_MEMBER_STATUS_TEXTS = {"creator", "administrator", "member", "restricted"}
 SUPPORTED_CHAT_TYPES = {"group", "supergroup"}
+BLACKLIST_CHAT_TYPES = {"group", "supergroup", "channel"}
 MODERATOR_ROLE_SPECS = {
     "assistant": {"title": "Помощник модератора", "short": "Помощник", "max_mute_minutes": 10, "rank": 1},
     "moderator": {"title": "Модератор", "short": "Модератор", "max_mute_minutes": 30, "rank": 2},
@@ -626,6 +627,7 @@ TRIGGER_CACHE: dict[int, tuple[float, list]] = {}
 REPLY_CACHE: dict[int, tuple[float, dict[str, object]]] = {}
 BLACKLIST_CACHE: dict[int, tuple[tuple[int, int], list]] = {}
 BLACKLIST_NOTICE_AT: dict[int, float] = {}
+BLACKLIST_LINKED_CHAT_CACHE: dict[int, tuple[float, int | None]] = {}
 AUTO_TRIGGER_SENT_CACHE_SECONDS = 120
 AUTO_TRIGGER_SENT_MESSAGES: dict[tuple[int, int], float] = {}
 GIFT_FLOW_TTL_SECONDS = 10 * 60
@@ -814,7 +816,7 @@ class BlacklistMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         if (
             isinstance(event, Message)
-            and event.chat.type in SUPPORTED_CHAT_TYPES
+            and event.chat.type in BLACKLIST_CHAT_TYPES
             and (event.text or event.caption)
             and await handle_blacklist(event)
         ):
@@ -10602,6 +10604,31 @@ def install_blacklist_middleware(dispatcher: Dispatcher) -> None:
     # or no text/caption handler matches the update.
     dispatcher.message.outer_middleware(BlacklistMiddleware())
     dispatcher.edited_message.outer_middleware(BlacklistMiddleware())
+    dispatcher.channel_post.outer_middleware(BlacklistMiddleware())
+    dispatcher.edited_channel_post.outer_middleware(BlacklistMiddleware())
+
+
+async def blacklist_rule_chat_ids(message: Message) -> tuple[int, ...]:
+    chat_id = message.chat.id
+    if getattr(message.chat, "type", None) != "channel":
+        return (chat_id,)
+
+    now = time.monotonic()
+    cached = BLACKLIST_LINKED_CHAT_CACHE.get(chat_id)
+    if cached and now - cached[0] < RUNTIME_CACHE_SECONDS:
+        linked_chat_id = cached[1]
+    else:
+        linked_chat_id = None
+        try:
+            chat = await message.bot.get_chat(chat_id)
+            linked_chat_id = getattr(chat, "linked_chat_id", None)
+        except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound) as exc:
+            logging.warning("Blacklist linked chat lookup failed: chat=%s error=%s", chat_id, exc.message)
+        BLACKLIST_LINKED_CHAT_CACHE[chat_id] = (now, linked_chat_id)
+
+    if linked_chat_id and linked_chat_id != chat_id:
+        return (chat_id, int(linked_chat_id))
+    return (chat_id,)
 
 
 async def handle_blacklist(message: Message) -> bool:
@@ -10610,33 +10637,44 @@ async def handle_blacklist(message: Message) -> bool:
         return False
 
     text = normalize_blacklist_text(content)
-    for item in cached_blacklist_words(message.chat.id):
-        words = (item.word, *tuple(getattr(item, "variants", ()) or ()))
-        if any(has_normalized_trigger(text, normalize_blacklist_text(word)) for word in words):
-            deleted = False
-            for attempt in range(2):
-                try:
-                    await message.delete()
-                    deleted = True
-                    break
-                except TelegramRetryAfter as exc:
-                    if attempt == 0:
-                        await asyncio.sleep(exc.retry_after)
-                    else:
-                        logging.warning("Blacklist deletion rate-limited: chat=%s", message.chat.id)
-                except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound) as exc:
-                    logging.warning("Blacklist deletion failed: chat=%s error=%s", message.chat.id, exc.message)
-                    break
-            # Limit notices, never deletion checks: spam must not exhaust the
-            # sendMessage rate limit and interrupt filtering subsequent updates.
-            now = time.monotonic()
-            if deleted and now - BLACKLIST_NOTICE_AT.get(message.chat.id, float('-inf')) >= 30:
-                BLACKLIST_NOTICE_AT[message.chat.id] = now
-                try:
-                    await message.answer("Данные выражения запрещены в чате.")
-                except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
-                    logging.warning("Blacklist notice could not be delivered: chat=%s", message.chat.id)
-            return True
+    matched_chat_id = None
+    matched = False
+    for rules_chat_id in await blacklist_rule_chat_ids(message):
+        for item in cached_blacklist_words(rules_chat_id):
+            words = (item.word, *tuple(getattr(item, "variants", ()) or ()))
+            if any(has_normalized_trigger(text, normalize_blacklist_text(word)) for word in words):
+                matched_chat_id = rules_chat_id
+                matched = True
+                break
+        if matched:
+            break
+
+    if matched:
+        notice_chat_id = matched_chat_id or message.chat.id
+        deleted = False
+        for attempt in range(2):
+            try:
+                await message.delete()
+                deleted = True
+                break
+            except TelegramRetryAfter as exc:
+                if attempt == 0:
+                    await asyncio.sleep(exc.retry_after)
+                else:
+                    logging.warning("Blacklist deletion rate-limited: chat=%s", message.chat.id)
+            except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound) as exc:
+                logging.warning("Blacklist deletion failed: chat=%s rules_chat=%s error=%s", message.chat.id, notice_chat_id, exc.message)
+                break
+        # Limit notices, never deletion checks: spam must not exhaust the
+        # sendMessage rate limit and interrupt filtering subsequent updates.
+        now = time.monotonic()
+        if deleted and now - BLACKLIST_NOTICE_AT.get(notice_chat_id, float('-inf')) >= 30:
+            BLACKLIST_NOTICE_AT[notice_chat_id] = now
+            try:
+                await message.answer("Данные выражения запрещены в чате.")
+            except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
+                logging.warning("Blacklist notice could not be delivered: chat=%s", message.chat.id)
+        return True
 
     return False
 
@@ -12776,7 +12814,16 @@ async def main() -> None:
         personal_notifications_task = asyncio.create_task(personal_notifications_loop(bot))
         await dispatcher.start_polling(
             bot,
-            allowed_updates=["message", "edited_message", "callback_query", "message_reaction", "pre_checkout_query", "my_chat_member"],
+            allowed_updates=[
+                "message",
+                "edited_message",
+                "channel_post",
+                "edited_channel_post",
+                "callback_query",
+                "message_reaction",
+                "pre_checkout_query",
+                "my_chat_member",
+            ],
         )
     except TelegramNotFound as exc:
         raise RuntimeError("Telegram rejected BOT_TOKEN. Check .env and paste the real token from BotFather.") from exc

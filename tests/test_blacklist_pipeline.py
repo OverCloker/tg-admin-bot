@@ -23,7 +23,7 @@ def test_production_polling_requests_edited_messages_from_telegram():
              and isinstance(node.func, ast.Attribute) and node.func.attr == 'start_polling']
     assert len(calls) == 1
     allowed = next(keyword.value for keyword in calls[0].keywords if keyword.arg == 'allowed_updates')
-    assert {'message', 'edited_message', 'callback_query', 'message_reaction',
+    assert {'message', 'edited_message', 'channel_post', 'edited_channel_post', 'callback_query', 'message_reaction',
             'pre_checkout_query', 'my_chat_member'} <= set(ast.literal_eval(allowed))
 
 
@@ -93,6 +93,40 @@ def test_all_messages_and_edits_are_checked_before_any_router(rules, monkeypatch
             assert delete.await_count == 12
             assert answer.await_count == 1
             handler.assert_not_awaited()
+        finally:
+            await client.session.close()
+    asyncio.run(run())
+
+
+def test_channel_posts_use_linked_group_blacklist(rules, monkeypatch):
+    delete, answer, handler = AsyncMock(), AsyncMock(), AsyncMock()
+    monkeypatch.setattr(Message, 'delete', delete)
+    monkeypatch.setattr(Message, 'answer', answer)
+    monkeypatch.setattr(app_bot, 'BLACKLIST_LINKED_CHAT_CACHE', {})
+    async def run():
+        client = Bot('123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi')
+        client.get_chat = AsyncMock(return_value=SimpleNamespace(linked_chat_id=-100))
+        dispatcher = Dispatcher()
+        app_bot.install_blacklist_middleware(dispatcher)
+        first = Router()
+        async def receive(message):
+            await handler(message)
+        first.channel_post.register(receive)
+        first.edited_channel_post.register(receive)
+        dispatcher.include_router(first)
+        try:
+            for index, kind in enumerate(('channel_post', 'edited_channel_post')):
+                payload = {
+                    'message_id': index + 1,
+                    'date': datetime.now(timezone.utc),
+                    'chat': {'id': -200, 'type': 'channel', 'title': 'Channel'},
+                    'text': 'Вась и бананы',
+                }
+                await dispatcher.feed_update(client, Update.model_validate({'update_id': index, kind: payload}))
+            assert delete.await_count == 2
+            assert answer.await_count == 1
+            handler.assert_not_awaited()
+            client.get_chat.assert_awaited_once()
         finally:
             await client.session.close()
     asyncio.run(run())
