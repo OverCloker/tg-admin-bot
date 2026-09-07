@@ -171,7 +171,20 @@ ALARM_TOPIC_COMMAND_RE = re.compile(
 )
 ALERTS_LOCATION_UID = "46"
 ALERTS_LOCATION_TITLE = "Криворізький район"
-ALERTS_POLL_INTERVAL_SECONDS = 60
+ALERTS_LOCATION_OBLAST_UID = "9"
+ALERTS_POLL_INTERVAL_SECONDS = 30
+ALERTS_THREAT_LABELS = {
+    "tactic_aircraft_activity": "активность тактической авиации",
+    "strategic_aircraft_activity": "активность стратегической авиации",
+    "mig31k_departure": "вылет МиГ-31К",
+    "ballistic_missiles": "баллистические ракеты",
+    "cruise_missiles": "крылатые ракеты",
+    "unspecified_missiles": "ракетная угроза",
+    "drones": "ударные БПЛА",
+    "guided_aerial_bombs": "управляемые авиабомбы",
+    "air_defense": "работа ПВО",
+    "unknown": "неуточнённая угроза",
+}
 SECRET_MESSAGE_ALERT_LIMIT = 190
 GIVEAWAY_TOP_RE = re.compile(r"^топ\s+пидоров[?!.]?$", re.IGNORECASE)
 try:
@@ -10282,10 +10295,126 @@ async def delete_edited_single_emoji_during_alarm(message: Message) -> None:
         await delete_single_emoji_during_alarm(message)
 
 
-async def fetch_alerts_location_status() -> str:
+@dataclass(frozen=True)
+class AlertsThreat:
+    threat_type: str
+    level: str | None
+    started_at: str | None
+    source_message: str | None
+
+
+@dataclass(frozen=True)
+class AlertsLocationState:
+    status: str
+    alert_level: str | None = None
+    threats: tuple[AlertsThreat, ...] = ()
+
+
+def parse_alerts_location_state(payload: object) -> AlertsLocationState:
+    if not isinstance(payload, dict) or not isinstance(payload.get("alerts"), list):
+        raise RuntimeError("Некорректный ответ Alerts.in.ua: отсутствует список alerts")
+
+    direct_alert = False
+    partial_alert = False
+    levels: set[str] = set()
+    threats: set[AlertsThreat] = set()
+    normalized_raion = ALERTS_LOCATION_TITLE.casefold()
+
+    for item in payload["alerts"]:
+        if not isinstance(item, dict) or item.get("alert_type") != "air_raid":
+            continue
+
+        location_uid = str(item.get("location_uid") or "").strip()
+        location_raion = str(item.get("location_raion") or "").strip().casefold()
+        is_direct = location_uid in {ALERTS_LOCATION_UID, ALERTS_LOCATION_OBLAST_UID}
+        is_child = location_raion == normalized_raion
+        if not is_direct and not is_child:
+            continue
+
+        direct_alert = direct_alert or is_direct
+        partial_alert = partial_alert or is_child
+        alert_level = str(item.get("alert_level") or "").strip().lower()
+        if alert_level in {"red", "yellow"}:
+            levels.add(alert_level)
+
+        raw_threats = item.get("threats")
+        if not isinstance(raw_threats, list):
+            continue
+        for threat in raw_threats:
+            if not isinstance(threat, dict):
+                continue
+            threat_type = str(threat.get("threat_type") or "unknown").strip().lower() or "unknown"
+            level = str(threat.get("level") or "").strip().lower() or None
+            if level not in {"red", "yellow"}:
+                level = None
+            if level:
+                levels.add(level)
+            started_at = str(threat.get("started_at") or "").strip() or None
+            source_message = str(threat.get("source_message") or "").strip() or None
+            threats.add(AlertsThreat(threat_type, level, started_at, source_message))
+
+    status = "A" if direct_alert else "P" if partial_alert else "N"
+    alert_level = "red" if "red" in levels else "yellow" if "yellow" in levels else None
+    ordered_threats = tuple(
+        sorted(
+            threats,
+            key=lambda threat: (
+                threat.threat_type,
+                threat.level or "",
+                threat.started_at or "",
+                threat.source_message or "",
+            ),
+        )
+    )
+    return AlertsLocationState(status=status, alert_level=alert_level, threats=ordered_threats)
+
+
+def alerts_location_state_signature(state: AlertsLocationState) -> str:
+    return json.dumps(
+        {
+            "status": state.status,
+            "alert_level": state.alert_level,
+            "threats": [
+                {
+                    "type": threat.threat_type,
+                    "level": threat.level,
+                    "started_at": threat.started_at,
+                    "source_message": threat.source_message,
+                }
+                for threat in state.threats
+            ],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def format_alerts_location_details(state: AlertsLocationState) -> str:
+    lines: list[str] = []
+    if state.alert_level == "red":
+        lines.append("Уровень: 🔴 красный")
+    elif state.alert_level == "yellow":
+        lines.append("Уровень: 🟡 жёлтый")
+
+    if state.threats:
+        lines.append("Конкретные угрозы:")
+        for threat in state.threats[:8]:
+            label = ALERTS_THREAT_LABELS.get(
+                threat.threat_type,
+                threat.threat_type.replace("_", " "),
+            )
+            icon = "🔴" if threat.level == "red" else "🟡" if threat.level == "yellow" else "•"
+            source = (threat.source_message or "").strip()
+            suffix = f" — {escape(source[:240])}" if source else ""
+            lines.append(f"{icon} {escape(label)}{suffix}")
+    return "\n".join(lines)
+
+
+async def fetch_alerts_location_state() -> AlertsLocationState:
     if not ALERTS_API_TOKEN:
         raise RuntimeError("ALERTS_API_TOKEN не настроен")
-    url = f"https://api.alerts.in.ua/v1/iot/active_air_raid_alerts/{ALERTS_LOCATION_UID}.json"
+    url = "https://api.alerts.in.ua/v1/alerts/active.json"
     timeout = aiohttp.ClientTimeout(total=15)
     headers = {"Authorization": f"Bearer {ALERTS_API_TOKEN}"}
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -10293,10 +10422,7 @@ async def fetch_alerts_location_status() -> str:
             if response.status != 200:
                 body = await response.text()
                 raise RuntimeError(f"Alerts.in.ua HTTP {response.status}: {body[:200]}")
-            status = str(await response.json(content_type=None)).strip().upper()
-            if status not in {"A", "P", "N"}:
-                raise RuntimeError(f"Неизвестный статус Alerts.in.ua: {status!r}")
-            return status
+            return parse_alerts_location_state(await response.json(content_type=None))
 
 
 async def apply_alarm_restrictions(bot: Bot, chat_id: int) -> None:
@@ -10344,17 +10470,27 @@ async def delete_previous_alarm_status_message(bot: Bot, chat_id: int, status: s
     db.clear_alarm_api_status_message_ids(chat_id, status)
 
 
-async def activate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
+async def activate_alarm_from_api(
+    bot: Bot,
+    chat_id: int,
+    alert_state: AlertsLocationState | None = None,
+) -> bool:
     settings = db.get_alarm_settings(chat_id)
     restrictions_enabled = db.alarm_restrictions_enabled(chat_id)
     if restrictions_enabled:
         await apply_alarm_restrictions(bot, chat_id)
 
     await delete_previous_alarm_status_message(bot, chat_id, "N")
+    state = alert_state or AlertsLocationState(status="A")
+    alarm_kind = "частичная воздушная тревога" if state.status == "P" else "воздушная тревога"
+    alert_text = f"Alerts.in.ua сообщает: объявлена {alarm_kind} — <b>{ALERTS_LOCATION_TITLE}</b>."
+    details = format_alerts_location_details(state)
+    if details:
+        alert_text = f"{alert_text}\n\n{details}"
     alert_message = await send_alarm_notification(
         bot,
         chat_id,
-        f"Alerts.in.ua сообщает: объявлена воздушная тревога — <b>{ALERTS_LOCATION_TITLE}</b>.",
+        alert_text,
     )
     if alert_message is not None:
         db.set_alarm_api_status_message_id(chat_id, "A", alert_message.message_id)
@@ -10368,6 +10504,22 @@ async def activate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
     if action_message is not None:
         db.set_alarm_api_action_message_id(chat_id, "A", action_message.message_id)
     return alert_message is not None and action_message is not None
+
+
+async def send_alarm_details_update(
+    bot: Bot,
+    chat_id: int,
+    alert_state: AlertsLocationState,
+) -> bool:
+    details = format_alerts_location_details(alert_state)
+    if not details:
+        details = "Конкретные угрозы сейчас не указаны."
+    message = await send_alarm_notification(
+        bot,
+        chat_id,
+        f"⚠️ Обновление тревоги — <b>{ALERTS_LOCATION_TITLE}</b>.\n\n{details}",
+    )
+    return message is not None
 
 
 async def restore_alarm_restrictions(bot: Bot, chat_id: int) -> None:
@@ -10427,33 +10579,52 @@ async def deactivate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
 
 async def alerts_monitor_loop(bot: Bot) -> None:
     initial_sync = True
+    notified_details: dict[int, str] = {}
     while True:
         try:
             chat_ids = db.list_alarm_api_chats()
             if chat_ids and ALERTS_API_TOKEN:
-                status = await fetch_alerts_location_status()
+                alert_state = await fetch_alerts_location_state()
+                status = alert_state.status
+                details_signature = alerts_location_state_signature(alert_state)
                 active = status in {"A", "P"}
                 if initial_sync:
                     baseline = "A" if active else "N"
                     for chat_id in chat_ids:
                         db.set_alarm_api_last_status(chat_id, status)
                         db.set_alarm_api_last_notified_status(chat_id, baseline)
+                        notified_details[chat_id] = details_signature
                     initial_sync = False
                     await asyncio.sleep(ALERTS_POLL_INTERVAL_SECONDS)
                     continue
                 for chat_id in chat_ids:
                     previous = db.alarm_api_last_status(chat_id)
                     notified = db.alarm_api_last_notified_status(chat_id)
+                    previous_details = notified_details.get(chat_id)
                     if previous != status:
                         db.set_alarm_api_last_status(chat_id, status)
                     if active and notified != "A":
-                        if await activate_alarm_from_api(bot, chat_id):
+                        if await activate_alarm_from_api(bot, chat_id, alert_state):
                             db.set_alarm_api_last_notified_status(chat_id, "A")
+                            notified_details[chat_id] = details_signature
                     elif not active and notified != "N":
                         if previous is None and notified is None:
                             db.set_alarm_api_last_notified_status(chat_id, "N")
+                            notified_details[chat_id] = details_signature
                         elif await deactivate_alarm_from_api(bot, chat_id):
                             db.set_alarm_api_last_notified_status(chat_id, "N")
+                            notified_details[chat_id] = details_signature
+                    elif active and previous_details is not None and previous_details != details_signature:
+                        if await send_alarm_details_update(bot, chat_id, alert_state):
+                            notified_details[chat_id] = details_signature
+                    else:
+                        notified_details[chat_id] = details_signature
+                enabled_chat_ids = set(chat_ids)
+                notified_details = {
+                    chat_id: signature
+                    for chat_id, signature in notified_details.items()
+                    if chat_id in enabled_chat_ids
+                }
         except asyncio.CancelledError:
             raise
         except Exception as exc:
