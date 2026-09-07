@@ -156,6 +156,8 @@ MODERATOR_REMOVE_COMMANDS = {
 }
 MODERATOR_MUTE_ALERT_THRESHOLD = 3
 MODERATOR_MUTE_ALERT_WINDOW_HOURS = 24
+QUIET_DEFAULT_MINUTES = 60
+QUIET_MAX_MINUTES = 365 * 24 * 60
 DICTIONARY_HIT_MUTE_MINUTES = 1
 DICTIONARY_HIT_PHOTO_PATH = Path(__file__).with_name("assets") / "dictionary_hit.jpg"
 DAY_PICK_KEY = "day_pick"
@@ -1592,7 +1594,7 @@ def chat_help_text() -> str:
         "Шахта: <code>копай</code>, <code>сумка</code>, <code>достижения</code>, <code>топ копания</code>.\n"
         "Погода: <code>погода Кривой Рог</code>, <code>автопогода Кривой Рог</code>, <code>автопогода выкл</code>.\n"
         "Развлекуха: <code>кто пидор</code>, <code>roll mute</code>, <code>цитата</code>.\n"
-        "Модерация: <code>косяк</code>, <code>затихни 10 - причина</code>, <code>трещи</code>, <code>-сооб</code>, <code>чат стоп 5м причина</code>."
+        "Модерация: <code>косяк</code>, <code>затихни</code> (1 ч), <code>затихни 30м/2ч/3д - причина</code>, <code>трещи</code>, <code>-сооб</code>, <code>чат стоп 5м причина</code>."
     )
 
 
@@ -1623,7 +1625,7 @@ def build_help_rich_message() -> InputRichMessage:
                     paragraph("Погода: погода Кривой Рог; погода Кривой Рог завтра; погода Кривой Рог неделя; погода каждый день 08:00 Кривой Рог; погода завтра 21:00 Кривой Рог; погода выкл."),
                     paragraph("Автопогода: автопогода — статус; автопогода Кривой Рог — 08/12/15/18 и завтра в 21; автопогода выкл."),
                     paragraph("Развлекуха: кто пидор; топ пидоров; roll mute; топ roll mute; в цитаты; цитата."),
-                    paragraph("Модерация: косяк; затихни 10 - причина; затихни админ 60 - причина; трещи; ударить словарём; -сооб; чат стоп 5м причина; чат старт."),
+                    paragraph("Модерация: косяк; затихни — 1 час; затихни 30м/2ч/3д - причина; затихни админ — тихий режим администратора; трещи; ударить словарём; -сооб; чат стоп 5м причина; чат старт."),
                     paragraph("Роли: +помощник; +модератор; +стМодератор; -помощник; -модератор; -стМодератор. Назначение — только владелец."),
                 ],
                 is_open=False,
@@ -1711,28 +1713,59 @@ def normalize_dig_tag(text: str | None) -> str:
     return tag
 
 
+QUIET_DURATION_UNITS = {
+    "м": 1,
+    "m": 1,
+    "мин": 1,
+    "минута": 1,
+    "минуты": 1,
+    "минут": 1,
+    "ч": 60,
+    "h": 60,
+    "час": 60,
+    "часа": 60,
+    "часов": 60,
+    "д": 24 * 60,
+    "d": 24 * 60,
+    "день": 24 * 60,
+    "дня": 24 * 60,
+    "дней": 24 * 60,
+    "сутки": 24 * 60,
+    "суток": 24 * 60,
+}
+QUIET_DURATION_PATTERN = "|".join(sorted((re.escape(unit) for unit in QUIET_DURATION_UNITS), key=len, reverse=True))
+
+
+def parse_quiet_duration(value: str | None) -> int | None:
+    """Parse a single mute duration; a bare number remains minutes for compatibility."""
+    match = re.fullmatch(rf"(\d+)\s*({QUIET_DURATION_PATTERN})?", (value or "").strip(), re.IGNORECASE)
+    if not match:
+        return None
+    amount = int(match.group(1))
+    if amount < 1:
+        return None
+    multiplier = QUIET_DURATION_UNITS.get((match.group(2) or "м").casefold(), 1)
+    return amount * multiplier
+
+
 def parse_quiet_payload(text: str | None) -> tuple[str | None, int | None, str]:
     if not text:
         return None, None, ""
-    parts = text.strip().split(maxsplit=2)
-    username = None
-    if parts and parts[0].startswith("@"):
-        if len(parts) < 3:
-            return normalize_username(parts[0]), None, ""
-        username = normalize_username(parts[0])
-        command = parts[1]
-        rest = parts[2]
-    else:
-        command = parts[0] if parts else ""
-        rest = parts[1] if len(parts) > 1 else ""
-
-    if command.casefold() != "затихни":
-        return username, None, ""
-
-    minutes_text, _, reason = rest.partition(" - ")
-    if not minutes_text.strip().isdigit():
-        return username, None, reason.strip()
-    return username, int(minutes_text.strip()), reason.strip()
+    match = re.fullmatch(
+        rf"(?:(@[A-Za-z0-9_]{{5,32}})\s+)?затихни"
+        rf"(?:\s+(@[A-Za-z0-9_]{{5,32}}))?"
+        rf"(?:\s+(\d+\s*(?:{QUIET_DURATION_PATTERN})?))?"
+        r"(?:\s*-\s*(.*))?",
+        text.strip(),
+        re.IGNORECASE,
+    )
+    if not match:
+        return None, None, ""
+    username_value = match.group(1) or match.group(2)
+    username = normalize_username(username_value) if username_value else None
+    duration = match.group(3)
+    minutes = parse_quiet_duration(duration) if duration else QUIET_DEFAULT_MINUTES
+    return username, minutes, (match.group(4) or "").strip()
 
 
 def parse_dictionary_hit_payload(text: str | None) -> str | None:
@@ -1763,16 +1796,22 @@ def parse_quiet_admin_payload(text: str | None) -> tuple[str | None, int, str] |
     if not text:
         return None
     match = re.fullmatch(
-        r"(?:(@[A-Za-z0-9_]{5,32})\s+)?затихни\s+админ(?:\s+(\d+))?(?:\s+-\s*(.*))?",
+        rf"(?:(@[A-Za-z0-9_]{{5,32}})\s+)?затихни\s+админ"
+        rf"(?:\s+(@[A-Za-z0-9_]{{5,32}}))?"
+        rf"(?:\s+(\d+\s*(?:{QUIET_DURATION_PATTERN})?))?"
+        r"(?:\s*-\s*(.*))?",
         text.strip(),
         re.IGNORECASE,
     )
     if not match:
         return None
-    username = normalize_username(match.group(1)) if match.group(1) else None
-    minutes = int(match.group(2)) if match.group(2) else 60
-    reason = (match.group(3) or "").strip()
-    return username, max(1, min(10080, minutes)), reason
+    username_value = match.group(1) or match.group(2)
+    username = normalize_username(username_value) if username_value else None
+    minutes = parse_quiet_duration(match.group(3)) if match.group(3) else QUIET_DEFAULT_MINUTES
+    if minutes is None:
+        return None
+    reason = (match.group(4) or "").strip()
+    return username, min(QUIET_MAX_MINUTES, minutes), reason
 
 
 def moderator_role_title(role: str | None, *, short: bool = False) -> str:
@@ -4004,12 +4043,30 @@ def default_open_permissions() -> ChatPermissions:
     )
 
 
+def format_quiet_duration(minutes: int) -> str:
+    def plural(value: int, one: str, few: str, many: str) -> str:
+        if value % 10 == 1 and value % 100 != 11:
+            return one
+        if value % 10 in {2, 3, 4} and value % 100 not in {12, 13, 14}:
+            return few
+        return many
+
+    if minutes % (24 * 60) == 0:
+        days = minutes // (24 * 60)
+        return f"{days} {plural(days, 'день', 'дня', 'дней')}"
+    if minutes % 60 == 0:
+        hours = minutes // 60
+        return f"{hours} {plural(hours, 'час', 'часа', 'часов')}"
+    return f"{minutes} {plural(minutes, 'минута', 'минуты', 'минут')}"
+
+
 def render_quiet_reply(template: str | None, target_name: str, minutes: int, reason: str) -> str:
-    text = template or "{user} затих на <b>{minutes}</b> мин.{reason_line}"
+    text = template or "{user} затих на <b>{duration}</b>.{reason_line}"
     reason_line = f"\nПричина: {escape(reason)}" if reason else ""
     return (
         text.replace("{user}", escape(target_name))
         .replace("{minutes}", str(minutes))
+        .replace("{duration}", format_quiet_duration(minutes))
         .replace("{reason}", escape(reason))
         .replace("{reason_line}", reason_line)
     )
@@ -7963,7 +8020,7 @@ async def cb_action(callback: CallbackQuery, state: FSMContext) -> None:
         )
     elif action == "quiet":
         settings = db.get_quiet_settings(chat_id)
-        text_preview = preview_html(settings.reply_text or "{user} затих на <b>{minutes}</b> мин.{reason_line}")
+        text_preview = preview_html(settings.reply_text or "{user} затих на <b>{duration}</b>.{reason_line}")
         media_text = settings.media_type or "не выбрано"
         await safe_edit(
             callback,
@@ -8519,10 +8576,11 @@ async def cb_quiet(callback: CallbackQuery, state: FSMContext) -> None:
             "Можно использовать:\n"
             "<code>{user}</code> - пользователь\n"
             "<code>{minutes}</code> - минуты\n"
+            "<code>{duration}</code> - срок с единицей времени\n"
             "<code>{reason}</code> - причина без новой строки\n"
             "<code>{reason_line}</code> - строка с причиной, если она есть\n\n"
             "Пример:\n"
-            "<code>{user} затих на {minutes} мин.{reason_line}</code>",
+            "<code>{user} затих на {duration}.{reason_line}</code>",
             reply_markup=back_to_chat_menu(chat_id),
         )
     elif action == "media":
@@ -12205,7 +12263,14 @@ async def start_chat_messages(message: Message) -> None:
     )
 
 
-@router.message(F.text.regexp(re.compile(r"^(@[A-Za-z0-9_]{5,32}\s+)?затихни\s+админ(?:\s+\d+)?(\s+-\s+.*)?$", re.IGNORECASE)))
+@router.message(
+    F.text.regexp(
+        re.compile(
+            r"^\s*(?:@[A-Za-z0-9_]{5,32}\s+)?затихни\s+админ(?:\s+@[A-Za-z0-9_]{5,32})?(?:\s+.*)?$",
+            re.IGNORECASE,
+        )
+    )
+)
 async def quiet_admin_user(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
         return
@@ -12217,7 +12282,11 @@ async def quiet_admin_user(message: Message) -> None:
     await remember_sender(message)
     parsed = parse_quiet_admin_payload(message.text)
     if not parsed:
-        await safe_reply(message, "Формат: ответом на сообщение <code>затихни админ 60 - причина</code> или <code>@username затихни админ 60 - причина</code>")
+        await safe_reply(
+            message,
+            "Формат: ответом <code>затихни админ</code> или по нику <code>затихни админ @username</code>. "
+            "Без срока — 1 час; свой срок: <code>30м</code>, <code>2ч</code> или <code>3д</code>.",
+        )
         return
     username, minutes, reason = parsed
     target_id, target_name, error = await resolve_command_target(message, username)
@@ -12248,15 +12317,23 @@ async def quiet_admin_user(message: Message) -> None:
         created_by=message.from_user.id,
     )
     reason_line = f"\nПричина: {escape(reason)}" if reason else ""
+    duration_text = format_quiet_duration(minutes)
     await safe_reply(
         message,
-        f"{escape(target_name)} отправлен в тихий режим на <b>{minutes}</b> мин. "
+        f"{escape(target_name)} отправлен в тихий режим на <b>{duration_text}</b>. "
         "Новые сообщения и реакции будут удаляться."
         f"{reason_line}",
     )
 
 
-@router.message(F.text.regexp(re.compile(r"^(@[A-Za-z0-9_]{5,32}\s+)?затихни\s+\d+(\s+-\s+.*)?$", re.IGNORECASE)))
+@router.message(
+    F.text.regexp(
+        re.compile(
+            r"^\s*(?:@[A-Za-z0-9_]{5,32}\s+)?затихни(?!\s+админ(?:\s|$))(?:\s+.*)?$",
+            re.IGNORECASE,
+        )
+    )
+)
 async def quiet_user(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
         return
@@ -12278,7 +12355,12 @@ async def quiet_user(message: Message) -> None:
     await remember_sender(message)
     username, minutes, reason = parse_quiet_payload(message.text)
     if not minutes:
-        await safe_reply(message, "Формат: ответом на сообщение <code>затихни 10 - причина</code> или <code>@username затихни 10 - причина</code>")
+        await safe_reply(
+            message,
+            "Формат: ответом <code>затихни</code> или по нику <code>затихни @username</code>. "
+            "Без срока — 1 час; свой срок: <code>затихни 30м</code>, <code>затихни 2ч</code> "
+            "или <code>затихни 3д</code>. Причина указывается после <code>-</code>.",
+        )
         return
 
     target_id, target_name, error = await resolve_command_target(message, username)
@@ -12293,7 +12375,7 @@ async def quiet_user(message: Message) -> None:
 
     requested_minutes = minutes
     if actor_role == "admin":
-        minutes = max(1, min(10080, minutes))
+        minutes = max(1, min(QUIET_MAX_MINUTES, minutes))
     else:
         role_limit = moderator_max_mute_minutes(actor_role)
         minutes = max(1, min(role_limit, minutes))
@@ -12329,7 +12411,10 @@ async def quiet_user(message: Message) -> None:
     settings = db.get_quiet_settings(message.chat.id)
     cap_line = ""
     if actor_role != "admin" and requested_minutes > minutes:
-        cap_line = f"\nЗапрошено {requested_minutes} мин, но лимит роли: <b>{minutes}</b> мин."
+        cap_line = (
+            f"\nЗапрошено {format_quiet_duration(requested_minutes)}, "
+            f"но лимит роли: <b>{format_quiet_duration(minutes)}</b>."
+        )
     await safe_reply(message, render_quiet_reply(settings.reply_text, target_name, minutes, reason) + cap_line)
     await send_quiet_media(message, settings.media_type, settings.media_file_id)
     db.add_moderator_action(message.chat.id, message.from_user.id, target_id, "mute", minutes, reason)
@@ -12340,7 +12425,7 @@ async def quiet_user(message: Message) -> None:
             "🔇 <b>Мут</b>\n"
             f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
             f"Кому: {escape(target_name)}\n"
-            f"Срок: <b>{minutes}</b> мин"
+            f"Срок: <b>{format_quiet_duration(minutes)}</b>"
             f"{reason_line}"
         ),
     )

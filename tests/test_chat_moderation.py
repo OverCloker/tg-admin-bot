@@ -8,6 +8,7 @@ from app.bot import (
     MODERATOR_ASSIGN_COMMANDS,
     MINIAPP_ADMIN_PROFILE_LABEL,
     actor_can_manage_moderators,
+    format_quiet_duration,
     handle_blacklist,
     is_miniapp_admin_user,
     moderator_can_delete_messages,
@@ -18,6 +19,9 @@ from app.bot import (
     parse_chat_stop_payload,
     parse_dictionary_hit_payload,
     parse_duration_seconds_token,
+    parse_quiet_admin_payload,
+    parse_quiet_duration,
+    parse_quiet_payload,
     parse_moderator_duration,
     parse_moderator_role_payload,
 )
@@ -222,6 +226,46 @@ def test_chat_control_payloads() -> None:
     assert parse_duration_seconds_token("1ч") == 3600
     assert parse_chat_stop_payload("чат стоп 5м зачистка") == (300, "зачистка")
     assert parse_chat_stop_payload("чат стоп без флуда") == (None, "без флуда")
+
+
+def test_quiet_payload_defaults_to_one_hour() -> None:
+    assert parse_quiet_payload("затихни") == (None, 60, "")
+    assert parse_quiet_payload("затихни - флуд") == (None, 60, "флуд")
+    assert parse_quiet_payload("@target_user затихни") == ("target_user", 60, "")
+    assert parse_quiet_payload("затихни @target_user") == ("target_user", 60, "")
+
+
+def test_quiet_payload_accepts_minutes_hours_and_days() -> None:
+    assert parse_quiet_payload("затихни 30м - флуд") == (None, 30, "флуд")
+    assert parse_quiet_payload("затихни @target_user 2 часа") == ("target_user", 120, "")
+    assert parse_quiet_payload("@target_user затихни 3д - спам") == ("target_user", 4320, "спам")
+    assert parse_quiet_payload("затихни 45") == (None, 45, "")
+    assert parse_quiet_duration("2ч") == 120
+    assert parse_quiet_duration("3 дня") == 4320
+    assert parse_quiet_duration("0м") is None
+    assert parse_quiet_payload("затихни завтра") == (None, None, "")
+
+
+def test_quiet_admin_payload_accepts_default_and_duration_units() -> None:
+    assert parse_quiet_admin_payload("затихни админ") == (None, 60, "")
+    assert parse_quiet_admin_payload("затихни админ @target_user 2ч - спор") == (
+        "target_user",
+        120,
+        "спор",
+    )
+    assert parse_quiet_admin_payload("@target_user затихни админ 1 день") == (
+        "target_user",
+        1440,
+        "",
+    )
+
+
+def test_quiet_duration_is_rendered_for_people() -> None:
+    assert format_quiet_duration(30) == "30 минут"
+    assert format_quiet_duration(60) == "1 час"
+    assert format_quiet_duration(120) == "2 часа"
+    assert format_quiet_duration(1440) == "1 день"
+    assert format_quiet_duration(4320) == "3 дня"
 
 
 def test_dictionary_hit_payload_and_asset() -> None:
