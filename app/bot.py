@@ -185,6 +185,13 @@ ALERTS_THREAT_LABELS = {
     "air_defense": "работа ПВО",
     "unknown": "неуточнённая угроза",
 }
+ALERTS_IMPORTANT_THREATS = {
+    "mig31k_departure",
+    "ballistic_missiles",
+    "cruise_missiles",
+    "unspecified_missiles",
+    "guided_aerial_bombs",
+}
 SECRET_MESSAGE_ALERT_LIMIT = 190
 GIVEAWAY_TOP_RE = re.compile(r"^топ\s+пидоров[?!.]?$", re.IGNORECASE)
 try:
@@ -10378,7 +10385,6 @@ def alerts_location_state_signature(state: AlertsLocationState) -> str:
                 {
                     "type": threat.threat_type,
                     "level": threat.level,
-                    "started_at": threat.started_at,
                     "source_message": threat.source_message,
                 }
                 for threat in state.threats
@@ -10409,6 +10415,80 @@ def format_alerts_location_details(state: AlertsLocationState) -> str:
             suffix = f" — {escape(source[:240])}" if source else ""
             lines.append(f"{icon} {escape(label)}{suffix}")
     return "\n".join(lines)
+
+
+def build_alarm_alert_text(state: AlertsLocationState) -> str:
+    alarm_kind = "частичная воздушная тревога" if state.status == "P" else "воздушная тревога"
+    lines = [
+        f"Alerts.in.ua сообщает: объявлена {alarm_kind} — <b>{ALERTS_LOCATION_TITLE}</b>."
+    ]
+    details = format_alerts_location_details(state)
+    if details:
+        lines.append(details)
+    lines.append("ℹ️ Детали угроз обновляются автоматически каждые 30 секунд.")
+    return "\n\n".join(lines)
+
+
+def is_important_alarm_update(previous: AlertsLocationState, current: AlertsLocationState) -> bool:
+    if previous.status == "P" and current.status == "A":
+        return True
+    if previous.alert_level != "red" and current.alert_level == "red":
+        return True
+
+    previous_important = {
+        threat.threat_type for threat in previous.threats if threat.threat_type in ALERTS_IMPORTANT_THREATS
+    }
+    current_important = {
+        threat.threat_type for threat in current.threats if threat.threat_type in ALERTS_IMPORTANT_THREATS
+    }
+    if current_important - previous_important:
+        return True
+
+    previous_red = {
+        threat.threat_type
+        for threat in previous.threats
+        if threat.threat_type in ALERTS_IMPORTANT_THREATS and threat.level == "red"
+    }
+    current_red = {
+        threat.threat_type
+        for threat in current.threats
+        if threat.threat_type in ALERTS_IMPORTANT_THREATS and threat.level == "red"
+    }
+    return bool(current_red - previous_red)
+
+
+def format_important_alarm_update(
+    previous: AlertsLocationState,
+    current: AlertsLocationState,
+) -> str:
+    lines = [f"🚨 Усиление тревоги — <b>{ALERTS_LOCATION_TITLE}</b>."]
+    if previous.status == "P" and current.status == "A":
+        lines.append("Тревога распространилась на весь район или область.")
+    if previous.alert_level != "red" and current.alert_level == "red":
+        lines.append("Общий уровень повышен до 🔴 красного.")
+
+    previous_types = {threat.threat_type for threat in previous.threats}
+    new_important = sorted(
+        {
+            threat.threat_type
+            for threat in current.threats
+            if threat.threat_type in ALERTS_IMPORTANT_THREATS
+            and (
+                threat.threat_type not in previous_types
+                or (
+                    threat.level == "red"
+                    and not any(
+                        old.threat_type == threat.threat_type and old.level == "red"
+                        for old in previous.threats
+                    )
+                )
+            )
+        }
+    )
+    if new_important:
+        labels = ", ".join(escape(ALERTS_THREAT_LABELS[item]) for item in new_important)
+        lines.append(f"Новые серьёзные угрозы: <b>{labels}</b>.")
+    return "\n\n".join(lines)
 
 
 async def fetch_alerts_location_state() -> AlertsLocationState:
@@ -10482,15 +10562,10 @@ async def activate_alarm_from_api(
 
     await delete_previous_alarm_status_message(bot, chat_id, "N")
     state = alert_state or AlertsLocationState(status="A")
-    alarm_kind = "частичная воздушная тревога" if state.status == "P" else "воздушная тревога"
-    alert_text = f"Alerts.in.ua сообщает: объявлена {alarm_kind} — <b>{ALERTS_LOCATION_TITLE}</b>."
-    details = format_alerts_location_details(state)
-    if details:
-        alert_text = f"{alert_text}\n\n{details}"
     alert_message = await send_alarm_notification(
         bot,
         chat_id,
-        alert_text,
+        build_alarm_alert_text(state),
     )
     if alert_message is not None:
         db.set_alarm_api_status_message_id(chat_id, "A", alert_message.message_id)
@@ -10506,18 +10581,45 @@ async def activate_alarm_from_api(
     return alert_message is not None and action_message is not None
 
 
-async def send_alarm_details_update(
+async def edit_alarm_status_message(
     bot: Bot,
     chat_id: int,
     alert_state: AlertsLocationState,
 ) -> bool:
-    details = format_alerts_location_details(alert_state)
-    if not details:
-        details = "Конкретные угрозы сейчас не указаны."
+    text = build_alarm_alert_text(alert_state)
+    message_id = db.alarm_api_status_message_id(chat_id, "A")
+    if message_id is not None:
+        try:
+            await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text)
+            return True
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc).casefold():
+                return True
+            logging.info("Could not edit alarm status message in chat %s: %s", chat_id, exc)
+        except (TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter) as exc:
+            logging.warning("Could not edit alarm status message in chat %s: %s", chat_id, exc)
+
+    replacement = await send_alarm_notification(bot, chat_id, text)
+    if replacement is None:
+        return False
+    db.set_alarm_api_status_message_id(chat_id, "A", replacement.message_id)
+    return True
+
+
+async def update_alarm_from_api(
+    bot: Bot,
+    chat_id: int,
+    previous: AlertsLocationState,
+    current: AlertsLocationState,
+) -> bool:
+    if not await edit_alarm_status_message(bot, chat_id, current):
+        return False
+    if not is_important_alarm_update(previous, current):
+        return True
     message = await send_alarm_notification(
         bot,
         chat_id,
-        f"⚠️ Обновление тревоги — <b>{ALERTS_LOCATION_TITLE}</b>.\n\n{details}",
+        format_important_alarm_update(previous, current),
     )
     return message is not None
 
@@ -10579,7 +10681,7 @@ async def deactivate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
 
 async def alerts_monitor_loop(bot: Bot) -> None:
     initial_sync = True
-    notified_details: dict[int, str] = {}
+    notified_states: dict[int, AlertsLocationState] = {}
     while True:
         try:
             chat_ids = db.list_alarm_api_chats()
@@ -10593,36 +10695,40 @@ async def alerts_monitor_loop(bot: Bot) -> None:
                     for chat_id in chat_ids:
                         db.set_alarm_api_last_status(chat_id, status)
                         db.set_alarm_api_last_notified_status(chat_id, baseline)
-                        notified_details[chat_id] = details_signature
+                        notified_states[chat_id] = alert_state
                     initial_sync = False
                     await asyncio.sleep(ALERTS_POLL_INTERVAL_SECONDS)
                     continue
                 for chat_id in chat_ids:
                     previous = db.alarm_api_last_status(chat_id)
                     notified = db.alarm_api_last_notified_status(chat_id)
-                    previous_details = notified_details.get(chat_id)
+                    previous_state = notified_states.get(chat_id)
                     if previous != status:
                         db.set_alarm_api_last_status(chat_id, status)
                     if active and notified != "A":
                         if await activate_alarm_from_api(bot, chat_id, alert_state):
                             db.set_alarm_api_last_notified_status(chat_id, "A")
-                            notified_details[chat_id] = details_signature
+                            notified_states[chat_id] = alert_state
                     elif not active and notified != "N":
                         if previous is None and notified is None:
                             db.set_alarm_api_last_notified_status(chat_id, "N")
-                            notified_details[chat_id] = details_signature
+                            notified_states[chat_id] = alert_state
                         elif await deactivate_alarm_from_api(bot, chat_id):
                             db.set_alarm_api_last_notified_status(chat_id, "N")
-                            notified_details[chat_id] = details_signature
-                    elif active and previous_details is not None and previous_details != details_signature:
-                        if await send_alarm_details_update(bot, chat_id, alert_state):
-                            notified_details[chat_id] = details_signature
+                            notified_states[chat_id] = alert_state
+                    elif (
+                        active
+                        and previous_state is not None
+                        and alerts_location_state_signature(previous_state) != details_signature
+                    ):
+                        if await update_alarm_from_api(bot, chat_id, previous_state, alert_state):
+                            notified_states[chat_id] = alert_state
                     else:
-                        notified_details[chat_id] = details_signature
+                        notified_states[chat_id] = alert_state
                 enabled_chat_ids = set(chat_ids)
-                notified_details = {
-                    chat_id: signature
-                    for chat_id, signature in notified_details.items()
+                notified_states = {
+                    chat_id: state
+                    for chat_id, state in notified_states.items()
                     if chat_id in enabled_chat_ids
                 }
         except asyncio.CancelledError:
