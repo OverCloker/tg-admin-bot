@@ -26,6 +26,8 @@ from app.miniapp import (
     _miniapp_can_manage_triggers,
     _miniapp_can_view_admin_panel,
     _miniapp_can_view_mine_admin,
+    _miniapp_moderation_chats,
+    _miniapp_moderation_role_for_chat,
     _miniapp_profile_role_groups,
     _miniapp_profile_roles,
     _miniapp_role_tabs,
@@ -814,6 +816,169 @@ def test_miniapp_telegram_admin_cache_grants_app_admin_access(tmp_path, monkeypa
         assert _miniapp_can_manage_triggers(db, 9) is True
     finally:
         db.close()
+
+
+def test_miniapp_chat_admin_and_moderator_only_see_their_chats(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-100, "Админский чат", "supergroup", None)
+    db.upsert_chat(-200, "Модерируемый чат", "supergroup", None)
+    db.upsert_chat(-300, "Чужой чат", "supergroup", None)
+    db.replace_chat_telegram_admins(
+        -100,
+        [
+            {
+                "user_id": 9,
+                "username": "chatadmin",
+                "full_name": "Chat Admin",
+                "status": "administrator",
+                "is_bot": False,
+            }
+        ],
+    )
+    db.set_chat_moderator_role(-200, 9, "moderator", 42)
+    for chat_id in (-100, -200, -300):
+        db.set_trigger(chat_id, f"триггер {abs(chat_id)}", "ответ", 42)
+        db.add_blacklist_word(chat_id, f"слово {abs(chat_id)}", 42)
+    db.close()
+
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 9})
+
+    panel = miniapp.miniapp_profile_admin_panel(x_telegram_init_data="test")
+    moderation = miniapp.miniapp_profile_moderation(chat_id=None, x_telegram_init_data="test")
+    triggers = miniapp.miniapp_profile_triggers(chat_id=None, x_telegram_init_data="test")
+    blacklist = miniapp.miniapp_profile_blacklist(chat_id=None, x_telegram_init_data="test")
+
+    assert panel["summary"]["chats"] == 2
+    assert panel["summary"]["triggers"] == 1
+    assert panel["summary"]["blacklistWords"] == 1
+    assert {chat["id"] for chat in moderation["chats"]} == {-100, -200}
+    assert {chat["id"] for chat in triggers["chats"]} == {-100}
+    assert {chat["id"] for chat in blacklist["chats"]} == {-100}
+
+    db_check = Database(str(db_path))
+    try:
+        assert _miniapp_moderation_role_for_chat(db_check, -100, 9) == "admin"
+        assert _miniapp_moderation_role_for_chat(db_check, -200, 9) == "moderator"
+        assert _miniapp_moderation_role_for_chat(db_check, -300, 9) is None
+        assert {chat.chat_id for chat in _miniapp_moderation_chats(db_check, 9)} == {-100, -200}
+    finally:
+        db_check.close()
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "chat_id"),
+    [
+        (miniapp.miniapp_profile_moderation, -300),
+        (miniapp.miniapp_profile_triggers, -200),
+        (miniapp.miniapp_profile_blacklist, -200),
+    ],
+)
+def test_miniapp_rejects_direct_access_to_unassigned_chat(
+    tmp_path,
+    monkeypatch,
+    endpoint,
+    chat_id,
+) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-100, "Админский чат", "supergroup", None)
+    db.upsert_chat(-200, "Модерируемый чат", "supergroup", None)
+    db.upsert_chat(-300, "Чужой чат", "supergroup", None)
+    db.replace_chat_telegram_admins(
+        -100,
+        [
+            {
+                "user_id": 9,
+                "username": "chatadmin",
+                "full_name": "Chat Admin",
+                "status": "administrator",
+                "is_bot": False,
+            }
+        ],
+    )
+    db.set_chat_moderator_role(-200, 9, "moderator", 42)
+    db.close()
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 9})
+
+    with pytest.raises(Exception) as exc_info:
+        endpoint(chat_id=chat_id, x_telegram_init_data="test")
+
+    assert getattr(exc_info.value, "status_code", None) == 403
+
+
+def test_miniapp_rejects_cross_chat_writes_for_chat_admin(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-100, "Админский чат", "supergroup", None)
+    db.upsert_chat(-200, "Модерируемый чат", "supergroup", None)
+    db.upsert_chat(-300, "Чужой чат", "supergroup", None)
+    db.replace_chat_telegram_admins(
+        -100,
+        [
+            {
+                "user_id": 9,
+                "username": "chatadmin",
+                "full_name": "Chat Admin",
+                "status": "administrator",
+                "is_bot": False,
+            }
+        ],
+    )
+    db.set_chat_moderator_role(-200, 9, "moderator", 42)
+    db.close()
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 9})
+
+    authorized = miniapp.miniapp_profile_trigger_save(
+        MiniAppTriggerSave(
+            chatId=-100,
+            trigger="разрешено",
+            variants=[MiniAppTriggerVariant(variantType="text", text="да")],
+        ),
+        x_telegram_init_data="test",
+    )
+    assert authorized["ok"] is True
+
+    forbidden_calls = [
+        lambda: miniapp.miniapp_profile_trigger_save(
+            MiniAppTriggerSave(
+                chatId=-200,
+                trigger="нельзя",
+                variants=[MiniAppTriggerVariant(variantType="text", text="нет")],
+            ),
+            x_telegram_init_data="test",
+        ),
+        lambda: miniapp.miniapp_profile_trigger_delete(
+            MiniAppTriggerDelete(chatId=-300, trigger="чужой"),
+            x_telegram_init_data="test",
+        ),
+        lambda: miniapp.miniapp_profile_blacklist_save(
+            MiniAppBlacklistSave(chatId=-200, word="нельзя", variants=[]),
+            x_telegram_init_data="test",
+        ),
+        lambda: miniapp.miniapp_profile_blacklist_delete(
+            MiniAppBlacklistDelete(chatId=-300, word="чужой"),
+            x_telegram_init_data="test",
+        ),
+        lambda: miniapp.miniapp_profile_moderation_chat_lock(
+            MiniAppChatLockSet(chatId=-300, seconds=60, reason="нет доступа"),
+            x_telegram_init_data="test",
+        ),
+    ]
+
+    for call in forbidden_calls:
+        with pytest.raises(Exception) as exc_info:
+            call()
+        assert getattr(exc_info.value, "status_code", None) == 403
 
 
 def test_miniapp_delegated_bot_feature_does_not_open_admin_panel(tmp_path, monkeypatch) -> None:

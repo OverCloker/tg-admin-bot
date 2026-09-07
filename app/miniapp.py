@@ -703,14 +703,43 @@ def _miniapp_can_manage_roles(user_id: int) -> bool:
     return owner_id is not None and int(user_id) == int(owner_id)
 
 
-def _miniapp_is_app_admin(db: Database, user_id: int) -> bool:
+def _miniapp_has_global_admin_access(db: Database, user_id: int) -> bool:
     if _miniapp_can_manage_roles(user_id):
         return True
     role = db.get_miniapp_profile_role(user_id)
-    return (
-        bool(role and role.label == MINIAPP_ADMIN_PROFILE_LABEL)
-        or bool(db.user_telegram_admin_chat_ids(user_id))
+    return bool(role and role.label == MINIAPP_ADMIN_PROFILE_LABEL)
+
+
+def _miniapp_is_app_admin(db: Database, user_id: int) -> bool:
+    return _miniapp_has_global_admin_access(db, user_id) or bool(
+        db.user_telegram_admin_chat_ids(user_id)
     )
+
+
+def _miniapp_admin_chat_ids(db: Database, user_id: int) -> set[int]:
+    if _miniapp_has_global_admin_access(db, user_id):
+        return {int(chat.chat_id) for chat in db.list_chats()}
+    return db.user_telegram_admin_chat_ids(user_id)
+
+
+def _miniapp_moderator_chat_ids(db: Database, user_id: int) -> set[int]:
+    return {int(row["chat_id"]) for row in db.list_user_moderator_roles(user_id)}
+
+
+def _miniapp_accessible_chat_ids(db: Database, user_id: int) -> set[int]:
+    return _miniapp_admin_chat_ids(db, user_id) | _miniapp_moderator_chat_ids(db, user_id)
+
+
+def _miniapp_chats_for_ids(db: Database, chat_ids: set[int]) -> list[Any]:
+    return [chat for chat in db.list_chats() if int(chat.chat_id) in chat_ids]
+
+
+def _miniapp_can_admin_chat(db: Database, chat_id: int, user_id: int) -> bool:
+    return int(chat_id) in _miniapp_admin_chat_ids(db, user_id)
+
+
+def _miniapp_can_access_chat(db: Database, chat_id: int, user_id: int) -> bool:
+    return int(chat_id) in _miniapp_accessible_chat_ids(db, user_id)
 
 
 async def _refresh_miniapp_telegram_admins(db: Database) -> list[dict[str, Any]]:
@@ -999,18 +1028,14 @@ def _miniapp_can_view_moderation(db: Database, user_id: int) -> bool:
 
 
 def _miniapp_moderation_role_for_chat(db: Database, chat_id: int, user_id: int) -> str | None:
-    if _miniapp_is_app_admin(db, user_id):
+    if _miniapp_can_admin_chat(db, chat_id, user_id):
         return "admin"
     row = db.get_chat_moderator_role(chat_id, user_id)
     return str(row["role"]) if row else None
 
 
 def _miniapp_moderation_chats(db: Database, user_id: int) -> list[Any]:
-    if _miniapp_is_app_admin(db, user_id):
-        return db.list_chats()
-    roles = db.list_user_moderator_roles(user_id)
-    chats = [db.get_chat(int(row["chat_id"])) for row in roles]
-    return [chat for chat in chats if chat is not None]
+    return _miniapp_chats_for_ids(db, _miniapp_accessible_chat_ids(db, user_id))
 
 
 def _miniapp_moderation_role_rank(role: str | None) -> int:
@@ -2733,14 +2758,28 @@ def miniapp_profile_admin_panel(
             raise HTTPException(403, "Панель Mini App доступна владельцу, админам и назначенным модераторам.")
         is_owner = _miniapp_can_manage_roles(user["id"])
         is_app_admin = _miniapp_is_app_admin(db, user["id"])
-        role_groups = _miniapp_profile_role_groups(db)
-        admin_total = sum(
-            len(group["items"])
-            for group in role_groups
-            if group["key"] in {"owner", "admin"}
-        )
-        moderators = db.list_all_chat_moderators()
-        chats = db.list_chats()
+        accessible_chat_ids = _miniapp_accessible_chat_ids(db, user["id"])
+        admin_chat_ids = _miniapp_admin_chat_ids(db, user["id"])
+        chats = _miniapp_chats_for_ids(db, accessible_chat_ids)
+        moderators = [
+            row
+            for row in db.list_all_chat_moderators()
+            if int(row["chat_id"]) in accessible_chat_ids
+        ]
+        visible_admin_ids = {
+            int(row["user_id"])
+            for chat_id in admin_chat_ids
+            for row in db.list_chat_telegram_admins(chat_id)
+        }
+        if _miniapp_has_global_admin_access(db, user["id"]):
+            role_groups = _miniapp_profile_role_groups(db)
+            admin_total = sum(
+                len(group["items"])
+                for group in role_groups
+                if group["key"] in {"owner", "admin"}
+            )
+        else:
+            admin_total = len(visible_admin_ids)
         return {
             "ok": True,
             "viewerRole": "owner" if is_owner else "admin" if is_app_admin else "moderator",
@@ -2752,8 +2791,8 @@ def miniapp_profile_admin_panel(
                 "admins": admin_total,
                 "moderators": len({int(row["user_id"]) for row in moderators}),
                 "minePlayers": db.count_dig_players(),
-                "triggers": sum(len(db.list_triggers(chat.chat_id)) for chat in chats),
-                "blacklistWords": sum(len(db.list_blacklist_words(chat.chat_id)) for chat in chats),
+                "triggers": sum(len(db.list_triggers(chat_id)) for chat_id in admin_chat_ids),
+                "blacklistWords": sum(len(db.list_blacklist_words(chat_id)) for chat_id in admin_chat_ids),
             },
             "sections": [
                 {"key": "roles", "title": "Роли", "enabled": is_owner, "description": "Выдача ролей приложения."},
@@ -2778,6 +2817,8 @@ def miniapp_profile_moderation(
         if not _miniapp_can_view_moderation(db, user["id"]):
             raise HTTPException(403, "Модерация доступна владельцу, админам и назначенным модераторам.")
         chats = _miniapp_moderation_chats(db, user["id"])
+        if chat_id is not None and not _miniapp_can_access_chat(db, int(chat_id), user["id"]):
+            raise HTTPException(403, "У вас нет прав модерации в этой группе.")
         selected_chat_id = int(chat_id) if chat_id is not None else (int(chats[0].chat_id) if chats else 0)
         selected_chat = next((chat for chat in chats if int(chat.chat_id) == selected_chat_id), None)
         viewer_role = _miniapp_moderation_role_for_chat(db, selected_chat_id, user["id"]) if selected_chat else None
@@ -2902,10 +2943,13 @@ def miniapp_profile_blacklist(
     db = _db()
     try:
         if not _miniapp_can_manage_blacklist(db, user["id"]):
-            raise HTTPException(403, "Чёрный список доступен владельцу и админам Mini App.")
-        chats = db.list_chats()
+            raise HTTPException(403, "Чёрный список доступен владельцу и администраторам групп.")
+        admin_chat_ids = _miniapp_admin_chat_ids(db, user["id"])
+        chats = _miniapp_chats_for_ids(db, admin_chat_ids)
+        if chat_id is not None and int(chat_id) not in admin_chat_ids:
+            raise HTTPException(403, "Вы не являетесь администратором этой группы.")
         selected_chat_id = int(chat_id) if chat_id is not None else (int(chats[0].chat_id) if chats else 0)
-        selected_chat = db.get_chat(selected_chat_id) if selected_chat_id else None
+        selected_chat = next((chat for chat in chats if int(chat.chat_id) == selected_chat_id), None)
         words = db.list_blacklist_words(selected_chat_id) if selected_chat else []
         return {
             "ok": True,
@@ -2927,7 +2971,9 @@ def miniapp_profile_blacklist_save(
     db = _db()
     try:
         if not _miniapp_can_manage_blacklist(db, user["id"]):
-            raise HTTPException(403, "Чёрный список доступен владельцу и админам Mini App.")
+            raise HTTPException(403, "Чёрный список доступен владельцу и администраторам групп.")
+        if not _miniapp_can_admin_chat(db, payload.chatId, user["id"]):
+            raise HTTPException(403, "Вы не являетесь администратором этой группы.")
         if db.get_chat(payload.chatId) is None:
             raise HTTPException(404, "Чат не найден.")
         word = normalize_trigger(payload.word)
@@ -2955,7 +3001,9 @@ def miniapp_profile_blacklist_delete(
     db = _db()
     try:
         if not _miniapp_can_manage_blacklist(db, user["id"]):
-            raise HTTPException(403, "Чёрный список доступен владельцу и админам Mini App.")
+            raise HTTPException(403, "Чёрный список доступен владельцу и администраторам групп.")
+        if not _miniapp_can_admin_chat(db, payload.chatId, user["id"]):
+            raise HTTPException(403, "Вы не являетесь администратором этой группы.")
         if db.get_chat(payload.chatId) is None:
             raise HTTPException(404, "Чат не найден.")
         deleted = db.delete_blacklist_word(payload.chatId, payload.word)
@@ -2973,10 +3021,13 @@ def miniapp_profile_triggers(
     db = _db()
     try:
         if not _miniapp_can_manage_triggers(db, user["id"]):
-            raise HTTPException(403, "Триггеры доступны владельцу и админам Mini App.")
-        chats = db.list_chats()
+            raise HTTPException(403, "Триггеры доступны владельцу и администраторам групп.")
+        admin_chat_ids = _miniapp_admin_chat_ids(db, user["id"])
+        chats = _miniapp_chats_for_ids(db, admin_chat_ids)
+        if chat_id is not None and int(chat_id) not in admin_chat_ids:
+            raise HTTPException(403, "Вы не являетесь администратором этой группы.")
         selected_chat_id = int(chat_id) if chat_id is not None else (int(chats[0].chat_id) if chats else 0)
-        selected_chat = db.get_chat(selected_chat_id) if selected_chat_id else None
+        selected_chat = next((chat for chat in chats if int(chat.chat_id) == selected_chat_id), None)
         triggers = db.list_triggers(selected_chat_id) if selected_chat else []
         return {
             "ok": True,
@@ -2999,7 +3050,9 @@ def miniapp_profile_trigger_save(
     db = _db()
     try:
         if not _miniapp_can_manage_triggers(db, user["id"]):
-            raise HTTPException(403, "Триггеры доступны владельцу и админам Mini App.")
+            raise HTTPException(403, "Триггеры доступны владельцу и администраторам групп.")
+        if not _miniapp_can_admin_chat(db, payload.chatId, user["id"]):
+            raise HTTPException(403, "Вы не являетесь администратором этой группы.")
         if db.get_chat(payload.chatId) is None:
             raise HTTPException(404, "Чат не найден.")
         normalized = normalize_trigger(payload.trigger)
@@ -3038,7 +3091,7 @@ async def miniapp_profile_trigger_media_upload(
     db = _db()
     try:
         if not _miniapp_can_manage_triggers(db, user["id"]):
-            raise HTTPException(403, "Триггеры доступны владельцу и админам Mini App.")
+            raise HTTPException(403, "Триггеры доступны владельцу и администраторам групп.")
     finally:
         db.close()
     normalized_type = media_type.strip().casefold()
@@ -3117,7 +3170,9 @@ def miniapp_profile_trigger_delete(
     db = _db()
     try:
         if not _miniapp_can_manage_triggers(db, user["id"]):
-            raise HTTPException(403, "Триггеры доступны владельцу и админам Mini App.")
+            raise HTTPException(403, "Триггеры доступны владельцу и администраторам групп.")
+        if not _miniapp_can_admin_chat(db, payload.chatId, user["id"]):
+            raise HTTPException(403, "Вы не являетесь администратором этой группы.")
         if db.get_chat(payload.chatId) is None:
             raise HTTPException(404, "Чат не найден.")
         normalized = normalize_trigger(payload.trigger)
