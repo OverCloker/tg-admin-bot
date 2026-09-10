@@ -10375,6 +10375,15 @@ class AlertsLocationState:
     threats: tuple[AlertsThreat, ...] = ()
 
 
+@dataclass
+class AlertsApiCache:
+    last_modified: str | None = None
+    state: AlertsLocationState | None = None
+
+
+ALERTS_API_CACHE = AlertsApiCache()
+
+
 def parse_alerts_location_state(payload: object) -> AlertsLocationState:
     if not isinstance(payload, dict) or not isinstance(payload.get("alerts"), list):
         raise RuntimeError("Некорректный ответ Alerts.in.ua: отсутствует список alerts")
@@ -10555,12 +10564,21 @@ async def fetch_alerts_location_state() -> AlertsLocationState:
     url = "https://api.alerts.in.ua/v1/alerts/active.json"
     timeout = aiohttp.ClientTimeout(total=15)
     headers = {"Authorization": f"Bearer {ALERTS_API_TOKEN}"}
+    if ALERTS_API_CACHE.last_modified:
+        headers["If-Modified-Since"] = ALERTS_API_CACHE.last_modified
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.get(url, headers=headers) as response:
+            if response.status == 304:
+                if ALERTS_API_CACHE.state is None:
+                    raise RuntimeError("Alerts.in.ua вернул 304 без сохранённого состояния")
+                return ALERTS_API_CACHE.state
             if response.status != 200:
                 body = await response.text()
                 raise RuntimeError(f"Alerts.in.ua HTTP {response.status}: {body[:200]}")
-            return parse_alerts_location_state(await response.json(content_type=None))
+            state = parse_alerts_location_state(await response.json(content_type=None))
+            ALERTS_API_CACHE.last_modified = response.headers.get("Last-Modified") or None
+            ALERTS_API_CACHE.state = state
+            return state
 
 
 async def apply_alarm_restrictions(bot: Bot, chat_id: int) -> None:

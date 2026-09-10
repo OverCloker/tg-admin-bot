@@ -112,6 +112,97 @@ def test_alerts_api_rejects_invalid_payload() -> None:
         parse_alerts_location_state({"message": "error"})
 
 
+def test_alerts_api_accepts_updated_schema_and_unknown_future_threat() -> None:
+    state = parse_alerts_location_state(
+        {
+            "alerts": [
+                {
+                    "location_uid": "46",
+                    "location_title": "Криворізький район",
+                    "location_title_en": "Kryvyi Rih Raion",
+                    "alert_type": "air_raid",
+                    "alert_level": "yellow",
+                    "threats": [
+                        {
+                            "threat_type": "future_threat",
+                            "level": "yellow",
+                            "started_at": "2026-09-10T10:00:00.000Z",
+                            "source_message": "Нова категорія загрози",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    assert state.status == "A"
+    assert state.alert_level == "yellow"
+    assert state.threats[0].threat_type == "future_threat"
+    assert "future threat" in format_alerts_location_details(state)
+
+
+def test_alerts_api_uses_last_modified_cache(monkeypatch) -> None:
+    payload = {
+        "alerts": [
+            {
+                "location_uid": "46",
+                "location_title": "Криворізький район",
+                "alert_type": "air_raid",
+                "alert_level": "red",
+            }
+        ]
+    }
+
+    class FakeResponse:
+        def __init__(self, status, *, data=None, headers=None):
+            self.status = status
+            self.data = data
+            self.headers = headers or {}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def json(self, content_type=None):
+            return self.data
+
+        async def text(self):
+            return ""
+
+    class FakeSession:
+        responses = [
+            FakeResponse(200, data=payload, headers={"Last-Modified": "Thu, 10 Sep 2026 10:00:00 GMT"}),
+            FakeResponse(304),
+        ]
+        request_headers = []
+
+        def __init__(self, *, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        def get(self, url, *, headers):
+            self.request_headers.append(dict(headers))
+            return self.responses.pop(0)
+
+    monkeypatch.setattr(bot_module.aiohttp, "ClientSession", FakeSession)
+    monkeypatch.setattr(bot_module, "ALERTS_API_TOKEN", "test-token")
+    monkeypatch.setattr(bot_module, "ALERTS_API_CACHE", bot_module.AlertsApiCache())
+
+    first = asyncio.run(bot_module.fetch_alerts_location_state())
+    second = asyncio.run(bot_module.fetch_alerts_location_state())
+
+    assert first == second == AlertsLocationState(status="A", alert_level="red")
+    assert "If-Modified-Since" not in FakeSession.request_headers[0]
+    assert FakeSession.request_headers[1]["If-Modified-Since"] == "Thu, 10 Sep 2026 10:00:00 GMT"
+
+
 def test_alerts_details_escape_external_source_text_and_signature_changes() -> None:
     first = AlertsLocationState(
         status="A",
