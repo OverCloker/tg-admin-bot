@@ -208,6 +208,7 @@ def test_miniapp_dynamite_can_misfire_without_breaking_meter(tmp_path, monkeypat
     db.close()
     monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 10, "username": "miner", "first_name": "Шахтёр"})
     monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp, "_ensure_miniapp_mine_access", lambda _user_id: None)
     monkeypatch.setattr(miniapp.secrets, "randbelow", lambda _limit: 0)
 
     result = miniapp.miniapp_interactive_tool(MineToolUse(item_key="dynamite"), x_telegram_init_data="test")

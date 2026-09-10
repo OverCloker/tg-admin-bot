@@ -46,12 +46,16 @@ from .dig_game import (
     scale_interactive_reward,
 )
 from .miniapp_ui import MINI_APP_HTML as MINI_APP_UI_HTML
+from .mine_access import MINE_ACCESS_DENIED_TEXT, has_mine_access
 from .premium import PremiumService
 from .telegram_client import create_bot
 from .user_profile import build_user_profile
 
 router = APIRouter()
 DIG_LOCK = Lock()
+MINE_ACCESS_CACHE_LOCK = Lock()
+MINE_ACCESS_CACHE_SECONDS = 30.0
+MINE_ACCESS_CACHE: dict[int, tuple[float, bool]] = {}
 TRIGGER_MEDIA_MAX_BYTES = 12 * 1024 * 1024
 TRIGGER_MEDIA_TYPES = {
     "photo": {"image/jpeg", "image/png", "image/webp"},
@@ -1342,6 +1346,31 @@ def _ensure_mine_not_blocked(db: Database, user_id: int) -> None:
         raise HTTPException(403, detail)
 
 
+async def _check_miniapp_mine_access(user_id: int) -> bool:
+    db = _db()
+    bot = create_bot(load_config())
+    try:
+        return await has_mine_access(bot, db.list_chats(), user_id)
+    finally:
+        db.close()
+        await bot.session.close()
+
+
+def _ensure_miniapp_mine_access(user_id: int) -> None:
+    """Require live membership in a registered group where the bot is an admin."""
+    now = time.monotonic()
+    with MINE_ACCESS_CACHE_LOCK:
+        cached = MINE_ACCESS_CACHE.get(int(user_id))
+    if cached is not None and now - cached[0] < MINE_ACCESS_CACHE_SECONDS:
+        allowed = cached[1]
+    else:
+        allowed = asyncio.run(_check_miniapp_mine_access(int(user_id)))
+        with MINE_ACCESS_CACHE_LOCK:
+            MINE_ACCESS_CACHE[int(user_id)] = (now, allowed)
+    if not allowed:
+        raise HTTPException(403, MINE_ACCESS_DENIED_TEXT)
+
+
 def _normalize_profile_role_label(label: str) -> str:
     normalized = " ".join(label.strip().split())
     if not normalized:
@@ -2568,6 +2597,7 @@ def miniapp_shift_contract(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
+    _ensure_miniapp_mine_access(user["id"])
     from . import bot as game
 
     with DIG_LOCK:
@@ -2586,6 +2616,7 @@ def miniapp_shift_contract(
 @router.get("/miniapp/mine")
 def miniapp_mine(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
+    _ensure_miniapp_mine_access(user["id"])
     db = _db()
     try:
         return _state(db, user["id"])
@@ -3546,6 +3577,7 @@ async def miniapp_radio_stream(token: str) -> StreamingResponse:
 @router.post("/miniapp/mine/register")
 def miniapp_register(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
+    _ensure_miniapp_mine_access(user["id"])
     db = _db()
     try:
         _ensure_mine_not_blocked(db, user["id"])
@@ -3713,6 +3745,7 @@ def miniapp_interactive_start(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
+    _ensure_miniapp_mine_access(user["id"])
     with DIG_LOCK:
         db = _db()
         try:
@@ -3730,6 +3763,7 @@ def miniapp_interactive_cell(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
+    _ensure_miniapp_mine_access(user["id"])
     with DIG_LOCK:
         db = _db()
         try:
@@ -3847,6 +3881,7 @@ def minesweeper_start(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
+    _ensure_miniapp_mine_access(user["id"])
     with DIG_LOCK:
         db = _db()
         try:
@@ -3882,6 +3917,7 @@ def minesweeper_start(
 @router.post("/miniapp/minesweeper/hint")
 def minesweeper_hint(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict:
     user = _telegram_user(x_telegram_init_data)
+    _ensure_miniapp_mine_access(user["id"])
     with DIG_LOCK:
         db = _db()
         try:
@@ -3901,6 +3937,7 @@ def minesweeper_pick(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
+    _ensure_miniapp_mine_access(user["id"])
     with DIG_LOCK:
         db = _db()
         try:
@@ -4012,6 +4049,7 @@ def minesweeper_exit(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
+    _ensure_miniapp_mine_access(user["id"])
     with DIG_LOCK:
         db = _db()
         try:
@@ -4035,6 +4073,7 @@ def miniapp_interactive_tool(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
+    _ensure_miniapp_mine_access(user["id"])
     with DIG_LOCK:
         db = _db()
         try:
@@ -4122,6 +4161,7 @@ def miniapp_interactive_event(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
+    _ensure_miniapp_mine_access(user["id"])
     with DIG_LOCK:
         db = _db()
         try:
@@ -4211,6 +4251,7 @@ def miniapp_interactive_exit(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
+    _ensure_miniapp_mine_access(user["id"])
     with DIG_LOCK:
         db = _db()
         try:
@@ -4231,6 +4272,7 @@ def miniapp_dig_manual(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
+    _ensure_miniapp_mine_access(user["id"])
     with DIG_LOCK:
         db = _db()
         try:

@@ -72,6 +72,7 @@ def test_safe_pick_is_paid_once_and_mine_costs_luck(tmp_path, monkeypatch) -> No
 
     monkeypatch.setattr(miniapp, "_telegram_user", lambda _data: {"id": 10})
     monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp, "_ensure_miniapp_mine_access", lambda _user_id: None)
     monkeypatch.setattr(miniapp.secrets, "randbelow", lambda limit: limit - 1)
 
     safe = miniapp.minesweeper_pick(MinesweeperPick(cell=1), x_telegram_init_data="test")
@@ -106,6 +107,7 @@ def test_safe_pick_can_grant_golden_ticket(tmp_path, monkeypatch) -> None:
     rolls = iter((3, 99, 0))
     monkeypatch.setattr(miniapp, "_telegram_user", lambda _data: {"id": 11})
     monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp, "_ensure_miniapp_mine_access", lambda _user_id: None)
     monkeypatch.setattr(miniapp.secrets, "randbelow", lambda _limit: next(rolls))
 
     result = miniapp.minesweeper_pick(MinesweeperPick(cell=1), x_telegram_init_data="test")

@@ -57,6 +57,7 @@ from .dig_game import (
 from .premium import PLANS, PREMIUM_PERIOD_DAYS, PremiumLimitError, PremiumRequiredError, PremiumService
 from .media_processor import TASK_TITLES, ffmpeg_available, probe_media_duration, process_media, whisper_available
 from .media_tasks import MediaTaskService
+from .mine_access import MINE_ACCESS_DENIED_TEXT, can_use_mine_in_chat, has_mine_access
 from .youtube_media import (
     DOWNLOAD_TYPES,
     SUPPORTED_MEDIA_URL_RE,
@@ -4768,6 +4769,19 @@ async def is_chat_member(bot: Bot, chat_id: int, user_id: int) -> bool:
     return member_status_text(member.status) not in {"left", "kicked"}
 
 
+async def can_user_use_mine(bot: Bot, user_id: int, chat_id: int = 0) -> bool:
+    if chat_id:
+        return await can_use_mine_in_chat(bot, chat_id, user_id)
+    return await has_mine_access(bot, db.list_chats(), user_id)
+
+
+async def require_mine_callback_access(callback: CallbackQuery, chat_id: int = 0) -> bool:
+    if await can_user_use_mine(callback.bot, callback.from_user.id, chat_id):
+        return True
+    await callback.answer(MINE_ACCESS_DENIED_TEXT, show_alert=True)
+    return False
+
+
 async def paid_chats_for_user(bot: Bot, user_id: int) -> list[RegisteredChat]:
     chats: list[RegisteredChat] = []
     for chat in db.list_chats():
@@ -6070,8 +6084,7 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
         if owner_id is None:
             return
         if action == "mode":
-            if chat_id != 0 and not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
-                await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+            if not await require_mine_callback_access(callback, chat_id):
                 return
             await safe_edit(
                 callback,
@@ -6083,8 +6096,7 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
             await callback.answer()
             return
         if action == "manual":
-            if chat_id != 0 and not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
-                await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+            if not await require_mine_callback_access(callback, chat_id):
                 return
             try:
                 await callback.bot.send_message(
@@ -6110,8 +6122,7 @@ async def cb_user_dig(callback: CallbackQuery) -> None:
         owner_id = await resolve_dig_button_owner(callback, None)
         if owner_id is None:
             return
-    if chat_id != 0 and not await is_chat_member(callback.bot, chat_id, callback.from_user.id):
-        await callback.answer("Ты больше не состоишь в этой группе.", show_alert=True)
+    if not await require_mine_callback_access(callback, chat_id):
         return
 
     result = run_private_dig(chat_id, callback.from_user)
@@ -6154,6 +6165,13 @@ async def cb_interactive_dig_cell(callback: CallbackQuery) -> None:
         cell_index = int(parts[3])
     except ValueError:
         await callback.answer("Клетка устарела.", show_alert=True)
+        return
+
+    existing_session = db.get_interactive_dig_session(session_id)
+    if existing_session is None or int(existing_session.get("user_id") or 0) != callback.from_user.id:
+        await callback.answer("Эта вылазка недоступна.", show_alert=True)
+        return
+    if not await require_mine_callback_access(callback, int(existing_session.get("chat_id") or 0)):
         return
 
     session = db.lock_interactive_dig_cell(session_id, callback.from_user.id, expected_depth, cell_index)
@@ -6359,6 +6377,13 @@ async def cb_interactive_dig_tool(callback: CallbackQuery) -> None:
         await callback.answer("Такого предмета нет.", show_alert=True)
         return
 
+    existing_session = db.get_interactive_dig_session(session_id)
+    if existing_session is None or int(existing_session.get("user_id") or 0) != callback.from_user.id:
+        await callback.answer("Эта вылазка недоступна.", show_alert=True)
+        return
+    if not await require_mine_callback_access(callback, int(existing_session.get("chat_id") or 0)):
+        return
+
     session = db.lock_interactive_dig_cell(session_id, callback.from_user.id, expected_depth, -2)
     if session is None:
         await callback.answer("Сейчас предмет использовать нельзя.", show_alert=True)
@@ -6497,6 +6522,13 @@ async def cb_interactive_dig_event(callback: CallbackQuery) -> None:
         await callback.answer("Событие устарело.", show_alert=True)
         return
     choice_key = parts[3]
+
+    existing_session = db.get_interactive_dig_session(session_id)
+    if existing_session is None or int(existing_session.get("user_id") or 0) != callback.from_user.id:
+        await callback.answer("Эта вылазка недоступна.", show_alert=True)
+        return
+    if not await require_mine_callback_access(callback, int(existing_session.get("chat_id") or 0)):
+        return
 
     session = db.lock_interactive_dig_cell(session_id, callback.from_user.id, expected_depth, -1)
     if session is None:
@@ -6726,6 +6758,8 @@ async def cb_interactive_dig_exit(callback: CallbackQuery) -> None:
     if int(session["user_id"]) != callback.from_user.id:
         await callback.answer("Это чужая вылазка.", show_alert=True)
         return
+    if not await require_mine_callback_access(callback, int(session.get("chat_id") or 0)):
+        return
     if int(session.get("processing") or 0):
         await callback.answer("Кот еще машет киркой, секунду.", show_alert=True)
         return
@@ -6817,6 +6851,8 @@ async def cb_dig_register(callback: CallbackQuery) -> None:
         await callback.answer("Регистрироваться можно в группе или в личном чате с ботом.", show_alert=True)
         return
     chat_id = 0 if is_private else callback.message.chat.id
+    if not await require_mine_callback_access(callback, chat_id):
+        return
     if not is_private:
         await register_current_chat(callback.message)
     user = callback.from_user
@@ -11607,6 +11643,10 @@ async def dig_command(message: Message) -> None:
             message,
             "Доступ к шахте заблокирован." + (f" Причина: {escape(reason)}" if reason else ""),
         )
+        return
+    access_chat_id = message.chat.id if message.chat.type in SUPPORTED_CHAT_TYPES else 0
+    if not await can_user_use_mine(message.bot, message.from_user.id, access_chat_id):
+        await temporary_reply(message, MINE_ACCESS_DENIED_TEXT)
         return
     if message.chat.type == "private":
         player = db.get_dig_player(0, message.from_user.id)

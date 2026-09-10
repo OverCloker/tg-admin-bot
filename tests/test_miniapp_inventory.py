@@ -614,10 +614,14 @@ def test_dig_command_sends_command_result_before_matching_trigger(monkeypatch) -
     async def fake_send_auto_reply_item(_message, _item):
         calls.append("trigger")
 
+    async def fake_can_user_use_mine(_bot, _user_id, _chat_id=0):
+        return True
+
     monkeypatch.setattr(game, "db", FakeDb(), raising=False)
     monkeypatch.setattr(game, "remember_sender", fake_remember_sender)
     monkeypatch.setattr(game, "temporary_reply", fake_temporary_reply)
     monkeypatch.setattr(game, "send_auto_reply_item", fake_send_auto_reply_item)
+    monkeypatch.setattr(game, "can_user_use_mine", fake_can_user_use_mine)
     monkeypatch.setattr(game, "cached_triggers", lambda _chat_id: [trigger])
     game.AUTO_TRIGGER_SENT_MESSAGES.clear()
 
