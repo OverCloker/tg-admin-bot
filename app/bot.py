@@ -10484,6 +10484,30 @@ def format_alerts_location_details(state: AlertsLocationState) -> str:
     return "\n".join(lines)
 
 
+def format_current_alarm_status(state: AlertsLocationState) -> str:
+    if state.status == "N":
+        return "🟢 Тревоги нет."
+
+    if state.alert_level == "red":
+        lines = ["🔴 <b>Красная тревога.</b>"]
+    elif state.alert_level == "yellow":
+        lines = ["🟡 <b>Жёлтая тревога.</b>"]
+    else:
+        lines = ["⚠️ <b>Тревога активна.</b>"]
+
+    if not state.threats:
+        lines.append("Конкретная угроза в API пока не указана.")
+        return "\n".join(lines)
+
+    lines.append("Угрозы по данным API:")
+    for threat in state.threats[:8]:
+        label = ALERTS_THREAT_LABELS.get(threat.threat_type, threat.threat_type.replace("_", " "))
+        source = (threat.source_message or "").strip()
+        suffix = f" — {escape(source[:240])}" if source else ""
+        lines.append(f"• {escape(label)}{suffix}")
+    return "\n".join(lines)
+
+
 def build_alarm_alert_text(state: AlertsLocationState) -> str:
     alarm_kind = "частичная воздушная тревога" if state.status == "P" else "воздушная тревога"
     lines = [
@@ -10616,10 +10640,27 @@ async def send_alarm_notification(bot: Bot, chat_id: int, text: str) -> Message 
         return None
 
 
+async def pin_alarm_status_message(bot: Bot, chat_id: int, message_id: int) -> bool:
+    try:
+        await bot.pin_chat_message(
+            chat_id=chat_id,
+            message_id=message_id,
+            disable_notification=True,
+        )
+        return True
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter) as exc:
+        logging.warning("Could not pin alarm status message %s in chat %s: %s", message_id, chat_id, exc)
+        return False
+
+
 async def delete_previous_alarm_status_message(bot: Bot, chat_id: int, status: str) -> None:
     message_ids = db.alarm_api_status_message_ids(chat_id, status)
     if not message_ids:
         return
+    status_message_id = db.alarm_api_status_message_id(chat_id, status)
+    if status_message_id is not None:
+        with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
+            await bot.unpin_chat_message(chat_id=chat_id, message_id=status_message_id)
     for message_id in message_ids:
         with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
             await bot.delete_message(chat_id, message_id)
@@ -10645,6 +10686,7 @@ async def activate_alarm_from_api(
     )
     if alert_message is not None:
         db.set_alarm_api_status_message_id(chat_id, "A", alert_message.message_id)
+        await pin_alarm_status_message(bot, chat_id, alert_message.message_id)
     if not restrictions_enabled:
         return alert_message is not None
     action_text = settings.alarm_text or (
@@ -10678,7 +10720,11 @@ async def edit_alarm_status_message(
     replacement = await send_alarm_notification(bot, chat_id, text)
     if replacement is None:
         return False
+    if message_id is not None:
+        with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
+            await bot.unpin_chat_message(chat_id=chat_id, message_id=message_id)
     db.set_alarm_api_status_message_id(chat_id, "A", replacement.message_id)
+    await pin_alarm_status_message(bot, chat_id, replacement.message_id)
     return True
 
 
@@ -10742,10 +10788,11 @@ async def deactivate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
     clear_message = await send_alarm_notification(
         bot,
         chat_id,
-        f"Alerts.in.ua сообщает: отбой воздушной тревоги — <b>{ALERTS_LOCATION_TITLE}</b>.",
+        "🟢 <b>Отбой воздушной тревоги.</b>",
     )
     if clear_message is not None:
         db.set_alarm_api_status_message_id(chat_id, "N", clear_message.message_id)
+        await pin_alarm_status_message(bot, chat_id, clear_message.message_id)
     if not had_restrictions:
         return clear_message is not None
     action_text = settings.clear_text or "Отбой применен: медиа, реакции и одиночные эмодзи снова включены."
@@ -10827,13 +10874,14 @@ def alarm_status_text(chat_id: int) -> str:
             f"Тревожные оповещения: {destination}."
         )
 
+    state = ALERTS_API_CACHE.state
+    if state is not None:
+        return format_current_alarm_status(state)
     status = db.alarm_api_last_status(chat_id)
-    if status == "A":
-        return f"В <b>{ALERTS_LOCATION_TITLE}</b> сейчас воздушная тревога.\nОповещения: {destination}."
-    if status == "P":
-        return f"В <b>{ALERTS_LOCATION_TITLE}</b> сейчас частичная воздушная тревога.\nОповещения: {destination}."
     if status == "N":
-        return f"В <b>{ALERTS_LOCATION_TITLE}</b> сейчас нет воздушной тревоги.\nОповещения: {destination}."
+        return "🟢 Тревоги нет."
+    if status in {"A", "P"}:
+        return "⚠️ Тревога активна, подробности API ещё не получены."
     return f"Статус тревоги еще не получен. Попробуй снова через минуту.\nОповещения: {destination}."
 
 
