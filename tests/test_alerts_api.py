@@ -413,6 +413,63 @@ def test_only_escalations_create_separate_alarm_notification() -> None:
     )
 
 
+def test_unspecified_missiles_are_labeled_as_unconfirmed_api_information() -> None:
+    state = AlertsLocationState(
+        status="A",
+        alert_level="red",
+        threats=(AlertsThreat("unspecified_missiles", "red", None, None),),
+    )
+
+    for text in (
+        format_alerts_location_details(state),
+        format_current_alarm_status(state),
+        format_important_alarm_update(AlertsLocationState("A", "yellow"), state),
+    ):
+        assert "Alerts.in.ua передаёт: возможная ракетная угроза" in text
+
+
+def test_alarm_escalation_requires_two_identical_consecutive_states() -> None:
+    yellow = AlertsLocationState(
+        status="A",
+        alert_level="yellow",
+        threats=(AlertsThreat("drones", "yellow", None, None),),
+    )
+    red = AlertsLocationState(
+        status="A",
+        alert_level="red",
+        threats=(AlertsThreat("unspecified_missiles", "red", None, None),),
+    )
+
+    candidate, confirmed = bot_module.advance_alarm_escalation_candidate(None, yellow, red)
+    assert candidate is not None
+    assert confirmed is None
+
+    candidate, confirmed = bot_module.advance_alarm_escalation_candidate(candidate, red, red)
+    assert candidate is None
+    assert confirmed is not None
+    assert confirmed.previous == yellow
+    assert confirmed.current == red
+
+
+def test_alarm_escalation_candidate_is_cancelled_when_state_rolls_back() -> None:
+    yellow = AlertsLocationState(
+        status="A",
+        alert_level="yellow",
+        threats=(AlertsThreat("drones", "yellow", None, None),),
+    )
+    red = AlertsLocationState(
+        status="A",
+        alert_level="red",
+        threats=(AlertsThreat("unspecified_missiles", "red", None, None),),
+    )
+
+    candidate, _ = bot_module.advance_alarm_escalation_candidate(None, yellow, red)
+    next_candidate, confirmed = bot_module.advance_alarm_escalation_candidate(candidate, red, yellow)
+
+    assert next_candidate is None
+    assert confirmed is None
+
+
 def test_regular_alarm_update_edits_existing_status_message(monkeypatch) -> None:
     class FakeDb:
         def alarm_api_status_message_id(self, chat_id, status):

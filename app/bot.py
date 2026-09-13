@@ -10509,6 +10509,13 @@ class AlertsApiCache:
     state: AlertsLocationState | None = None
 
 
+@dataclass(frozen=True)
+class AlertsEscalationCandidate:
+    signature: str
+    previous: AlertsLocationState
+    current: AlertsLocationState
+
+
 ALERTS_API_CACHE = AlertsApiCache()
 
 
@@ -10596,6 +10603,12 @@ def alerts_location_state_signature(state: AlertsLocationState) -> str:
     )
 
 
+def alerts_threat_label(threat_type: str) -> str:
+    if threat_type == "unspecified_missiles":
+        return "Alerts.in.ua передаёт: возможная ракетная угроза"
+    return ALERTS_THREAT_LABELS.get(threat_type, threat_type.replace("_", " "))
+
+
 def format_alerts_location_details(state: AlertsLocationState) -> str:
     lines: list[str] = []
     if state.alert_level == "red":
@@ -10606,10 +10619,7 @@ def format_alerts_location_details(state: AlertsLocationState) -> str:
     if state.threats:
         lines.append("Конкретные угрозы:")
         for threat in state.threats[:8]:
-            label = ALERTS_THREAT_LABELS.get(
-                threat.threat_type,
-                threat.threat_type.replace("_", " "),
-            )
+            label = alerts_threat_label(threat.threat_type)
             icon = "🔴" if threat.level == "red" else "🟡" if threat.level == "yellow" else "•"
             source = (threat.source_message or "").strip()
             suffix = f" — {escape(source[:240])}" if source else ""
@@ -10635,7 +10645,7 @@ def format_current_alarm_status(state: AlertsLocationState) -> str:
 
     lines.append("Угрозы по данным API:")
     for threat in state.threats[:8]:
-        label = ALERTS_THREAT_LABELS.get(threat.threat_type, threat.threat_type.replace("_", " "))
+        label = alerts_threat_label(threat.threat_type)
         source = (threat.source_message or "").strip()
         suffix = f" — {escape(source[:240])}" if source else ""
         scope = f" [по данным API: {escape(threat.location_title)}]" if threat.location_title else ""
@@ -10683,6 +10693,19 @@ def is_important_alarm_update(previous: AlertsLocationState, current: AlertsLoca
     return bool(current_red - previous_red)
 
 
+def advance_alarm_escalation_candidate(
+    candidate: AlertsEscalationCandidate | None,
+    previous: AlertsLocationState,
+    current: AlertsLocationState,
+) -> tuple[AlertsEscalationCandidate | None, AlertsEscalationCandidate | None]:
+    signature = alerts_location_state_signature(current)
+    if candidate is not None and candidate.signature == signature:
+        return None, candidate
+    if is_important_alarm_update(previous, current):
+        return AlertsEscalationCandidate(signature, previous, current), None
+    return None, None
+
+
 def format_important_alarm_update(
     previous: AlertsLocationState,
     current: AlertsLocationState,
@@ -10713,7 +10736,7 @@ def format_important_alarm_update(
     )
     if new_important:
         labels = ", ".join(
-            escape(ALERTS_THREAT_LABELS[threat.threat_type])
+            escape(alerts_threat_label(threat.threat_type))
             + (f" [по данным API: {escape(threat.location_title)}]" if threat.location_title else "")
             for threat in current.threats if threat.threat_type in new_important
         )
@@ -10878,11 +10901,22 @@ async def update_alarm_from_api(
     chat_id: int,
     previous: AlertsLocationState,
     current: AlertsLocationState,
+    *,
+    announce_important: bool = True,
 ) -> bool:
     if not await edit_alarm_status_message(bot, chat_id, current):
         return False
-    if not is_important_alarm_update(previous, current):
+    if not announce_important or not is_important_alarm_update(previous, current):
         return True
+    return await send_important_alarm_update(bot, chat_id, previous, current)
+
+
+async def send_important_alarm_update(
+    bot: Bot,
+    chat_id: int,
+    previous: AlertsLocationState,
+    current: AlertsLocationState,
+) -> bool:
     message = await send_alarm_notification(
         bot,
         chat_id,
@@ -10952,6 +10986,7 @@ async def deactivate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
 async def alerts_monitor_loop(bot: Bot) -> None:
     initial_sync = True
     notified_states: dict[int, AlertsLocationState] = {}
+    pending_escalations: dict[int, AlertsEscalationCandidate] = {}
     while True:
         try:
             chat_ids = db.list_alarm_api_chats()
@@ -10979,26 +11014,58 @@ async def alerts_monitor_loop(bot: Bot) -> None:
                         if await activate_alarm_from_api(bot, chat_id, alert_state):
                             db.set_alarm_api_last_notified_status(chat_id, "A")
                             notified_states[chat_id] = alert_state
+                            pending_escalations.pop(chat_id, None)
                     elif not active and notified != "N":
                         if previous is None and notified is None:
                             db.set_alarm_api_last_notified_status(chat_id, "N")
                             notified_states[chat_id] = alert_state
+                            pending_escalations.pop(chat_id, None)
                         elif await deactivate_alarm_from_api(bot, chat_id):
                             db.set_alarm_api_last_notified_status(chat_id, "N")
                             notified_states[chat_id] = alert_state
-                    elif (
-                        active
-                        and previous_state is not None
-                        and alerts_location_state_signature(previous_state) != details_signature
-                    ):
-                        if await update_alarm_from_api(bot, chat_id, previous_state, alert_state):
+                            pending_escalations.pop(chat_id, None)
+                    elif active and previous_state is not None:
+                        candidate, confirmed = advance_alarm_escalation_candidate(
+                            pending_escalations.get(chat_id),
+                            previous_state,
+                            alert_state,
+                        )
+                        if candidate is None:
+                            pending_escalations.pop(chat_id, None)
+                        else:
+                            pending_escalations[chat_id] = candidate
+
+                        if alerts_location_state_signature(previous_state) != details_signature:
+                            if await update_alarm_from_api(
+                                bot,
+                                chat_id,
+                                previous_state,
+                                alert_state,
+                                announce_important=False,
+                            ):
+                                notified_states[chat_id] = alert_state
+                        else:
                             notified_states[chat_id] = alert_state
+
+                        if confirmed is not None:
+                            if not await send_important_alarm_update(
+                                bot,
+                                chat_id,
+                                confirmed.previous,
+                                confirmed.current,
+                            ):
+                                pending_escalations[chat_id] = confirmed
                     else:
                         notified_states[chat_id] = alert_state
                 enabled_chat_ids = set(chat_ids)
                 notified_states = {
                     chat_id: state
                     for chat_id, state in notified_states.items()
+                    if chat_id in enabled_chat_ids
+                }
+                pending_escalations = {
+                    chat_id: candidate
+                    for chat_id, candidate in pending_escalations.items()
                     if chat_id in enabled_chat_ids
                 }
         except asyncio.CancelledError:
