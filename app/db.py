@@ -3650,9 +3650,7 @@ class Database:
         return mode if mode in {"alerts", "threats"} else "threats"
 
     def set_alarm_api_neptun_mode(self, chat_id: int, mode: str, updated_by: int | None) -> None:
-        from .alert_providers import NEPTUN_MODES
-
-        if mode not in NEPTUN_MODES:
+        if mode not in {"alerts", "threats"}:
             raise ValueError("Unknown NEPTUN mode")
         self._conn.execute(
             """insert into alarm_api_settings (chat_id, enabled, neptun_mode, updated_by, updated_at)

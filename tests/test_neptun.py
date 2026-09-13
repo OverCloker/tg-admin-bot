@@ -82,7 +82,18 @@ def test_neptun_accepts_geojson_apostrophe_variant():
 
 
 def neptun_snapshot(status):
-    return {"threats": [threat()] if status == "A" else []}
+    return {
+        "alerts": {
+            "raions": [{
+                "key": "kryvorizkyi",
+                "name": "Криворізький район",
+                "oblast": "Дніпропетровська область",
+                "level": "yellow",
+            }] if status == "A" else [],
+            "oblasts": [],
+        },
+        "threats": {"threats": [threat()] if status == "A" else []},
+    }
 
 
 def test_neptun_official_alarm_uses_district_or_oblast_presence():
@@ -109,6 +120,29 @@ def test_neptun_official_alarm_uses_district_or_oblast_presence():
 def test_neptun_official_invalid_snapshot_is_never_clear(payload):
     with pytest.raises(ValueError):
         parse_neptun_official_alerts(payload)
+
+
+def test_neptun_provider_combines_official_alarm_and_threat_details():
+    state = NeptunProvider().state_for(neptun_snapshot("A"), DEFAULT_NEPTUN_LOCATION)
+    assert state.status == "A"
+    assert state.official_alert is True
+    assert state.provider_mode == "combined"
+    assert state.threats[0].threat_type == "drones"
+
+
+def test_neptun_provider_keeps_threat_without_official_alarm():
+    snapshot = neptun_snapshot("N")
+    snapshot["threats"] = {"threats": [threat()]}
+    state = NeptunProvider().state_for(snapshot, DEFAULT_NEPTUN_LOCATION)
+    assert state.status == "A"
+    assert state.official_alert is False
+    assert state.threats[0].threat_type == "drones"
+
+
+@pytest.mark.parametrize("snapshot", [{}, {"alerts": {}, "threats": {"threats": []}}])
+def test_neptun_provider_rejects_incomplete_combined_snapshot(snapshot):
+    with pytest.raises(ValueError):
+        NeptunProvider().state_for(snapshot, DEFAULT_NEPTUN_LOCATION)
 
 
 @pytest.mark.parametrize("payload", [None, {}, {"threats": None}, {"threats": [None]},
@@ -347,7 +381,7 @@ def test_neptun_chat_status_is_compact(database, monkeypatch):
         official_area="Криворізький район, Дніпропетровська область",
     )
     monkeypatch.setattr(bot, "db", database, raising=False)
-    monkeypatch.setattr(bot, "PROVIDER_STATES", {("neptun_threats", DEFAULT_NEPTUN_LOCATION): state})
+    monkeypatch.setattr(bot, "PROVIDER_STATES", {("neptun", DEFAULT_NEPTUN_LOCATION): state})
     text = bot.alarm_status_text(-1)
     assert "Город: <b>Кривий Ріг</b>" in text
     assert "Угроза: <b>ударные БПЛА</b>" in text

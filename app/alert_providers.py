@@ -1,5 +1,6 @@
-"""Alert provider contract and NEPTUN active-threat adapter."""
+"""Alert provider contract and combined NEPTUN alert adapter."""
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -8,8 +9,6 @@ import aiohttp
 
 
 SOURCE_LABELS = {"alerts_in_ua": "Alerts.in.ua", "neptun": "NEPTUN"}
-NEPTUN_MODES = {"alerts": "Официальная тревога", "threats": "Конкретные угрозы"}
-DEFAULT_NEPTUN_MODE = "threats"
 DEFAULT_NEPTUN_LOCATION = "kryvyi-rih"
 NEPTUN_NOTICE = (
     '\n\nДанные: <a href="https://neptun.in.ua/">NEPTUN</a>. '
@@ -106,6 +105,7 @@ class AlertsLocationState:
     location_title: str = "Криворізький район"
     official_area: str | None = None
     provider_mode: str | None = None
+    official_alert: bool | None = None
 
 
 class AlertProvider(Protocol):
@@ -267,23 +267,38 @@ def parse_neptun_official_alerts(
     )
 
 
-@dataclass
 class NeptunProvider:
-    """Fetch one NEPTUN endpoint; derive each group's city state locally."""
-
-    mode: str = DEFAULT_NEPTUN_MODE
-
-    def __post_init__(self) -> None:
-        if self.mode not in NEPTUN_MODES:
-            raise ValueError("Unknown NEPTUN mode")
+    """Combine official alarms and active threats into one city state."""
 
     async def fetch(self) -> object:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-            async with session.get(f"https://neptun.in.ua/api/v1/{self.mode}") as response:
-                response.raise_for_status()
-                return await response.json()
+            async def get(endpoint: str) -> object:
+                async with session.get(f"https://neptun.in.ua/api/v1/{endpoint}") as response:
+                    response.raise_for_status()
+                    return await response.json()
+
+            alerts, threats = await asyncio.gather(get("alerts"), get("threats"))
+            return {"alerts": alerts, "threats": threats}
 
     def state_for(self, snapshot: object, location_key: str) -> AlertsLocationState:
-        if self.mode == "alerts":
-            return parse_neptun_official_alerts(snapshot, location_key)
-        return parse_neptun_alerts(snapshot, location_key)
+        if not isinstance(snapshot, dict) or "alerts" not in snapshot or "threats" not in snapshot:
+            raise ValueError("NEPTUN: incomplete combined snapshot")
+        official = parse_neptun_official_alerts(snapshot["alerts"], location_key)
+        details = parse_neptun_alerts(snapshot["threats"], location_key)
+        official_active = official.status in {"A", "P"}
+        threats_active = details.status in {"A", "P"}
+        level = (
+            "red" if "red" in {official.alert_level, details.alert_level}
+            else "yellow" if "yellow" in {official.alert_level, details.alert_level}
+            else None
+        )
+        return AlertsLocationState(
+            official.status if official_active else (details.status if threats_active else "N"),
+            alert_level=level,
+            threats=details.threats,
+            source="neptun",
+            location_title=official.location_title,
+            official_area=official.official_area,
+            provider_mode="combined",
+            official_alert=official_active,
+        )

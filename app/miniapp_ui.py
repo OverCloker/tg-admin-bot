@@ -958,8 +958,6 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     #alarmSourceAlerts:checked ~ .alarm-source-track .alarm-source-knob { transform: translateX(0); }
     #alarmSourceNeptun:checked ~ .alarm-source-track .alarm-source-knob { transform: translateX(calc(100% + 4px)); }
-    #neptunModeAlerts:checked ~ .alarm-source-track .alarm-source-knob { transform: translateX(0); }
-    #neptunModeThreats:checked ~ .alarm-source-track .alarm-source-knob { transform: translateX(calc(100% + 4px)); }
     .alarm-source-switch:focus-within .alarm-source-track {
       outline: 3px solid color-mix(in srgb, var(--accent) 24%, transparent);
       outline-offset: 4px;
@@ -2493,19 +2491,7 @@ MINI_APP_HTML = r"""<!doctype html>
               ${(alarm.locations || []).map(item => `<option value="${escapeHtml(item.key)}" ${item.key === alarm.location ? "selected" : ""}>${escapeHtml(item.title)} · ${escapeHtml(item.area)}</option>`).join("")}
             </select>
           </label>
-          <div class="wide">
-            <p class="muted">Режим данных NEPTUN</p>
-            <div class="alarm-source-switch">
-              <input type="radio" name="neptunMode" id="neptunModeAlerts" value="alerts" ${alarm.neptunMode === "alerts" ? "checked" : ""}>
-              <input type="radio" name="neptunMode" id="neptunModeThreats" value="threats" ${alarm.neptunMode !== "alerts" ? "checked" : ""}>
-              <div class="alarm-source-track">
-                <span class="alarm-source-knob"></span>
-                <label for="neptunModeAlerts">Тревога</label>
-                <label for="neptunModeThreats">Угрозы</label>
-              </div>
-            </div>
-            <p class="muted">«Тревога» — официальный статус района/области. «Угрозы» — конкретные цели NEPTUN.</p>
-          </div>
+          <p class="muted wide">NEPTUN объединяет официальный статус тревоги и конкретные активные угрозы.</p>
         </div>
         <div class="settings-checks">
           <label><input id="alarmAutomatic" type="checkbox" ${alarm.automaticEnabled ? "checked" : ""}> Автоматические оповещения${alarm.turningOff ? " (идёт отключение…)" : ""}</label>
@@ -2552,7 +2538,6 @@ MINI_APP_HTML = r"""<!doctype html>
           automaticEnabled: Boolean(document.getElementById("alarmAutomatic")?.checked),
           source,
           location: document.getElementById("alarmLocation")?.value || "kryvyi-rih",
-          neptunMode: document.querySelector('input[name="neptunMode"]:checked')?.value || "threats",
           restrictionsEnabled: Boolean(document.getElementById("alarmRestrictions")?.checked),
           manualEnabled: Boolean(document.getElementById("alarmManual")?.checked),
           alarmText: document.getElementById("alarmText")?.value || "",

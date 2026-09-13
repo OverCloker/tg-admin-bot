@@ -10690,6 +10690,7 @@ def alerts_location_state_signature(state: AlertsLocationState) -> str:
         {
             "status": state.status,
             "alert_level": state.alert_level,
+            "official_alert": state.official_alert,
             "threats": [
                 {
                     "type": threat.threat_type,
@@ -10758,11 +10759,14 @@ def format_current_alarm_status(state: AlertsLocationState) -> str:
 
 def build_alarm_alert_text(state: AlertsLocationState) -> str:
     if state.source == "neptun":
-        if state.provider_mode == "alerts":
+        if state.provider_mode == "combined" and state.official_alert:
             alarm_kind = "частичная воздушная тревога" if state.status == "P" else "воздушная тревога"
             lines = [
                 f"NEPTUN сообщает: объявлена {alarm_kind} — <b>{escape(state.location_title)}</b>."
             ]
+            details = format_alerts_location_details(state)
+            if details:
+                lines.append(details)
             lines.append("ℹ️ Данные обновляются автоматически каждые 30 секунд.")
             lines.append(NEPTUN_NOTICE.strip())
             return "\n\n".join(lines)
@@ -11092,16 +11096,11 @@ async def deactivate_alarm_from_api(bot: Bot, chat_id: int, source: str = "alert
     await restore_alarm_restrictions(bot, chat_id)
 
     await delete_previous_alarm_status_message(bot, chat_id, "A")
-    neptun_official = source == "neptun" and db.alarm_api_neptun_mode(chat_id) == "alerts"
     clear_message = await send_alarm_notification(
         bot,
         chat_id,
         (
-            (
-                "🟢 <b>NEPTUN: отбой воздушной тревоги для выбранного города.</b>"
-                if neptun_official
-                else "🟢 <b>NEPTUN больше не показывает активных угроз для выбранного города.</b>"
-            )
+            "🟢 <b>NEPTUN: воздушная тревога отбита, активных угроз для города нет.</b>"
             + NEPTUN_NOTICE
             if source == "neptun"
             else "🟢 <b>Отбой воздушной тревоги.</b>"
@@ -11122,17 +11121,12 @@ async def deactivate_alarm_from_api(bot: Bot, chat_id: int, source: str = "alert
 PROVIDER_STATES: dict[tuple[str, str], AlertsLocationState] = {}
 
 
-def alarm_provider_key(source: str, neptun_mode: str = "threats") -> str:
-    return f"neptun_{neptun_mode}" if source == "neptun" else source
-
-
 async def alerts_monitor_loop(bot: Bot) -> None:
     providers: dict[str, AlertProvider] = {
         "alerts_in_ua": AlertsInUaProvider(lambda: fetch_alerts_location_state()),
-        "neptun_alerts": NeptunProvider("alerts"),
-        "neptun_threats": NeptunProvider("threats"),
+        "neptun": NeptunProvider(),
     }
-    selections_seen: dict[int, tuple[str, str, str]] = {}
+    selections_seen: dict[int, tuple[str, str]] = {}
     notified_states: dict[int, AlertsLocationState] = {}
     pending_escalations: dict[int, AlertsEscalationCandidate] = {}
     while True:
@@ -11156,11 +11150,7 @@ async def alerts_monitor_loop(bot: Bot) -> None:
             chat_ids = active_chat_ids
             sources = {chat_id: db.alarm_api_source(chat_id) for chat_id in chat_ids}
             locations = {chat_id: db.alarm_api_location(chat_id) for chat_id in chat_ids}
-            modes = {chat_id: db.alarm_api_neptun_mode(chat_id) for chat_id in chat_ids}
-            provider_keys = {
-                chat_id: alarm_provider_key(sources[chat_id], modes[chat_id]) for chat_id in chat_ids
-            }
-            requested = sorted(set(provider_keys.values()))
+            requested = sorted(set(sources.values()))
             results = await asyncio.gather(
                 *(providers[source].fetch() for source in requested), return_exceptions=True
             )
@@ -11176,30 +11166,27 @@ async def alerts_monitor_loop(bot: Bot) -> None:
                 for chat_id in chat_ids:
                     source = sources[chat_id]
                     location = locations[chat_id]
-                    mode = modes[chat_id]
-                    provider_key = provider_keys[chat_id]
                     # A selection changed during the request: discard the old result.
                     if (
                         db.alarm_api_source(chat_id) != source
                         or db.alarm_api_location(chat_id) != location
-                        or db.alarm_api_neptun_mode(chat_id) != mode
                         or not db.alarm_api_enabled(chat_id)
                     ):
                         continue
-                    if provider_key not in fresh:
+                    if source not in fresh:
                         continue
                     try:
-                        alert_state = providers[provider_key].state_for(fresh[provider_key], location)
+                        alert_state = providers[source].state_for(fresh[source], location)
                     except Exception as exc:
                         logging.warning(
                             "Alert provider %s rejected location %s: %s", source, location, exc
                         )
                         continue
-                    PROVIDER_STATES[(provider_key, location)] = alert_state
+                    PROVIDER_STATES[(source, location)] = alert_state
                     status = alert_state.status
                     details_signature = alerts_location_state_signature(alert_state)
                     active = status in {"A", "P"}
-                    selection = (source, location, mode)
+                    selection = (source, location)
                     if selections_seen.get(chat_id, selection) != selection:
                         notified_states.pop(chat_id, None)
                         pending_escalations.pop(chat_id, None)
@@ -11304,12 +11291,10 @@ def alarm_status_text(chat_id: int) -> str:
 
     source = db.alarm_api_source(chat_id)
     location = db.alarm_api_location(chat_id)
-    neptun_mode = db.alarm_api_neptun_mode(chat_id) if source == "neptun" else "threats"
-    provider_key = alarm_provider_key(source, neptun_mode)
     state = (
         ALERTS_API_CACHE.state
         if source == "alerts_in_ua"
-        else PROVIDER_STATES.get((provider_key, location))
+        else PROVIDER_STATES.get((source, location))
     )
     if source == "neptun":
         configured = NEPTUN_LOCATIONS.get(location, NEPTUN_LOCATIONS[DEFAULT_NEPTUN_LOCATION])
@@ -11319,13 +11304,17 @@ def alarm_status_text(chat_id: int) -> str:
             lines.append("⚪ Статус ещё не получен.")
         elif state.status == "N":
             lines.append(
-                "🟢 Воздушной тревоги нет."
-                if neptun_mode == "alerts"
-                else "🟢 Активных угроз нет."
+                "🟢 Воздушной тревоги и активных угроз нет."
             )
-        elif neptun_mode == "alerts":
+        elif state.official_alert:
             icon = "🔴" if state.alert_level == "red" else "🟡"
             lines.append(f"{icon} Воздушная тревога: <b>активна</b>.")
+            labels = list(dict.fromkeys(
+                alerts_threat_label(threat.threat_type, "neptun")
+                for threat in state.threats
+            ))
+            if labels:
+                lines.append(f"Угрозы: <b>{escape(', '.join(labels))}</b>.")
         else:
             labels = list(dict.fromkeys(
                 alerts_threat_label(threat.threat_type, "neptun")
