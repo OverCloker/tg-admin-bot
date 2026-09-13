@@ -731,6 +731,8 @@ class Database:
             create table if not exists alarm_api_settings (
                 chat_id integer primary key,
                 enabled integer not null default 0,
+                alert_source text not null default 'alerts_in_ua',
+                alert_location text not null default 'kryvyi-rih',
                 last_status text,
                 last_notified_status text,
                 last_alarm_message_id integer,
@@ -1357,6 +1359,10 @@ class Database:
             row["name"]
             for row in self._conn.execute("pragma table_info(alarm_api_settings)").fetchall()
         }
+        if "alert_source" not in columns:
+            self._conn.execute("alter table alarm_api_settings add column alert_source text not null default 'alerts_in_ua'")
+        if "alert_location" not in columns:
+            self._conn.execute("alter table alarm_api_settings add column alert_location text not null default 'kryvyi-rih'")
         if "last_notified_status" not in columns:
             self._conn.execute("alter table alarm_api_settings add column last_notified_status text")
         if "last_alarm_message_id" not in columns:
@@ -3617,6 +3623,47 @@ class Database:
             (chat_id,),
         ).fetchone()
         return bool(row["enabled"]) if row else False
+
+    def alarm_api_source(self, chat_id: int) -> str:
+        row = self._conn.execute(
+            "select alert_source from alarm_api_settings where chat_id = ?", (chat_id,)
+        ).fetchone()
+        return row["alert_source"] if row else "alerts_in_ua"
+
+    def alarm_api_location(self, chat_id: int) -> str:
+        row = self._conn.execute(
+            "select alert_location from alarm_api_settings where chat_id = ?", (chat_id,)
+        ).fetchone()
+        return row["alert_location"] if row else "kryvyi-rih"
+
+    def set_alarm_api_location(self, chat_id: int, location: str, updated_by: int | None) -> None:
+        from .alert_providers import NEPTUN_LOCATIONS
+
+        if location not in NEPTUN_LOCATIONS:
+            raise ValueError("Unknown NEPTUN location")
+        self._conn.execute(
+            """insert into alarm_api_settings (
+                   chat_id, enabled, alert_location, updated_by, updated_at
+               ) values (?, 0, ?, ?, ?)
+               on conflict(chat_id) do update set alert_location = excluded.alert_location,
+                   updated_by = excluded.updated_by, updated_at = excluded.updated_at""",
+            (chat_id, location, updated_by, utc_now()),
+        )
+        self._conn.commit()
+
+    def set_alarm_api_source(self, chat_id: int, source: str, updated_by: int | None) -> None:
+        from .alert_providers import SOURCE_LABELS
+        if source not in SOURCE_LABELS:
+            raise ValueError("Unknown alert source")
+        # Preserve status, pinned message IDs and saved restrictions for reconciliation.
+        self._conn.execute(
+            """insert into alarm_api_settings (chat_id, enabled, alert_source, updated_by, updated_at)
+               values (?, 0, ?, ?, ?)
+               on conflict(chat_id) do update set alert_source = excluded.alert_source,
+                   updated_by = excluded.updated_by, updated_at = excluded.updated_at""",
+            (chat_id, source, updated_by, utc_now()),
+        )
+        self._conn.commit()
 
     def set_alarm_api_enabled(self, chat_id: int, enabled: bool, updated_by: int | None) -> None:
         self._conn.execute(

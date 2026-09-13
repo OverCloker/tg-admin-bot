@@ -844,6 +844,8 @@ def alarm_menu(
         inline_keyboard=[
             [InlineKeyboardButton(text=toggle_text, callback_data=f"alarm:toggle:{chat_id}")],
             [InlineKeyboardButton(text=api_text, callback_data=f"alarm:api:{chat_id}")],
+            [InlineKeyboardButton(text="Источник тревог", callback_data=f"alarm:source:{chat_id}")],
+            [InlineKeyboardButton(text="Город NEPTUN", callback_data=f"alarm:location:{chat_id}")],
             [InlineKeyboardButton(text=restrictions_text, callback_data=f"alarm:restrictions:{chat_id}")],
             [InlineKeyboardButton(text="Текст тревоги", callback_data=f"alarm:text_on:{chat_id}")],
             [InlineKeyboardButton(text="Текст отбоя", callback_data=f"alarm:text_off:{chat_id}")],

@@ -32,6 +32,17 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, FSInputFile, Gift, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, InputRichBlockDetails, InputRichBlockParagraph, InputRichBlockTable, InputRichMessage, LabeledPrice, MenuButtonWebApp, Message, MessageReactionUpdated, PreCheckoutQuery, RichBlockTableCell, StarAmount, SuccessfulPayment, User, WebAppInfo
 
 from .config import load_config
+from .alert_providers import (
+    DEFAULT_NEPTUN_LOCATION,
+    NEPTUN_LOCATIONS,
+    NEPTUN_NOTICE,
+    SOURCE_LABELS,
+    AlertProvider,
+    AlertsInUaProvider,
+    AlertsLocationState,
+    AlertsThreat,
+    NeptunProvider,
+)
 from .alerts_diagnostics import save_alerts_response
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
 from .dig_game import (
@@ -806,6 +817,50 @@ def cached_alarm_runtime(chat_id: int) -> tuple[bool, bool, str | None, bool]:
     )
     ALARM_RUNTIME_CACHE[chat_id] = (now, state)
     return state
+
+
+def configured_alert_location(chat_id: int) -> str:
+    if db.alarm_api_source(chat_id) != "neptun":
+        return ALERTS_LOCATION_TITLE
+    location = NEPTUN_LOCATIONS.get(db.alarm_api_location(chat_id))
+    if location is None:
+        location = NEPTUN_LOCATIONS[DEFAULT_NEPTUN_LOCATION]
+    return f"{location.city} (официально: {location.official_area})"
+
+
+def neptun_location_menu(chat_id: int, selected: str, page: int = 0) -> InlineKeyboardMarkup:
+    page_size = 10
+    locations = sorted(NEPTUN_LOCATIONS.values(), key=lambda item: item.city.casefold())
+    page_count = max(1, math.ceil(len(locations) / page_size))
+    page = min(max(page, 0), page_count - 1)
+    visible = locations[page * page_size : (page + 1) * page_size]
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=("✓ " if location.key == selected else "") + location.city,
+                callback_data=f"alarm:location_{location.key}:{chat_id}",
+            )
+        ]
+        for location in visible
+    ]
+    navigation = []
+    if page > 0:
+        navigation.append(
+            InlineKeyboardButton(text="←", callback_data=f"alarm:locations_{page - 1}:{chat_id}")
+        )
+    navigation.append(
+        InlineKeyboardButton(
+            text=f"{page + 1}/{page_count}",
+            callback_data=f"alarm:locations_{page}:{chat_id}",
+        )
+    )
+    if page + 1 < page_count:
+        navigation.append(
+            InlineKeyboardButton(text="→", callback_data=f"alarm:locations_{page + 1}:{chat_id}")
+        )
+    rows.append(navigation)
+    rows.append([InlineKeyboardButton(text="Назад", callback_data=f"act:alarm:{chat_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def cached_chat_lock(chat_id: int) -> dict | None:
@@ -8116,7 +8171,7 @@ async def cb_action(callback: CallbackQuery, state: FSMContext) -> None:
             callback,
             f"Группа: <b>{mention_chat(chat)}</b>\n\n"
             f"Режим тревоги: <b>{'включен' if settings.enabled else 'выключен'}</b>\n\n"
-            f"Автотревога Alerts.in.ua ({ALERTS_LOCATION_TITLE}): <b>{'включена' if db.alarm_api_enabled(chat_id) else 'выключена'}</b>\n\n"
+            f"Автотревога {SOURCE_LABELS[db.alarm_api_source(chat_id)]} ({configured_alert_location(chat_id)}): <b>{'включена' if db.alarm_api_enabled(chat_id) else 'выключена'}</b>\n\n"
             f"Ограничения медиа и реакций: <b>{'включены' if db.alarm_restrictions_enabled(chat_id) else 'выключены'}</b>\n\n"
             f"Текст тревоги: {preview_html(settings.alarm_text or 'Тревога включена: медиа, реакции и одиночные эмодзи отключены.')}\n"
             f"Текст отбоя: {preview_html(settings.clear_text or 'Отбой: медиа, реакции и одиночные эмодзи снова включены.')}",
@@ -8595,7 +8650,7 @@ async def cb_alarm(callback: CallbackQuery, state: FSMContext) -> None:
             callback,
             f"Группа: <b>{mention_chat(chat)}</b>\n\n"
             f"Режим тревоги: <b>{'включен' if settings.enabled else 'выключен'}</b>\n\n"
-            f"Автотревога Alerts.in.ua ({ALERTS_LOCATION_TITLE}): <b>{'включена' if db.alarm_api_enabled(chat_id) else 'выключена'}</b>\n\n"
+            f"Автотревога {SOURCE_LABELS[db.alarm_api_source(chat_id)]} ({configured_alert_location(chat_id)}): <b>{'включена' if db.alarm_api_enabled(chat_id) else 'выключена'}</b>\n\n"
             f"Ограничения медиа и реакций: <b>{'включены' if db.alarm_restrictions_enabled(chat_id) else 'выключены'}</b>\n\n"
             f"Текст тревоги: {preview_html(settings.alarm_text or 'Тревога включена: медиа, реакции и одиночные эмодзи отключены.')}\n"
             f"Текст отбоя: {preview_html(settings.clear_text or 'Отбой: медиа, реакции и одиночные эмодзи снова включены.')}",
@@ -8606,16 +8661,80 @@ async def cb_alarm(callback: CallbackQuery, state: FSMContext) -> None:
                 db.alarm_restrictions_enabled(chat_id),
             ),
         )
+    elif action == "source" or action.startswith("source_"):
+        if not await require_callback_feature(callback, "alarm.api", default=True):
+            return
+        if action != "source":
+            source = action.removeprefix("source_")
+            if source not in SOURCE_LABELS:
+                await callback.answer("Неизвестный источник", show_alert=True)
+                return
+            if source == "alerts_in_ua" and not ALERTS_API_TOKEN:
+                await callback.answer("Добавь ALERTS_API_TOKEN в .env и перезапусти бота.", show_alert=True)
+                return
+            db.set_alarm_api_source(chat_id, source, callback.from_user.id)
+            invalidate_chat_runtime_cache(chat_id)
+        source = db.alarm_api_source(chat_id)
+        await safe_edit(
+            callback,
+            f"Группа: <b>{mention_chat(chat)}</b>\nИсточник тревог: <b>{SOURCE_LABELS[source]}</b>.\n"
+            f"Территория: <b>{configured_alert_location(chat_id)}</b>.\n"
+            "Выбор действует только для этой группы. Автотревога включается отдельно."
+            + (NEPTUN_NOTICE if source == "neptun" else ""),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=("✓ " if source == key else "") + label,
+                                      callback_data=f"alarm:source_{key}:{chat_id}")]
+                for key, label in SOURCE_LABELS.items()
+            ] + [[InlineKeyboardButton(text="Назад", callback_data=f"act:alarm:{chat_id}")]]),
+        )
+    elif action == "location" or action.startswith("locations_") or action.startswith("location_"):
+        if not await require_callback_feature(callback, "alarm.api", default=True):
+            return
+        if action.startswith("location_"):
+            location_key = action.removeprefix("location_")
+            if location_key not in NEPTUN_LOCATIONS:
+                await callback.answer("Неизвестный город", show_alert=True)
+                return
+            db.set_alarm_api_location(chat_id, location_key, callback.from_user.id)
+            invalidate_chat_runtime_cache(chat_id)
+        selected = db.alarm_api_location(chat_id)
+        page = 0
+        if action.startswith("locations_"):
+            try:
+                page = int(action.removeprefix("locations_"))
+            except ValueError:
+                page = 0
+        elif action.startswith("location_"):
+            ordered_keys = [
+                item.key
+                for item in sorted(NEPTUN_LOCATIONS.values(), key=lambda item: item.city.casefold())
+            ]
+            page = ordered_keys.index(selected) // 10
+        location = NEPTUN_LOCATIONS.get(selected, NEPTUN_LOCATIONS[DEFAULT_NEPTUN_LOCATION])
+        official_area = (
+            f"{location.official_area}, {location.oblast}"
+            if location.district
+            else location.oblast
+        )
+        await safe_edit(
+            callback,
+            f"Группа: <b>{mention_chat(chat)}</b>\n\n"
+            f"Город NEPTUN: <b>{location.city}</b>\n"
+            f"Официальный статус: <b>{official_area}</b>.\n\n"
+            "NEPTUN публикует официальные тревоги по районам и областям, поэтому "
+            "город сопоставлен с его административным районом.",
+            reply_markup=neptun_location_menu(chat_id, selected, page),
+        )
     elif action == "api":
         if not await require_callback_feature(callback, "alarm.api", default=True):
             return
-        if not ALERTS_API_TOKEN:
+        if not db.alarm_api_enabled(chat_id) and db.alarm_api_source(chat_id) == "alerts_in_ua" and not ALERTS_API_TOKEN:
             await callback.answer("Добавь ALERTS_API_TOKEN в файл .env и перезапусти бота.", show_alert=True)
             return
         enabled = not db.alarm_api_enabled(chat_id)
         previous_status = db.alarm_api_last_status(chat_id)
         if not enabled and previous_status in {"A", "P"}:
-            await deactivate_alarm_from_api(callback.bot, chat_id)
+            await deactivate_alarm_from_api(callback.bot, chat_id, db.alarm_api_source(chat_id))
         db.set_alarm_api_enabled(chat_id, enabled, callback.from_user.id)
         invalidate_chat_runtime_cache(chat_id)
         settings = db.get_alarm_settings(chat_id)
@@ -8623,7 +8742,7 @@ async def cb_alarm(callback: CallbackQuery, state: FSMContext) -> None:
             callback,
             f"Группа: <b>{mention_chat(chat)}</b>\n\n"
             f"Режим тревоги: <b>{'включен' if settings.enabled else 'выключен'}</b>\n\n"
-            f"Автотревога Alerts.in.ua ({ALERTS_LOCATION_TITLE}): <b>{'включена' if enabled else 'выключена'}</b>\n\n"
+            f"Автотревога {SOURCE_LABELS[db.alarm_api_source(chat_id)]} ({configured_alert_location(chat_id)}): <b>{'включена' if enabled else 'выключена'}</b>\n\n"
             f"Ограничения медиа и реакций: <b>{'включены' if db.alarm_restrictions_enabled(chat_id) else 'выключены'}</b>\n\n"
             f"Текст тревоги: {preview_html(settings.alarm_text or 'Тревога включена: медиа, реакции и одиночные эмодзи отключены.')}\n"
             f"Текст отбоя: {preview_html(settings.clear_text or 'Отбой: медиа, реакции и одиночные эмодзи снова включены.')}",
@@ -8649,7 +8768,7 @@ async def cb_alarm(callback: CallbackQuery, state: FSMContext) -> None:
             callback,
             f"Группа: <b>{mention_chat(chat)}</b>\n\n"
             f"Режим тревоги: <b>{'включен' if settings.enabled else 'выключен'}</b>\n\n"
-            f"Автотревога Alerts.in.ua ({ALERTS_LOCATION_TITLE}): <b>{'включена' if db.alarm_api_enabled(chat_id) else 'выключена'}</b>\n\n"
+            f"Автотревога {SOURCE_LABELS[db.alarm_api_source(chat_id)]} ({configured_alert_location(chat_id)}): <b>{'включена' if db.alarm_api_enabled(chat_id) else 'выключена'}</b>\n\n"
             f"Ограничения медиа и реакций: <b>{'включены' if enabled else 'выключены'}</b>\n\n"
             f"Текст тревоги: {preview_html(settings.alarm_text or 'Тревога включена: медиа, реакции и одиночные эмодзи отключены.')}\n"
             f"Текст отбоя: {preview_html(settings.clear_text or 'Отбой: медиа, реакции и одиночные эмодзи снова включены.')}",
@@ -10487,22 +10606,6 @@ async def delete_edited_single_emoji_during_alarm(message: Message) -> None:
         await delete_single_emoji_during_alarm(message)
 
 
-@dataclass(frozen=True)
-class AlertsThreat:
-    threat_type: str
-    level: str | None
-    started_at: str | None
-    source_message: str | None
-    location_title: str | None = None
-
-
-@dataclass(frozen=True)
-class AlertsLocationState:
-    status: str
-    alert_level: str | None = None
-    threats: tuple[AlertsThreat, ...] = ()
-
-
 @dataclass
 class AlertsApiCache:
     last_modified: str | None = None
@@ -10656,12 +10759,17 @@ def format_current_alarm_status(state: AlertsLocationState) -> str:
 def build_alarm_alert_text(state: AlertsLocationState) -> str:
     alarm_kind = "частичная воздушная тревога" if state.status == "P" else "воздушная тревога"
     lines = [
-        f"Alerts.in.ua сообщает: объявлена {alarm_kind} — <b>{ALERTS_LOCATION_TITLE}</b>."
+        f"{SOURCE_LABELS[state.source]} сообщает: объявлена {alarm_kind} — "
+        f"<b>{escape(state.location_title)}</b>."
     ]
+    if state.official_area:
+        lines.append(f"Официальная территория сигнала: <b>{escape(state.official_area)}</b>.")
     details = format_alerts_location_details(state)
     if details:
         lines.append(details)
-    lines.append("ℹ️ Детали угроз обновляются автоматически каждые 30 секунд.")
+    lines.append("ℹ️ Данные обновляются автоматически каждые 30 секунд.")
+    if state.source == "neptun":
+        lines.append(NEPTUN_NOTICE.strip())
     return "\n\n".join(lines)
 
 
@@ -10960,7 +11068,7 @@ async def restore_alarm_restrictions(bot: Bot, chat_id: int) -> None:
             logging.warning("Could not restore alarm reactions in chat %s: %s", chat_id, exc)
 
 
-async def deactivate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
+async def deactivate_alarm_from_api(bot: Bot, chat_id: int, source: str = "alerts_in_ua") -> bool:
     settings = db.get_alarm_settings(chat_id)
     had_restrictions = bool(settings.permissions_json or settings.reactions_json is not None)
     await restore_alarm_restrictions(bot, chat_id)
@@ -10969,7 +11077,7 @@ async def deactivate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
     clear_message = await send_alarm_notification(
         bot,
         chat_id,
-        "🟢 <b>Отбой воздушной тревоги.</b>",
+        "🟢 <b>Отбой воздушной тревоги.</b>" + (NEPTUN_NOTICE if source == "neptun" else ""),
     )
     if clear_message is not None:
         db.set_alarm_api_status_message_id(chat_id, "N", clear_message.message_id)
@@ -10983,28 +11091,75 @@ async def deactivate_alarm_from_api(bot: Bot, chat_id: int) -> bool:
     return clear_message is not None and action_message is not None
 
 
+PROVIDER_STATES: dict[tuple[str, str], AlertsLocationState] = {}
+
+
 async def alerts_monitor_loop(bot: Bot) -> None:
-    initial_sync = True
+    providers: dict[str, AlertProvider] = {
+        "alerts_in_ua": AlertsInUaProvider(lambda: fetch_alerts_location_state()),
+        "neptun": NeptunProvider(),
+    }
+    startup_selections = {
+        chat_id: (db.alarm_api_source(chat_id), db.alarm_api_location(chat_id))
+        for chat_id in db.list_alarm_api_chats()
+    }
+    startup_chats = set(startup_selections)
+    selections_seen: dict[int, tuple[str, str]] = {}
     notified_states: dict[int, AlertsLocationState] = {}
     pending_escalations: dict[int, AlertsEscalationCandidate] = {}
     while True:
         try:
             chat_ids = db.list_alarm_api_chats()
-            if chat_ids and ALERTS_API_TOKEN:
-                alert_state = await fetch_alerts_location_state()
-                status = alert_state.status
-                details_signature = alerts_location_state_signature(alert_state)
-                active = status in {"A", "P"}
-                if initial_sync:
-                    baseline = "A" if active else "N"
-                    for chat_id in chat_ids:
-                        db.set_alarm_api_last_status(chat_id, status)
-                        db.set_alarm_api_last_notified_status(chat_id, baseline)
-                        notified_states[chat_id] = alert_state
-                    initial_sync = False
-                    await asyncio.sleep(ALERTS_POLL_INTERVAL_SECONDS)
+            sources = {chat_id: db.alarm_api_source(chat_id) for chat_id in chat_ids}
+            locations = {chat_id: db.alarm_api_location(chat_id) for chat_id in chat_ids}
+            requested = sorted(set(sources.values()))
+            results = await asyncio.gather(
+                *(providers[source].fetch() for source in requested), return_exceptions=True
+            )
+            fresh = {}
+            for source, result in zip(requested, results):
+                if isinstance(result, BaseException):
+                    if isinstance(result, asyncio.CancelledError):
+                        raise result
+                    logging.warning("Alert provider %s failed: %s", source, result)
                     continue
+                fresh[source] = result
+            if chat_ids:
                 for chat_id in chat_ids:
+                    source = sources[chat_id]
+                    location = locations[chat_id]
+                    # A selection changed during the request: discard the old result.
+                    if (
+                        db.alarm_api_source(chat_id) != source
+                        or db.alarm_api_location(chat_id) != location
+                        or not db.alarm_api_enabled(chat_id)
+                    ):
+                        continue
+                    if source not in fresh:
+                        continue
+                    try:
+                        alert_state = providers[source].state_for(fresh[source], location)
+                    except Exception as exc:
+                        logging.warning(
+                            "Alert provider %s rejected location %s: %s", source, location, exc
+                        )
+                        continue
+                    PROVIDER_STATES[(source, location)] = alert_state
+                    status = alert_state.status
+                    details_signature = alerts_location_state_signature(alert_state)
+                    active = status in {"A", "P"}
+                    selection = (source, location)
+                    if selections_seen.get(chat_id, selection) != selection:
+                        notified_states.pop(chat_id, None)
+                        pending_escalations.pop(chat_id, None)
+                    selections_seen[chat_id] = selection
+                    if chat_id in startup_chats and startup_selections[chat_id] == selection:
+                        db.set_alarm_api_last_status(chat_id, status)
+                        db.set_alarm_api_last_notified_status(chat_id, "A" if active else "N")
+                        notified_states[chat_id] = alert_state
+                        startup_chats.remove(chat_id)
+                        continue
+                    startup_chats.discard(chat_id)
                     previous = db.alarm_api_last_status(chat_id)
                     notified = db.alarm_api_last_notified_status(chat_id)
                     previous_state = notified_states.get(chat_id)
@@ -11020,7 +11175,7 @@ async def alerts_monitor_loop(bot: Bot) -> None:
                             db.set_alarm_api_last_notified_status(chat_id, "N")
                             notified_states[chat_id] = alert_state
                             pending_escalations.pop(chat_id, None)
-                        elif await deactivate_alarm_from_api(bot, chat_id):
+                        elif await deactivate_alarm_from_api(bot, chat_id, source):
                             db.set_alarm_api_last_notified_status(chat_id, "N")
                             notified_states[chat_id] = alert_state
                             pending_escalations.pop(chat_id, None)
@@ -11056,22 +11211,29 @@ async def alerts_monitor_loop(bot: Bot) -> None:
                             ):
                                 pending_escalations[chat_id] = confirmed
                     else:
+                        if active and previous_state is None:
+                            if not await edit_alarm_status_message(bot, chat_id, alert_state):
+                                continue
                         notified_states[chat_id] = alert_state
-                enabled_chat_ids = set(chat_ids)
-                notified_states = {
-                    chat_id: state
-                    for chat_id, state in notified_states.items()
-                    if chat_id in enabled_chat_ids
-                }
-                pending_escalations = {
-                    chat_id: candidate
-                    for chat_id, candidate in pending_escalations.items()
-                    if chat_id in enabled_chat_ids
-                }
+            startup_chats.intersection_update(chat_ids)
+            selections_seen = {
+                key: value for key, value in selections_seen.items() if key in chat_ids
+            }
+            enabled_chat_ids = set(chat_ids)
+            notified_states = {
+                chat_id: state
+                for chat_id, state in notified_states.items()
+                if chat_id in enabled_chat_ids
+            }
+            pending_escalations = {
+                chat_id: candidate
+                for chat_id, candidate in pending_escalations.items()
+                if chat_id in enabled_chat_ids
+            }
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logging.warning("Alerts.in.ua monitor error: %s", exc)
+            logging.warning("Alert monitor error: %s", exc)
         await asyncio.sleep(ALERTS_POLL_INTERVAL_SECONDS)
 
 
@@ -11088,9 +11250,25 @@ def alarm_status_text(chat_id: int) -> str:
             f"Тревожные оповещения: {destination}."
         )
 
-    state = ALERTS_API_CACHE.state
+    source = db.alarm_api_source(chat_id)
+    location = db.alarm_api_location(chat_id)
+    state = (
+        ALERTS_API_CACHE.state
+        if source == "alerts_in_ua"
+        else PROVIDER_STATES.get((source, location))
+    )
     if state is not None:
-        return format_current_alarm_status(state)
+        location_text = ""
+        if source == "neptun":
+            location_text = (
+                f"Город: <b>{escape(state.location_title)}</b>\n"
+                f"Официальная территория: <b>{escape(state.official_area or state.location_title)}</b>.\n\n"
+            )
+        return location_text + format_current_alarm_status(state) + (
+            NEPTUN_NOTICE if source == "neptun" else ""
+        )
+    if source == "neptun":
+        return "Статус выбранного источника ещё не получен." + NEPTUN_NOTICE
     status = db.alarm_api_last_status(chat_id)
     if status == "N":
         return "🟢 Тревоги нет."

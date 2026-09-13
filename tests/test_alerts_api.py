@@ -271,6 +271,12 @@ def test_alarm_status_command_uses_latest_cached_api_state(monkeypatch) -> None:
         def get_alarm_settings(self, chat_id):
             return SimpleNamespace(alarm_thread_id=77)
 
+        def alarm_api_source(self, chat_id):
+            return "alerts_in_ua"
+
+        def alarm_api_location(self, chat_id):
+            return "kryvyi-rih"
+
         def alarm_api_enabled(self, chat_id):
             return True
 
