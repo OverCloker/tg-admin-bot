@@ -12448,15 +12448,6 @@ async def quiet_user(message: Message) -> None:
     actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
     if actor_role is None:
         return
-    if (
-        actor_role == "admin"
-        and not is_bot_admin(message.from_user.id)
-        and not is_miniapp_admin_user(message.from_user.id)
-        and not await has_chat_admin_permission(
-            message.bot, message.chat.id, message.from_user.id, "can_restrict_members"
-        )
-    ):
-        return
 
     await remember_sender(message)
     username, minutes, reason = parse_quiet_payload(message.text)

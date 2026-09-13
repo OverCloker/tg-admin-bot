@@ -1,7 +1,10 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
+from app import bot as bot_module
 from app.bot import (
     DICTIONARY_HIT_MUTE_MINUTES,
     DICTIONARY_HIT_PHOTO_PATH,
@@ -233,6 +236,68 @@ def test_quiet_payload_defaults_to_one_hour() -> None:
     assert parse_quiet_payload("затихни - флуд") == (None, 60, "флуд")
     assert parse_quiet_payload("@target_user затихни") == ("target_user", 60, "")
     assert parse_quiet_payload("затихни @target_user") == ("target_user", 60, "")
+
+
+def test_quiet_reply_by_chat_admin_applies_default_one_hour(monkeypatch) -> None:
+    restricted = {}
+    replies = []
+
+    class FakeBot:
+        async def restrict_chat_member(self, **kwargs):
+            restricted.update(kwargs)
+
+    class FakeDb:
+        def get_quiet_settings(self, _chat_id):
+            return SimpleNamespace(reply_text=None, media_type=None, media_file_id=None)
+
+        def add_moderator_action(self, *_args):
+            return None
+
+        def count_moderator_mutes_for_target(self, *_args):
+            return 0
+
+    message = SimpleNamespace(
+        text="Затихни",
+        chat=SimpleNamespace(id=-100, type="supergroup"),
+        from_user=SimpleNamespace(id=1, username="admin", full_name="Admin"),
+        reply_to_message=SimpleNamespace(from_user=SimpleNamespace(id=4, username="target", full_name="Target")),
+        bot=FakeBot(),
+    )
+
+    async def admin_role(*_args):
+        return "admin"
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    async def target(*_args):
+        return 4, "@target", None
+
+    async def not_admin(*_args):
+        return False
+
+    async def reply(_message, text, *_args, **_kwargs):
+        replies.append(text)
+
+    monkeypatch.setattr(bot_module, "db", FakeDb(), raising=False)
+    monkeypatch.setattr(bot_module, "actor_moderation_role", admin_role)
+    monkeypatch.setattr(bot_module, "remember_sender", no_op)
+    monkeypatch.setattr(bot_module, "resolve_command_target", target)
+    monkeypatch.setattr(bot_module, "is_chat_admin", not_admin)
+    monkeypatch.setattr(bot_module, "safe_reply", reply)
+    monkeypatch.setattr(bot_module, "send_quiet_media", no_op)
+    monkeypatch.setattr(bot_module, "notify_staff_moderation", no_op)
+
+    before = datetime.now(timezone.utc)
+    asyncio.run(bot_module.quiet_user(message))
+    after = datetime.now(timezone.utc)
+
+    assert restricted["chat_id"] == -100
+    assert restricted["user_id"] == 4
+    assert before + timedelta(minutes=59, seconds=59) <= restricted["until_date"]
+    assert restricted["until_date"] <= after + timedelta(minutes=60, seconds=1)
+    assert restricted["permissions"].can_send_messages is False
+    assert "1 час" in replies[0]
 
 
 def test_quiet_payload_accepts_minutes_hours_and_days() -> None:
