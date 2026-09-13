@@ -1348,6 +1348,7 @@ class Database:
             self._conn.execute("alter table alarm_settings add column alarm_thread_id integer")
 
     def _migrate_alarm_api_settings(self) -> None:
+        self._conn.execute("create table if not exists alarm_api_extra_messages (chat_id integer not null, message_id integer not null, primary key(chat_id, message_id))")
         columns = {
             row["name"]
             for row in self._conn.execute("pragma table_info(alarm_api_settings)").fetchall()
@@ -3948,7 +3949,16 @@ class Database:
         ).fetchone()
         if not row:
             return []
-        return [int(row[column]) for column in columns if row[column] is not None]
+        result = [int(row[column]) for column in columns if row[column] is not None]
+        if status in {"A", "P"}:
+            result.extend(int(item[0]) for item in self._conn.execute(
+                "select message_id from alarm_api_extra_messages where chat_id = ?", (chat_id,)
+            ))
+        return list(dict.fromkeys(result))
+
+    def add_alarm_api_extra_message(self, chat_id: int, message_id: int) -> None:
+        self._conn.execute("insert or ignore into alarm_api_extra_messages values (?, ?)", (chat_id, message_id))
+        self._conn.commit()
 
     def set_alarm_api_action_message_id(self, chat_id: int, status: str, message_id: int | None) -> None:
         column = "last_alarm_action_message_id" if status in {"A", "P"} else "last_clear_action_message_id"
@@ -3960,6 +3970,7 @@ class Database:
 
     def clear_alarm_api_status_message_ids(self, chat_id: int, status: str) -> None:
         if status in {"A", "P"}:
+            self._conn.execute("delete from alarm_api_extra_messages where chat_id = ?", (chat_id,))
             columns = ("last_alarm_message_id", "last_alarm_action_message_id")
         else:
             columns = ("last_clear_message_id", "last_clear_action_message_id")

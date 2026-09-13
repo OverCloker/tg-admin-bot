@@ -13,8 +13,14 @@ def test_alarm_api_tracks_status_and_action_messages_together(tmp_path) -> None:
         db.set_alarm_api_action_message_id(chat_id, "A", 102)
         db.set_alarm_api_status_message_id(chat_id, "N", 201)
         db.set_alarm_api_action_message_id(chat_id, "N", 202)
+        db.add_alarm_api_extra_message(chat_id, 103)
+        db.add_alarm_api_extra_message(chat_id, 104)
+        db.add_alarm_api_extra_message(chat_id, 104)
+        db.close()
+        db = Database(str(tmp_path / "bot.sqlite3"))
+        db.init()
 
-        assert db.alarm_api_status_message_ids(chat_id, "A") == [101, 102]
+        assert db.alarm_api_status_message_ids(chat_id, "A") == [101, 102, 103, 104]
         assert db.alarm_api_status_message_ids(chat_id, "N") == [201, 202]
 
         db.clear_alarm_api_status_message_ids(chat_id, "A")

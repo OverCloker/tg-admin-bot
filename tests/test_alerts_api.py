@@ -432,3 +432,38 @@ def test_regular_alarm_update_edits_existing_status_message(monkeypatch) -> None
 
 def test_alerts_api_is_polled_every_30_seconds() -> None:
     assert ALERTS_POLL_INTERVAL_SECONDS == 30
+
+
+def test_oblast_missiles_are_not_presented_as_district_threats():
+    state = parse_alerts_location_state({"alerts": [
+        {"location_uid": "46", "alert_type": "air_raid", "alert_level": "yellow",
+         "threats": [{"threat_type": "drones", "level": "yellow"}]},
+        {"location_uid": "9", "location_title": "Дніпропетровська область",
+         "alert_type": "air_raid", "alert_level": "red",
+         "threats": [{"threat_type": "unspecified_missiles", "level": "red"}]},
+    ]})
+    for text in (format_alerts_location_details(state), format_current_alarm_status(state),
+                 format_important_alarm_update(AlertsLocationState("A", "yellow"), state)):
+        assert "ракетная угроза [по данным API: Дніпропетровська область]" in text
+
+
+def test_finished_alert_is_ignored_and_red_does_not_invent_missiles():
+    state = parse_alerts_location_state({"alerts": [
+        {"location_uid": "46", "alert_type": "air_raid", "alert_level": "red",
+         "threats": [{"threat_type": "drones", "level": "yellow"}]},
+        {"location_uid": "9", "alert_type": "air_raid", "finished_at": "2026-09-13T10:00:00Z",
+         "threats": [{"threat_type": "unspecified_missiles", "level": "red"}]},
+    ]})
+    assert [t.threat_type for t in state.threats] == ["drones"]
+    assert "ракетная" not in format_alerts_location_details(state)
+
+
+def test_escalation_message_is_saved_for_clear(monkeypatch):
+    fake_db = SimpleNamespace(add_alarm_api_extra_message=lambda chat, msg: saved.append((chat, msg)))
+    saved = []
+    monkeypatch.setattr(bot_module, "db", fake_db, raising=False)
+    monkeypatch.setattr(bot_module, "edit_alarm_status_message", AsyncMock(return_value=True))
+    monkeypatch.setattr(bot_module, "send_alarm_notification", AsyncMock(return_value=SimpleNamespace(message_id=123)))
+    assert asyncio.run(bot_module.update_alarm_from_api(
+        object(), -100, AlertsLocationState("A", "yellow"), AlertsLocationState("A", "red")))
+    assert saved == [(-100, 123)]

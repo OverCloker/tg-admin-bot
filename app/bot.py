@@ -10492,6 +10492,7 @@ class AlertsThreat:
     level: str | None
     started_at: str | None
     source_message: str | None
+    location_title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -10521,7 +10522,7 @@ def parse_alerts_location_state(payload: object) -> AlertsLocationState:
     normalized_raion = ALERTS_LOCATION_TITLE.casefold()
 
     for item in payload["alerts"]:
-        if not isinstance(item, dict) or item.get("alert_type") != "air_raid":
+        if not isinstance(item, dict) or item.get("alert_type") != "air_raid" or item.get("finished_at"):
             continue
 
         location_uid = str(item.get("location_uid") or "").strip()
@@ -10551,7 +10552,10 @@ def parse_alerts_location_state(payload: object) -> AlertsLocationState:
                 levels.add(level)
             started_at = str(threat.get("started_at") or "").strip() or None
             source_message = str(threat.get("source_message") or "").strip() or None
-            threats.add(AlertsThreat(threat_type, level, started_at, source_message))
+            scope = None
+            if location_uid != ALERTS_LOCATION_UID:
+                scope = str(item.get("location_title") or ("Дніпропетровська область" if location_uid == ALERTS_LOCATION_OBLAST_UID else "часть района"))
+            threats.add(AlertsThreat(threat_type, level, started_at, source_message, scope))
 
     status = "A" if direct_alert else "P" if partial_alert else "N"
     alert_level = "red" if "red" in levels else "yellow" if "yellow" in levels else None
@@ -10563,6 +10567,7 @@ def parse_alerts_location_state(payload: object) -> AlertsLocationState:
                 threat.level or "",
                 threat.started_at or "",
                 threat.source_message or "",
+                threat.location_title or "",
             ),
         )
     )
@@ -10579,6 +10584,7 @@ def alerts_location_state_signature(state: AlertsLocationState) -> str:
                     "type": threat.threat_type,
                     "level": threat.level,
                     "source_message": threat.source_message,
+                    "location_title": threat.location_title,
                 }
                 for threat in state.threats
             ],
@@ -10606,7 +10612,8 @@ def format_alerts_location_details(state: AlertsLocationState) -> str:
             icon = "🔴" if threat.level == "red" else "🟡" if threat.level == "yellow" else "•"
             source = (threat.source_message or "").strip()
             suffix = f" — {escape(source[:240])}" if source else ""
-            lines.append(f"{icon} {escape(label)}{suffix}")
+            scope = f" [по данным API: {escape(threat.location_title)}]" if threat.location_title else ""
+            lines.append(f"{icon} {escape(label)}{scope}{suffix}")
     return "\n".join(lines)
 
 
@@ -10630,7 +10637,8 @@ def format_current_alarm_status(state: AlertsLocationState) -> str:
         label = ALERTS_THREAT_LABELS.get(threat.threat_type, threat.threat_type.replace("_", " "))
         source = (threat.source_message or "").strip()
         suffix = f" — {escape(source[:240])}" if source else ""
-        lines.append(f"• {escape(label)}{suffix}")
+        scope = f" [по данным API: {escape(threat.location_title)}]" if threat.location_title else ""
+        lines.append(f"• {escape(label)}{scope}{suffix}")
     return "\n".join(lines)
 
 
@@ -10703,7 +10711,11 @@ def format_important_alarm_update(
         }
     )
     if new_important:
-        labels = ", ".join(escape(ALERTS_THREAT_LABELS[item]) for item in new_important)
+        labels = ", ".join(
+            escape(ALERTS_THREAT_LABELS[threat.threat_type])
+            + (f" [по данным API: {escape(threat.location_title)}]" if threat.location_title else "")
+            for threat in current.threats if threat.threat_type in new_important
+        )
         lines.append(f"Новые серьёзные угрозы: <b>{labels}</b>.")
     return "\n\n".join(lines)
 
@@ -10847,6 +10859,7 @@ async def edit_alarm_status_message(
     if replacement is None:
         return False
     if message_id is not None:
+        db.add_alarm_api_extra_message(chat_id, message_id)
         with suppress(TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
             await bot.unpin_chat_message(chat_id=chat_id, message_id=message_id)
     db.set_alarm_api_status_message_id(chat_id, "A", replacement.message_id)
@@ -10869,6 +10882,8 @@ async def update_alarm_from_api(
         chat_id,
         format_important_alarm_update(previous, current),
     )
+    if message is not None:
+        db.add_alarm_api_extra_message(chat_id, message.message_id)
     return message is not None
 
 
