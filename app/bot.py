@@ -10911,7 +10911,7 @@ async def apply_alarm_restrictions(bot: Bot, chat_id: int) -> None:
 async def send_alarm_notification(bot: Bot, chat_id: int, text: str) -> Message | None:
     thread_id = db.get_alarm_settings(chat_id).alarm_thread_id
     try:
-        kwargs = {"chat_id": chat_id, "text": text}
+        kwargs = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
         if thread_id is not None:
             kwargs["message_thread_id"] = thread_id
         return await bot.send_message(**kwargs)
@@ -11284,18 +11284,26 @@ def alarm_status_text(chat_id: int) -> str:
         if source == "alerts_in_ua"
         else PROVIDER_STATES.get((source, location))
     )
-    if state is not None:
-        location_text = ""
-        if source == "neptun":
-            location_text = (
-                f"Город: <b>{escape(state.location_title)}</b>\n"
-                f"Зона отслеживания: <b>{escape(state.official_area or state.location_title)}</b>.\n\n"
-            )
-        return location_text + format_current_alarm_status(state) + (
-            NEPTUN_NOTICE if source == "neptun" else ""
-        )
     if source == "neptun":
-        return "Статус выбранного источника ещё не получен." + NEPTUN_NOTICE
+        configured = NEPTUN_LOCATIONS.get(location, NEPTUN_LOCATIONS[DEFAULT_NEPTUN_LOCATION])
+        city = state.location_title if state is not None else configured.city
+        lines = [f"Город: <b>{escape(city)}</b>"]
+        if state is None:
+            lines.append("⚪ Статус ещё не получен.")
+        elif state.status == "N":
+            lines.append("🟢 Активных угроз нет.")
+        else:
+            labels = list(dict.fromkeys(
+                alerts_threat_label(threat.threat_type, "neptun")
+                for threat in state.threats
+            ))
+            icon = "🔴" if state.alert_level == "red" else "🟡"
+            threat_text = ", ".join(labels) if labels else "активная угроза"
+            lines.append(f"{icon} Угроза: <b>{escape(threat_text)}</b>.")
+        lines.append('Источник: <a href="https://neptun.in.ua/">NEPTUN</a>.')
+        return "\n".join(lines)
+    if state is not None:
+        return format_current_alarm_status(state)
     status = db.alarm_api_last_status(chat_id)
     if status == "N":
         return "🟢 Тревоги нет."
@@ -11342,7 +11350,11 @@ async def handle_alarm_mode(message: Message) -> bool:
         return True
 
     if ALARM_STATUS_COMMAND_RE.fullmatch(message.text):
-        await safe_reply(message, alarm_status_text(message.chat.id))
+        await safe_reply(
+            message,
+            alarm_status_text(message.chat.id),
+            disable_web_page_preview=True,
+        )
         return True
 
     if ALARM_STATUS_QUERY_RE.fullmatch(message.text) or ALARM_CLEAR_QUERY_RE.fullmatch(message.text):

@@ -298,3 +298,28 @@ def test_attribution_and_status_do_not_use_other_source(database, monkeypatch):
     assert "https://neptun.in.ua/" in bot.build_alarm_alert_text(AlertsLocationState("A", source="neptun"))
     assert bot.alerts_threat_label("unspecified_missiles", "neptun") == "ракетная угроза"
     assert "Alerts.in.ua" in bot.alerts_threat_label("unspecified_missiles", "alerts_in_ua")
+
+
+def test_neptun_chat_status_is_compact(database, monkeypatch):
+    database.set_alarm_api_source(-1, "neptun", 1)
+    state = AlertsLocationState(
+        "A",
+        alert_level="yellow",
+        threats=(
+            bot.AlertsThreat("drones", "yellow", None, "лишнее описание"),
+            bot.AlertsThreat("drones", "yellow", None, "дубль"),
+        ),
+        source="neptun",
+        location_title="Кривий Ріг",
+        official_area="Криворізький район, Дніпропетровська область",
+    )
+    monkeypatch.setattr(bot, "db", database, raising=False)
+    monkeypatch.setattr(bot, "PROVIDER_STATES", {("neptun", DEFAULT_NEPTUN_LOCATION): state})
+    text = bot.alarm_status_text(-1)
+    assert "Город: <b>Кривий Ріг</b>" in text
+    assert "Угроза: <b>ударные БПЛА</b>" in text
+    assert text.count("ударные БПЛА") == 1
+    assert "лишнее описание" not in text
+    assert "Зона отслеживания" not in text
+    assert "Информационный агрегатор" not in text
+    assert '<a href="https://neptun.in.ua/">NEPTUN</a>' in text
