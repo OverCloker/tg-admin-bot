@@ -1,6 +1,6 @@
 """Relationship progression; XP never grants currency or mining advantages."""
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 LEVELS = (
     (0, "Симпатия"), (100, "Искра"), (300, "Сближение"),
@@ -10,8 +10,22 @@ LEVELS = (
 GIFT_XP = {"couple_flower": 10, "couple_crystal": 30, "couple_date": 25}
 
 
+def _relationship_timezone():
+    for name in ("Europe/Kyiv", "Europe/Kiev"):
+        try:
+            return ZoneInfo(name)
+        except ZoneInfoNotFoundError:
+            continue
+    # Last-resort fallback for an incomplete local Python installation. The
+    # declared tzdata dependency remains the source of DST-aware production time.
+    return timezone(timedelta(hours=3))
+
+
+RELATIONSHIP_TIMEZONE = _relationship_timezone()
+
+
 def relationship_day() -> str:
-    return datetime.now(ZoneInfo("Europe/Kiev")).date().isoformat()
+    return datetime.now(RELATIONSHIP_TIMEZONE).date().isoformat()
 
 
 def relationship_level(xp: int) -> dict:

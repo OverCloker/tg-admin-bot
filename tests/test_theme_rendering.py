@@ -38,9 +38,23 @@ def test_shop_and_owned_backgrounds_follow_theme(tmp_path):
     </script>'''
     page = tmp_path / 'themes.html'
     page.write_text(f'<html><head><meta charset="utf-8"><style>{css}</style></head><body>{fixture}</body></html>', encoding='utf-8')
-    result = subprocess.run([chrome, '--headless', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--no-proxy-server', '--user-data-dir=' + str(tmp_path / 'browser'), '--dump-dom', page.as_uri()], capture_output=True, timeout=45)
+    result = subprocess.run([
+        chrome,
+        '--headless=new',
+        '--in-process-gpu',
+        '--disable-gpu',
+        '--disable-features=Vulkan,SkiaGraphite,UseDawn',
+        '--no-sandbox',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--no-proxy-server',
+        '--user-data-dir=' + str(tmp_path / 'browser'),
+        '--dump-dom',
+        page.as_uri(),
+    ], capture_output=True, timeout=45)
     output = result.stdout.decode('utf-8')
     match = re.search(r'<pre id="result">(.*?)</pre>', output, re.S)
+    assert result.returncode == 0, result.stderr.decode('utf-8', errors='replace')[-1000:]
     assert match, result.stderr.decode('utf-8', errors='replace')[-1000:]
     themes = json.loads(match.group(1))
     classic = themes['classic']

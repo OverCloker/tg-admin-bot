@@ -21,6 +21,13 @@ pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
+Для запуска полного набора тестов, включая локальный Media Publisher:
+
+```powershell
+pip install -r requirements-test.txt
+python -m pytest -q
+```
+
 Откройте `.env` и вставьте токен от BotFather.
 
 Чтобы назначить администратора бота, узнайте свой Telegram id командой:
