@@ -297,6 +297,8 @@ class Quote:
     id: int
     chat_id: int
     text: str
+    media_type: str | None
+    media_file_id: str | None
     author_name: str | None
     added_by: int | None
     created_at: str
@@ -918,6 +920,8 @@ class Database:
                 id integer primary key autoincrement,
                 chat_id integer not null,
                 text text not null,
+                media_type text,
+                media_file_id text,
                 author_name text,
                 added_by integer,
                 created_at text not null,
@@ -1293,6 +1297,7 @@ class Database:
             """
         )
         self._migrate_reply_media()
+        self._migrate_quote_media()
         self._migrate_alarm_settings()
         self._migrate_alarm_api_settings()
         self._migrate_advertisements()
@@ -1317,6 +1322,16 @@ class Database:
                 self._conn.execute(f"alter table {table} add column media_type text")
             if "media_file_id" not in columns:
                 self._conn.execute(f"alter table {table} add column media_file_id text")
+
+    def _migrate_quote_media(self) -> None:
+        columns = {
+            row["name"]
+            for row in self._conn.execute("pragma table_info(quotes)").fetchall()
+        }
+        if "media_type" not in columns:
+            self._conn.execute("alter table quotes add column media_type text")
+        if "media_file_id" not in columns:
+            self._conn.execute("alter table quotes add column media_file_id text")
 
     def _migrate_alarm_settings(self) -> None:
         columns = {
@@ -4364,20 +4379,28 @@ class Database:
         )
         self._conn.commit()
 
-    def add_quote(self, chat_id: int, text: str, author_name: str | None, added_by: int | None) -> None:
+    def add_quote(
+        self,
+        chat_id: int,
+        text: str,
+        author_name: str | None,
+        added_by: int | None,
+        media_type: str | None = None,
+        media_file_id: str | None = None,
+    ) -> None:
         self._conn.execute(
             """
-            insert into quotes (chat_id, text, author_name, added_by, created_at)
-            values (?, ?, ?, ?, ?)
+            insert into quotes (chat_id, text, media_type, media_file_id, author_name, added_by, created_at)
+            values (?, ?, ?, ?, ?, ?, ?)
             """,
-            (chat_id, text, author_name, added_by, utc_now()),
+            (chat_id, text, media_type, media_file_id, author_name, added_by, utc_now()),
         )
         self._conn.commit()
 
     def random_quote(self, chat_id: int) -> Quote | None:
         row = self._conn.execute(
             """
-            select id, chat_id, text, author_name, added_by, created_at
+            select id, chat_id, text, media_type, media_file_id, author_name, added_by, created_at
             from quotes
             where chat_id = ?
             order by random()
@@ -4390,7 +4413,7 @@ class Database:
     def list_quotes(self, chat_id: int) -> list[Quote]:
         rows = self._conn.execute(
             """
-            select id, chat_id, text, author_name, added_by, created_at
+            select id, chat_id, text, media_type, media_file_id, author_name, added_by, created_at
             from quotes
             where chat_id = ?
             order by id

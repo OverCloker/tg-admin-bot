@@ -1010,6 +1010,18 @@ def trigger_item_matches(normalized_text: str, item) -> bool:
     return any(has_normalized_trigger(normalized_text, normalize_trigger(candidate)) for candidate in candidates)
 
 
+def is_trigger_chat_message(message: Message) -> bool:
+    """Allow triggers only for participant messages, not posts sent by a chat."""
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        return False
+    if bool(getattr(message, "is_automatic_forward", False)):
+        return False
+    sender_chat = getattr(message, "sender_chat", None)
+    if sender_chat is not None:
+        return False
+    return True
+
+
 def auto_trigger_message_key(message: Message) -> tuple[int, int] | None:
     message_id = getattr(message, "message_id", None)
     chat = getattr(message, "chat", None)
@@ -1041,6 +1053,8 @@ def mark_auto_trigger_sent(message: Message) -> None:
 
 
 def matching_trigger_answer(message: Message):
+    if not is_trigger_chat_message(message):
+        return None
     text = message.text or message.caption
     if not text:
         return None
@@ -1054,7 +1068,7 @@ def matching_trigger_answer(message: Message):
 
 
 async def send_matching_trigger_after_command(message: Message) -> bool:
-    if message.chat.type not in SUPPORTED_CHAT_TYPES or auto_trigger_was_sent(message):
+    if not is_trigger_chat_message(message) or auto_trigger_was_sent(message):
         return False
     item = matching_trigger_answer(message)
     if not item:
@@ -4107,6 +4121,82 @@ def reply_media_from_message(message: Message) -> tuple[str, str] | None:
     return None
 
 
+def quote_media_from_message(message: Message) -> tuple[str, str] | None:
+    photo = getattr(message, "photo", None)
+    animation = getattr(message, "animation", None)
+    voice = getattr(message, "voice", None)
+    audio = getattr(message, "audio", None)
+    video = getattr(message, "video", None)
+    if photo:
+        return "photo", photo[-1].file_id
+    if animation:
+        return "animation", animation.file_id
+    if voice:
+        return "voice", voice.file_id
+    if audio:
+        return "audio", audio.file_id
+    if video:
+        return "video", video.file_id
+    return None
+
+
+def quote_media_label(media_type: str | None) -> str:
+    return {
+        "photo": "фото",
+        "animation": "GIF",
+        "voice": "голосовое",
+        "audio": "музыка",
+        "video": "видео",
+    }.get(media_type or "", "медиа")
+
+
+def quote_message_text(quote, number_label: str) -> str:
+    author = f"\n\n— {escape(quote.author_name)}" if quote.author_name else ""
+    content = quote.text or f"<i>{escape(quote_media_label(quote.media_type).capitalize())}</i>"
+    return f"<b>Цитата {escape(number_label)}</b>\n{content}{author}"
+
+
+def quote_list_preview(quote, limit: int = 180) -> str:
+    media = f"[{escape(quote_media_label(quote.media_type))}] " if quote.media_type else ""
+    text = preview_html(quote.text, limit=limit) if quote.text else "без подписи"
+    return media + text
+
+
+async def send_quote(message: Message, quote, number_label: str) -> None:
+    body = quote_message_text(quote, number_label)
+    media_type = quote.media_type
+    file_id = quote.media_file_id
+    if not media_type or not file_id:
+        await safe_reply(message, body)
+        return
+
+    caption = body if len(strip_html(body)) <= 950 else None
+    kwargs = {
+        "chat_id": message.chat.id,
+        "reply_to_message_id": message.message_id,
+        "caption": caption,
+    }
+    try:
+        if media_type == "photo":
+            await message.bot.send_photo(**kwargs, photo=file_id)
+        elif media_type == "animation":
+            await message.bot.send_animation(**kwargs, animation=file_id)
+        elif media_type == "voice":
+            await message.bot.send_voice(**kwargs, voice=file_id)
+        elif media_type == "audio":
+            await message.bot.send_audio(**kwargs, audio=file_id)
+        elif media_type == "video":
+            await message.bot.send_video(**kwargs, video=file_id)
+        else:
+            await safe_reply(message, body)
+            return
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+        await safe_reply(message, body + "\n\n<i>Медиа этой цитаты больше недоступно.</i>")
+        return
+    if caption is None:
+        await safe_reply(message, body)
+
+
 async def send_quiet_media(message: Message, media_type: str | None, file_id: str | None) -> None:
     if not media_type or not file_id:
         return
@@ -5146,7 +5236,7 @@ def quote_page_text(chat_id: int, page: int) -> tuple[str, int, int]:
         lines.append(f"Страница {page + 1}/{max_page + 1}. Всего: {total}.")
         for offset, quote in enumerate(page_items, start=start + 1):
             author = f" — {escape(quote.author_name)}" if quote.author_name else ""
-            lines.append(f"{offset}. {preview_html(quote.text, limit=100)}{author}")
+            lines.append(f"{offset}. {quote_list_preview(quote, limit=100)}{author}")
 
     return "\n".join(lines), page, total
 
@@ -12745,14 +12835,25 @@ async def add_quote(message: Message) -> None:
 
     await remember_sender(message)
     source = message.reply_to_message
-    quote_text = source.html_text or getattr(source, "html_caption", None) or source.text or source.caption
-    if not quote_text:
-        await safe_reply(message, "В цитату можно добавить только текстовое сообщение.")
+    quote_text = source.html_text or getattr(source, "html_caption", None) or source.text or source.caption or ""
+    media = quote_media_from_message(source)
+    if not quote_text and not media:
+        await safe_reply(message, "В цитаты можно добавить текст, фото, видео, GIF, голосовое или музыку.")
         return
 
-    author = source.from_user.full_name if source.from_user else None
-    db.add_quote(message.chat.id, quote_text, author, message.from_user.id if message.from_user else None)
-    await safe_reply(message, "Цитата сохранена.")
+    sender_chat = getattr(source, "sender_chat", None)
+    author = source.from_user.full_name if source.from_user else getattr(sender_chat, "title", None)
+    media_type, media_file_id = media if media else (None, None)
+    db.add_quote(
+        message.chat.id,
+        quote_text,
+        author,
+        message.from_user.id if message.from_user else None,
+        media_type,
+        media_file_id,
+    )
+    media_text = f" с {quote_media_label(media_type)}" if media_type else ""
+    await safe_reply(message, f"Цитата{media_text} сохранена.")
 
 
 @router.message(F.text.casefold() == "цитата")
@@ -12766,8 +12867,7 @@ async def random_quote(message: Message) -> None:
         await safe_reply(message, "Цитат пока нет. Ответь на сообщение фразой: в цитаты")
         return
 
-    author = f"\n\n— {escape(quote.author_name)}" if quote.author_name else ""
-    await safe_reply(message, f"<b>Цитата #{quote.id}</b>\n{quote.text}{author}")
+    await send_quote(message, quote, f"#{quote.id}")
 
 
 @router.message(F.text.casefold() == "все цитаты")
@@ -12784,7 +12884,7 @@ async def all_quotes(message: Message) -> None:
     lines = [f"<b>Все цитаты:</b> {len(quotes)}"]
     for index, quote in enumerate(quotes, start=1):
         author = f" — {escape(quote.author_name)}" if quote.author_name else ""
-        lines.append(f"{index}. {preview_html(quote.text, limit=180)}{author}")
+        lines.append(f"{index}. {quote_list_preview(quote)}{author}")
 
     await safe_reply_chunks(message, lines, disable_web_page_preview=True)
 
@@ -12806,8 +12906,7 @@ async def quote_by_number(message: Message) -> None:
         return
 
     quote = quotes[index - 1]
-    author = f"\n\n— {escape(quote.author_name)}" if quote.author_name else ""
-    await safe_reply(message, f"<b>Цитата №{index}</b>\n{quote.text}{author}")
+    await send_quote(message, quote, f"№{index}")
 
 
 @router.message(F.text.regexp(re.compile(r"^удалить\s+цитату\s+\d+$", re.IGNORECASE)))
@@ -13017,7 +13116,7 @@ async def handle_auto_reply(message: Message) -> None:
 
     answers = []
     normalized_text = normalize_trigger(text)
-    if not auto_trigger_was_sent(message):
+    if is_trigger_chat_message(message) and not auto_trigger_was_sent(message):
         trigger_answers = [
             item
             for item in cached_triggers(message.chat.id)
