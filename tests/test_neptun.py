@@ -26,15 +26,29 @@ def database(tmp_path):
     db.close()
 
 
-def test_neptun_district_oblast_and_clear():
-    district = {"key": "криворізький", "name": "Криворізький район", "oblast": "Дніпропетровська область"}
-    assert parse_neptun_alerts({"raions": [district], "oblasts": []}).status == "A"
-    district["oblast"] = "Інша область"
-    assert parse_neptun_alerts({"raions": [district], "oblasts": []}).status == "N"
-    assert parse_neptun_alerts({"raions": [], "oblasts": [
-        {"key": "дніпропетровська", "name": "Дніпропетровська область"}
-    ]}).status == "A"
-    state = parse_neptun_alerts({"raions": [], "oblasts": [], "threats": [{"type": "missile"}]})
+def threat(**overrides):
+    value = {
+        "id": "one",
+        "type": "uav",
+        "status": "active",
+        "region": "Дніпропетровська область",
+        "district": "Криворізький район",
+        "locality": "Кривий Ріг",
+        "title": "БПЛА",
+        "explanationShort": "БПЛА біля Кривого Рогу",
+        "updatedAt": "2026-09-13T10:00:00Z",
+    }
+    value.update(overrides)
+    return value
+
+
+def test_neptun_threat_scope_details_and_clear():
+    state = parse_neptun_alerts({"threats": [threat()]})
+    assert (state.status, state.alert_level) == ("A", "yellow")
+    assert state.threats[0].threat_type == "drones"
+    assert "БПЛА" in (state.threats[0].source_message or "")
+    assert parse_neptun_alerts({"threats": [threat(region="Інша область", district="Інший район", locality="Інше місто", explanationShort="")]}).status == "N"
+    state = parse_neptun_alerts({"threats": []})
     assert state.status == "N"
     assert state.source == "neptun"
     assert state.location_title == "Кривий Ріг"
@@ -42,25 +56,24 @@ def test_neptun_district_oblast_and_clear():
 
 
 def test_neptun_city_mapping_and_kyiv_special_area():
-    dnipro = {"key": "дніпровський", "name": "Дніпровський район", "oblast": "Дніпропетровська область", "level": "yellow"}
-    state = parse_neptun_alerts({"raions": [dnipro], "oblasts": []}, "dnipro")
+    state = parse_neptun_alerts({"threats": [threat(locality="Дніпро", district="Дніпровський район", explanationShort="БПЛА біля Дніпра")]}, "dnipro")
     assert (state.status, state.alert_level, state.location_title) == ("A", "yellow", "Дніпро")
     kyiv = parse_neptun_alerts(
-        {"raions": [], "oblasts": [{"key": "м. київ", "name": "м. Київ", "level": "red"}]},
+        {"threats": [threat(type="missile", region="м. Київ", district="", locality="Київ", explanationShort="Ракета курсом на Київ")]},
         "kyiv-city",
     )
     assert (kyiv.status, kyiv.alert_level, kyiv.official_area) == ("A", "red", "м. Київ")
+    kyiv_neighborhood = parse_neptun_alerts(
+        {"threats": [threat(region="Київ", district="", locality="Виноградар", explanationShort="БПЛА — Виноградар")]},
+        "kyiv-city",
+    )
+    assert kyiv_neighborhood.status == "A"
 
 
 def test_neptun_accepts_geojson_apostrophe_variant():
     state = parse_neptun_alerts(
         {
-            "raions": [{
-                "key": "кам'янський",
-                "name": "Кам'янський район",
-                "oblast": "Дніпропетровська область",
-            }],
-            "oblasts": [],
+            "threats": [threat(locality="Кам'янське", district="Кам'янський район", explanationShort="")],
         },
         "kamianske",
     )
@@ -68,21 +81,26 @@ def test_neptun_accepts_geojson_apostrophe_variant():
 
 
 def neptun_snapshot(status):
-    districts = []
-    if status == "A":
-        districts.append({
-            "key": "криворізький",
-            "name": "Криворізький район",
-            "oblast": "Дніпропетровська область",
-        })
-    return {"raions": districts, "oblasts": []}
+    return {"threats": [threat()] if status == "A" else []}
 
 
-@pytest.mark.parametrize("payload", [None, {}, {"raions": [], "oblasts": None},
-    {"raions": [None], "oblasts": []}, {"raions": [{"key": "x", "name": "x"}], "oblasts": []}])
+@pytest.mark.parametrize("payload", [None, {}, {"threats": None}, {"threats": [None]},
+    {"threats": [{"type": "uav"}]}])
 def test_invalid_snapshot_is_never_clear(payload):
     with pytest.raises(ValueError):
         parse_neptun_alerts(payload)
+
+
+def test_neptun_ignores_advisory_and_resolved_but_accepts_area_only():
+    assert parse_neptun_alerts({"threats": [threat(advisory=True)]}).status == "N"
+    assert parse_neptun_alerts({"threats": [threat(status="resolved")]}).status == "N"
+    state = parse_neptun_alerts({"threats": [threat(
+        type="ballistic", locality="", district="", explanationShort="",
+        areaOnly=True,
+    )]})
+    assert (state.status, state.alert_level, state.threats[0].threat_type) == (
+        "A", "red", "ballistic_missiles"
+    )
 
 
 def test_migration_from_existing_schema(tmp_path):
@@ -152,6 +170,8 @@ def test_monitor_routes_groups_and_survives_provider_failure(database, monkeypat
     clear = AsyncMock(return_value=True)
     monkeypatch.setattr(bot, "activate_alarm_from_api", activate)
     monkeypatch.setattr(bot, "deactivate_alarm_from_api", clear)
+    monkeypatch.setattr(bot, "apply_alarm_restrictions", AsyncMock())
+    monkeypatch.setattr(bot, "restore_alarm_restrictions", AsyncMock())
     def check(cycle):
         if cycle == 2:
             assert database.alarm_api_last_status(-1) == "A"
@@ -164,6 +184,35 @@ def test_monitor_routes_groups_and_survives_provider_failure(database, monkeypat
     assert neptun.await_count == legacy.await_count == 3
 
 
+def test_monitor_notifies_active_threat_after_restart(database, monkeypatch):
+    database.set_alarm_api_source(-1, "neptun", 1)
+    database.set_alarm_api_enabled(-2, False, 1)
+    monkeypatch.setattr(bot, "db", database, raising=False)
+    monkeypatch.setattr(NeptunProvider, "fetch", AsyncMock(return_value=neptun_snapshot("A")))
+    activate = AsyncMock(return_value=True)
+    monkeypatch.setattr(bot, "activate_alarm_from_api", activate)
+    run_cycles(monkeypatch, 1)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(bot.alerts_monitor_loop(object()))
+    assert activate.await_args.args[1] == -1
+    assert database.alarm_api_last_notified_status(-1) == "A"
+
+
+def test_monitor_finishes_requested_disable(database, monkeypatch):
+    database.set_alarm_api_source(-1, "neptun", 1)
+    database.set_alarm_api_enabled(-2, False, 1)
+    database.set_alarm_api_last_notified_status(-1, "A")
+    database.request_alarm_api_disabled(-1, 1)
+    monkeypatch.setattr(bot, "db", database, raising=False)
+    clear = AsyncMock(return_value=True)
+    monkeypatch.setattr(bot, "deactivate_alarm_from_api", clear)
+    run_cycles(monkeypatch, 1)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(bot.alerts_monitor_loop(object()))
+    assert clear.await_args.args[1:] == (-1, "neptun")
+    assert database.alarm_api_enabled(-1) is False
+
+
 @pytest.mark.parametrize("target_status", ["A", "N"])
 def test_switch_reconciles_existing_alarm(database, monkeypatch, target_status):
     monkeypatch.setattr(bot, "db", database, raising=False)
@@ -171,8 +220,12 @@ def test_switch_reconciles_existing_alarm(database, monkeypatch, target_status):
     monkeypatch.setattr(NeptunProvider, "fetch", AsyncMock(return_value=neptun_snapshot(target_status)))
     edit = AsyncMock(return_value=True)
     clear = AsyncMock(return_value=True)
+    activate = AsyncMock(return_value=True)
     monkeypatch.setattr(bot, "edit_alarm_status_message", edit)
     monkeypatch.setattr(bot, "deactivate_alarm_from_api", clear)
+    monkeypatch.setattr(bot, "activate_alarm_from_api", activate)
+    monkeypatch.setattr(bot, "apply_alarm_restrictions", AsyncMock())
+    monkeypatch.setattr(bot, "restore_alarm_restrictions", AsyncMock())
     run_cycles(monkeypatch, 2, lambda cycle: database.set_alarm_api_source(-1, "neptun", 1) if cycle == 1 else None)
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(bot.alerts_monitor_loop(object()))
@@ -243,3 +296,5 @@ def test_attribution_and_status_do_not_use_other_source(database, monkeypatch):
     monkeypatch.setattr(bot, "ALERTS_API_CACHE", bot.AlertsApiCache(state=AlertsLocationState("N")))
     assert "ещё не получен" in bot.alarm_status_text(-1)
     assert "https://neptun.in.ua/" in bot.build_alarm_alert_text(AlertsLocationState("A", source="neptun"))
+    assert bot.alerts_threat_label("unspecified_missiles", "neptun") == "ракетная угроза"
+    assert "Alerts.in.ua" in bot.alerts_threat_label("unspecified_missiles", "alerts_in_ua")

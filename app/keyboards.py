@@ -837,18 +837,9 @@ def alarm_menu(
     api_enabled: bool = False,
     restrictions_enabled: bool = True,
 ) -> InlineKeyboardMarkup:
-    toggle_text = "Выключить режим" if enabled else "Включить режим"
-    api_text = "Выключить автотревогу" if api_enabled else "Включить автотревогу"
-    restrictions_text = "Выключить ограничения" if restrictions_enabled else "Включить ограничения"
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=toggle_text, callback_data=f"alarm:toggle:{chat_id}")],
-            [InlineKeyboardButton(text=api_text, callback_data=f"alarm:api:{chat_id}")],
-            [InlineKeyboardButton(text="Источник тревог", callback_data=f"alarm:source:{chat_id}")],
-            [InlineKeyboardButton(text="Город NEPTUN", callback_data=f"alarm:location:{chat_id}")],
-            [InlineKeyboardButton(text=restrictions_text, callback_data=f"alarm:restrictions:{chat_id}")],
-            [InlineKeyboardButton(text="Текст тревоги", callback_data=f"alarm:text_on:{chat_id}")],
-            [InlineKeyboardButton(text="Текст отбоя", callback_data=f"alarm:text_off:{chat_id}")],
+            [miniapp_private_button("Открыть управление тревогой", view="moderation")],
             [InlineKeyboardButton(text="Назад к настройкам", callback_data=f"chat:{chat_id}")],
         ]
     )

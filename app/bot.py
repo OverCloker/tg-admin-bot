@@ -825,7 +825,7 @@ def configured_alert_location(chat_id: int) -> str:
     location = NEPTUN_LOCATIONS.get(db.alarm_api_location(chat_id))
     if location is None:
         location = NEPTUN_LOCATIONS[DEFAULT_NEPTUN_LOCATION]
-    return f"{location.city} (официально: {location.official_area})"
+    return f"{location.city} (зона: {location.official_area})"
 
 
 def neptun_location_menu(chat_id: int, selected: str, page: int = 0) -> InlineKeyboardMarkup:
@@ -8720,9 +8720,9 @@ async def cb_alarm(callback: CallbackQuery, state: FSMContext) -> None:
             callback,
             f"Группа: <b>{mention_chat(chat)}</b>\n\n"
             f"Город NEPTUN: <b>{location.city}</b>\n"
-            f"Официальный статус: <b>{official_area}</b>.\n\n"
-            "NEPTUN публикует официальные тревоги по районам и областям, поэтому "
-            "город сопоставлен с его административным районом.",
+            f"Зона отслеживания: <b>{official_area}</b>.\n\n"
+            "NEPTUN публикует активные угрозы с территорией, поэтому город "
+            "сопоставлен с населённым пунктом, районом и областью.",
             reply_markup=neptun_location_menu(chat_id, selected, page),
         )
     elif action == "api":
@@ -10706,8 +10706,8 @@ def alerts_location_state_signature(state: AlertsLocationState) -> str:
     )
 
 
-def alerts_threat_label(threat_type: str) -> str:
-    if threat_type == "unspecified_missiles":
+def alerts_threat_label(threat_type: str, source: str = "alerts_in_ua") -> str:
+    if threat_type == "unspecified_missiles" and source == "alerts_in_ua":
         return "Alerts.in.ua передаёт: возможная ракетная угроза"
     return ALERTS_THREAT_LABELS.get(threat_type, threat_type.replace("_", " "))
 
@@ -10722,7 +10722,7 @@ def format_alerts_location_details(state: AlertsLocationState) -> str:
     if state.threats:
         lines.append("Конкретные угрозы:")
         for threat in state.threats[:8]:
-            label = alerts_threat_label(threat.threat_type)
+            label = alerts_threat_label(threat.threat_type, state.source)
             icon = "🔴" if threat.level == "red" else "🟡" if threat.level == "yellow" else "•"
             source = (threat.source_message or "").strip()
             suffix = f" — {escape(source[:240])}" if source else ""
@@ -10748,7 +10748,7 @@ def format_current_alarm_status(state: AlertsLocationState) -> str:
 
     lines.append("Угрозы по данным API:")
     for threat in state.threats[:8]:
-        label = alerts_threat_label(threat.threat_type)
+        label = alerts_threat_label(threat.threat_type, state.source)
         source = (threat.source_message or "").strip()
         suffix = f" — {escape(source[:240])}" if source else ""
         scope = f" [по данным API: {escape(threat.location_title)}]" if threat.location_title else ""
@@ -10757,6 +10757,16 @@ def format_current_alarm_status(state: AlertsLocationState) -> str:
 
 
 def build_alarm_alert_text(state: AlertsLocationState) -> str:
+    if state.source == "neptun":
+        lines = [
+            f'NEPTUN сообщает: активная угроза для <b>{escape(state.location_title)}</b>.'
+        ]
+        details = format_alerts_location_details(state)
+        if details:
+            lines.append(details)
+        lines.append("ℹ️ Данные обновляются автоматически каждые 30 секунд.")
+        lines.append(NEPTUN_NOTICE.strip())
+        return "\n\n".join(lines)
     alarm_kind = "частичная воздушная тревога" if state.status == "P" else "воздушная тревога"
     lines = [
         f"{SOURCE_LABELS[state.source]} сообщает: объявлена {alarm_kind} — "
@@ -10818,7 +10828,7 @@ def format_important_alarm_update(
     previous: AlertsLocationState,
     current: AlertsLocationState,
 ) -> str:
-    lines = [f"🚨 Усиление тревоги — <b>{ALERTS_LOCATION_TITLE}</b>."]
+    lines = [f"🚨 Усиление тревоги — <b>{escape(current.location_title)}</b>."]
     if previous.status == "P" and current.status == "A":
         lines.append("Тревога распространилась на весь район или область.")
     if previous.alert_level != "red" and current.alert_level == "red":
@@ -10844,7 +10854,7 @@ def format_important_alarm_update(
     )
     if new_important:
         labels = ", ".join(
-            escape(alerts_threat_label(threat.threat_type))
+            escape(alerts_threat_label(threat.threat_type, current.source))
             + (f" [по данным API: {escape(threat.location_title)}]" if threat.location_title else "")
             for threat in current.threats if threat.threat_type in new_important
         )
@@ -11077,7 +11087,12 @@ async def deactivate_alarm_from_api(bot: Bot, chat_id: int, source: str = "alert
     clear_message = await send_alarm_notification(
         bot,
         chat_id,
-        "🟢 <b>Отбой воздушной тревоги.</b>" + (NEPTUN_NOTICE if source == "neptun" else ""),
+        (
+            "🟢 <b>NEPTUN больше не показывает активных угроз для выбранного города.</b>"
+            + NEPTUN_NOTICE
+            if source == "neptun"
+            else "🟢 <b>Отбой воздушной тревоги.</b>"
+        ),
     )
     if clear_message is not None:
         db.set_alarm_api_status_message_id(chat_id, "N", clear_message.message_id)
@@ -11099,17 +11114,28 @@ async def alerts_monitor_loop(bot: Bot) -> None:
         "alerts_in_ua": AlertsInUaProvider(lambda: fetch_alerts_location_state()),
         "neptun": NeptunProvider(),
     }
-    startup_selections = {
-        chat_id: (db.alarm_api_source(chat_id), db.alarm_api_location(chat_id))
-        for chat_id in db.list_alarm_api_chats()
-    }
-    startup_chats = set(startup_selections)
     selections_seen: dict[int, tuple[str, str]] = {}
     notified_states: dict[int, AlertsLocationState] = {}
     pending_escalations: dict[int, AlertsEscalationCandidate] = {}
     while True:
         try:
             chat_ids = db.list_alarm_api_chats()
+            active_chat_ids: list[int] = []
+            for chat_id in chat_ids:
+                if not db.alarm_api_disable_requested(chat_id):
+                    active_chat_ids.append(chat_id)
+                    continue
+                settings = db.get_alarm_settings(chat_id)
+                needs_cleanup = (
+                    db.alarm_api_last_notified_status(chat_id) == "A"
+                    or bool(settings.permissions_json)
+                    or settings.reactions_json is not None
+                )
+                if not needs_cleanup or await deactivate_alarm_from_api(
+                    bot, chat_id, db.alarm_api_source(chat_id)
+                ):
+                    db.set_alarm_api_enabled(chat_id, False, None)
+            chat_ids = active_chat_ids
             sources = {chat_id: db.alarm_api_source(chat_id) for chat_id in chat_ids}
             locations = {chat_id: db.alarm_api_location(chat_id) for chat_id in chat_ids}
             requested = sorted(set(sources.values()))
@@ -11153,13 +11179,6 @@ async def alerts_monitor_loop(bot: Bot) -> None:
                         notified_states.pop(chat_id, None)
                         pending_escalations.pop(chat_id, None)
                     selections_seen[chat_id] = selection
-                    if chat_id in startup_chats and startup_selections[chat_id] == selection:
-                        db.set_alarm_api_last_status(chat_id, status)
-                        db.set_alarm_api_last_notified_status(chat_id, "A" if active else "N")
-                        notified_states[chat_id] = alert_state
-                        startup_chats.remove(chat_id)
-                        continue
-                    startup_chats.discard(chat_id)
                     previous = db.alarm_api_last_status(chat_id)
                     notified = db.alarm_api_last_notified_status(chat_id)
                     previous_state = notified_states.get(chat_id)
@@ -11180,6 +11199,15 @@ async def alerts_monitor_loop(bot: Bot) -> None:
                             notified_states[chat_id] = alert_state
                             pending_escalations.pop(chat_id, None)
                     elif active and previous_state is not None:
+                        alarm_settings = db.get_alarm_settings(chat_id)
+                        restrictions_saved = bool(
+                            alarm_settings.permissions_json
+                            or alarm_settings.reactions_json is not None
+                        )
+                        if db.alarm_restrictions_enabled(chat_id) and not restrictions_saved:
+                            await apply_alarm_restrictions(bot, chat_id)
+                        elif not db.alarm_restrictions_enabled(chat_id) and restrictions_saved:
+                            await restore_alarm_restrictions(bot, chat_id)
                         candidate, confirmed = advance_alarm_escalation_candidate(
                             pending_escalations.get(chat_id),
                             previous_state,
@@ -11215,7 +11243,6 @@ async def alerts_monitor_loop(bot: Bot) -> None:
                             if not await edit_alarm_status_message(bot, chat_id, alert_state):
                                 continue
                         notified_states[chat_id] = alert_state
-            startup_chats.intersection_update(chat_ids)
             selections_seen = {
                 key: value for key, value in selections_seen.items() if key in chat_ids
             }
@@ -11262,7 +11289,7 @@ def alarm_status_text(chat_id: int) -> str:
         if source == "neptun":
             location_text = (
                 f"Город: <b>{escape(state.location_title)}</b>\n"
-                f"Официальная территория: <b>{escape(state.official_area or state.location_title)}</b>.\n\n"
+                f"Зона отслеживания: <b>{escape(state.official_area or state.location_title)}</b>.\n\n"
             )
         return location_text + format_current_alarm_status(state) + (
             NEPTUN_NOTICE if source == "neptun" else ""

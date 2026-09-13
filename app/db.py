@@ -731,6 +731,7 @@ class Database:
             create table if not exists alarm_api_settings (
                 chat_id integer primary key,
                 enabled integer not null default 0,
+                disable_requested integer not null default 0,
                 alert_source text not null default 'alerts_in_ua',
                 alert_location text not null default 'kryvyi-rih',
                 last_status text,
@@ -1363,6 +1364,8 @@ class Database:
             self._conn.execute("alter table alarm_api_settings add column alert_source text not null default 'alerts_in_ua'")
         if "alert_location" not in columns:
             self._conn.execute("alter table alarm_api_settings add column alert_location text not null default 'kryvyi-rih'")
+        if "disable_requested" not in columns:
+            self._conn.execute("alter table alarm_api_settings add column disable_requested integer not null default 0")
         if "last_notified_status" not in columns:
             self._conn.execute("alter table alarm_api_settings add column last_notified_status text")
         if "last_alarm_message_id" not in columns:
@@ -3669,14 +3672,15 @@ class Database:
         self._conn.execute(
             """
             insert into alarm_api_settings (
-                chat_id, enabled, last_status, last_notified_status,
+                chat_id, enabled, disable_requested, last_status, last_notified_status,
                 last_alarm_message_id, last_clear_message_id,
                 last_alarm_action_message_id, last_clear_action_message_id,
                 updated_by, updated_at
             )
-            values (?, ?, null, null, null, null, null, null, ?, ?)
+            values (?, ?, 0, null, null, null, null, null, null, ?, ?)
             on conflict(chat_id) do update set
                 enabled = excluded.enabled,
+                disable_requested = 0,
                 last_status = null,
                 last_notified_status = null,
                 last_alarm_message_id = null,
@@ -3689,6 +3693,22 @@ class Database:
             (chat_id, int(enabled), updated_by, utc_now()),
         )
         self._conn.commit()
+
+    def request_alarm_api_disabled(self, chat_id: int, updated_by: int | None) -> None:
+        """Keep monitoring until the bot restores restrictions and publishes the clear state."""
+        self._conn.execute(
+            """update alarm_api_settings
+               set disable_requested = 1, updated_by = ?, updated_at = ?
+               where chat_id = ? and enabled = 1""",
+            (updated_by, utc_now(), chat_id),
+        )
+        self._conn.commit()
+
+    def alarm_api_disable_requested(self, chat_id: int) -> bool:
+        row = self._conn.execute(
+            "select disable_requested from alarm_api_settings where chat_id = ?", (chat_id,)
+        ).fetchone()
+        return bool(row["disable_requested"]) if row else False
 
     def get_scheduled_weather_settings(self, chat_id: int) -> ScheduledWeatherSettings:
         row = self._conn.execute(

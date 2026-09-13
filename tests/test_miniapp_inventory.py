@@ -14,6 +14,7 @@ from app.miniapp import (
     MiniAppBlacklistDelete,
     MiniAppBlacklistSave,
     MiniAppChatLockSet,
+    MiniAppAlarmSettingsSet,
     MiniAppModeratorRoleClear,
     MiniAppModeratorRoleSet,
     MiniAppTriggerDelete,
@@ -916,7 +917,6 @@ def test_miniapp_rejects_direct_access_to_unassigned_chat(
 
     assert getattr(exc_info.value, "status_code", None) == 403
 
-
 def test_miniapp_rejects_cross_chat_writes_for_chat_admin(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("OWNER_ID", "42")
     db_path = tmp_path / "bot.sqlite3"
@@ -1074,6 +1074,47 @@ def test_miniapp_moderation_chat_lock_respects_role_limits(tmp_path, monkeypatch
             MiniAppChatLockSet(chatId=-100, seconds=60, reason="assistant"),
             x_telegram_init_data="test",
         )
+    assert getattr(exc_info.value, "status_code", None) == 403
+
+
+def test_miniapp_alarm_settings_are_scoped_to_chat_admin(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-100, "Admin Chat", "supergroup", None)
+    db.upsert_chat(-200, "Moderator Chat", "supergroup", None)
+    db.replace_chat_telegram_admins(-100, [{
+        "user_id": 9, "username": "admin", "full_name": "Admin",
+        "status": "administrator", "is_bot": False,
+    }])
+    db.set_chat_moderator_role(-200, 9, "senior", 42)
+    db.close()
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _data: {"id": 9})
+
+    payload = MiniAppAlarmSettingsSet(
+        chatId=-100,
+        automaticEnabled=True,
+        source="neptun",
+        location="dnipro",
+        restrictionsEnabled=False,
+        manualEnabled=True,
+        alarmText="Тревога test",
+        clearText="Отбой test",
+    )
+    saved = miniapp.miniapp_profile_moderation_alarm(payload, x_telegram_init_data="test")
+    assert saved["alarm"]["source"] == "neptun"
+    assert saved["alarm"]["location"] == "dnipro"
+    assert saved["alarm"]["automaticEnabled"] is True
+    assert saved["alarm"]["restrictionsEnabled"] is False
+    listed = miniapp.miniapp_profile_moderation(chat_id=-100, x_telegram_init_data="test")
+    assert listed["alarm"]["canManage"] is True
+    assert len(listed["alarm"]["locations"]) == 41
+
+    payload.chatId = -200
+    with pytest.raises(Exception) as exc_info:
+        miniapp.miniapp_profile_moderation_alarm(payload, x_telegram_init_data="test")
     assert getattr(exc_info.value, "status_code", None) == 403
 
 

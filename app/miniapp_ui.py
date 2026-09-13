@@ -922,6 +922,49 @@ MINI_APP_HTML = r"""<!doctype html>
       background: #c0c0c0;
       touch-action: manipulation;
     }
+    .alarm-source-switch { margin: 14px 0 18px; }
+    .alarm-source-switch input { position: absolute; opacity: 0; pointer-events: none; }
+    .alarm-source-track {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      min-height: 48px;
+      overflow: hidden;
+      border: 1px solid color-mix(in srgb, var(--line) 72%, #ffffff);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--panel) 76%, var(--bg));
+      box-shadow: inset 0 1px 2px rgba(255,255,255,.18), 0 5px 12px rgba(0,0,0,.2);
+    }
+    .alarm-source-track label {
+      z-index: 2;
+      display: grid;
+      place-items: center;
+      padding: 10px;
+      cursor: pointer;
+      font-weight: 850;
+      text-align: center;
+    }
+    .alarm-source-knob {
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      width: calc(50% - 6px);
+      height: calc(100% - 8px);
+      border: 1px solid color-mix(in srgb, var(--accent) 70%, #ffffff);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--accent) 28%, var(--panel));
+      box-shadow: 0 3px 8px rgba(0,0,0,.24), inset 0 1px 1px rgba(255,255,255,.28);
+      transition: transform .28s cubic-bezier(.22,.8,.3,1);
+    }
+    #alarmSourceAlerts:checked ~ .alarm-source-track .alarm-source-knob { transform: translateX(0); }
+    #alarmSourceNeptun:checked ~ .alarm-source-track .alarm-source-knob { transform: translateX(calc(100% + 4px)); }
+    .alarm-source-switch:focus-within .alarm-source-track {
+      outline: 3px solid color-mix(in srgb, var(--accent) 24%, transparent);
+      outline-offset: 4px;
+    }
+    .settings-checks { display: grid; gap: 10px; margin: 12px 0; }
+    .settings-checks label { display: flex; align-items: center; gap: 10px; font-weight: 750; }
+    .settings-checks input { width: 22px; height: 22px; accent-color: var(--accent); }
     .minesweeper-shell {
       --win-gray: #c0c0c0;
       --win-dark: #808080;
@@ -1734,6 +1777,7 @@ MINI_APP_HTML = r"""<!doctype html>
     if (normalized === "reminders" || normalized.startsWith("reminders_")) return "reminders";
     if (normalized === "radio" || normalized.startsWith("radio_")) return "radio";
     if (normalized === "mine" || normalized.startsWith("mine_")) return "mine";
+    if (normalized === "moderation" || normalized.startsWith("moderation_")) return "moderation";
     return normalized;
   }
 
@@ -2406,6 +2450,7 @@ MINI_APP_HTML = r"""<!doctype html>
       const selectedChatId = Number(data.selectedChatId || 0);
       const selectedChat = data.selectedChat || {};
       const lock = data.lock || null;
+      const alarm = data.alarm || null;
       const lockText = lock
         ? `чат остановлен${lock.until_at ? ` до ${lock.until_at}` : " до ручного старта"}${lock.reason ? ` · ${lock.reason}` : ""}`
         : "чат открыт";
@@ -2428,6 +2473,36 @@ MINI_APP_HTML = r"""<!doctype html>
           <button class="btn secondary" onclick="unlockModerationChat(${selectedChatId})">Чат старт</button>
         </div>` : `<p class="muted">Эта роль не может останавливать чат.</p>`}
       </section>` : "";
+      const alarmTools = selectedChatId && alarm ? `<section class="panel">
+        <h2>Тревога</h2>
+        <p class="muted">Настройки действуют только для выбранной группы. Изменения применяются ботом в течение 30 секунд.</p>
+        ${alarm.canManage ? `<div class="alarm-source-switch">
+          <input type="radio" name="alarmSource" id="alarmSourceAlerts" value="alerts_in_ua" ${alarm.source === "alerts_in_ua" ? "checked" : ""} onchange="toggleAlarmLocation()">
+          <input type="radio" name="alarmSource" id="alarmSourceNeptun" value="neptun" ${alarm.source === "neptun" ? "checked" : ""} onchange="toggleAlarmLocation()">
+          <div class="alarm-source-track">
+            <span class="alarm-source-knob"></span>
+            <label for="alarmSourceAlerts">Alerts.in.ua</label>
+            <label for="alarmSourceNeptun">NEPTUN</label>
+          </div>
+        </div>
+        <div id="alarmLocationBlock" class="mine-admin-form wide" style="${alarm.source === "neptun" ? "" : "display:none"}">
+          <label class="wide">Город NEPTUN
+            <select id="alarmLocation" class="wide">
+              ${(alarm.locations || []).map(item => `<option value="${escapeHtml(item.key)}" ${item.key === alarm.location ? "selected" : ""}>${escapeHtml(item.title)} · ${escapeHtml(item.area)}</option>`).join("")}
+            </select>
+          </label>
+        </div>
+        <div class="settings-checks">
+          <label><input id="alarmAutomatic" type="checkbox" ${alarm.automaticEnabled ? "checked" : ""}> Автоматические оповещения${alarm.turningOff ? " (идёт отключение…)" : ""}</label>
+          <label><input id="alarmRestrictions" type="checkbox" ${alarm.restrictionsEnabled ? "checked" : ""}> Ограничивать медиа и реакции во время тревоги</label>
+          <label><input id="alarmManual" type="checkbox" ${alarm.manualEnabled ? "checked" : ""}> Реагировать на ручные команды «тревога» и «отбой»</label>
+        </div>
+        <div class="mine-admin-form wide">
+          <textarea id="alarmText" class="wide" rows="3" placeholder="Сообщение при включении ограничений">${escapeHtml(alarm.alarmText || "")}</textarea>
+          <textarea id="alarmClearText" class="wide" rows="3" placeholder="Сообщение при снятии ограничений">${escapeHtml(alarm.clearText || "")}</textarea>
+          <button class="btn wide" onclick="saveModerationAlarm(${selectedChatId})">Сохранить тревогу</button>
+        </div>` : `<p class="muted">Источник: <b>${escapeHtml(alarm.sourceTitle || "")}</b> · ${escapeHtml(alarm.locationTitle || "")}. Изменять тревогу может только администратор этой группы.</p>`}
+      </section>` : "";
       content.innerHTML = `<section class="panel">
         <h2>Модерация</h2>
         <p class="muted">Здесь только настройки модерации выбранной группы. Роли назначаются в отдельном разделе “Роли”, логи уходят в staff-группу.</p>
@@ -2438,11 +2513,40 @@ MINI_APP_HTML = r"""<!doctype html>
         </div>
       </section>
       ${chatTools}
+      ${alarmTools}
       ${selectedChatId ? "" : `<section class="panel muted">Нет доступных чатов для модерации.</section>`}
       <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
       scrollToTop();
     } catch (error) {
       showError(error);
+    }
+  }
+
+  function toggleAlarmLocation() {
+    const block = document.getElementById("alarmLocationBlock");
+    if (block) block.style.display = document.getElementById("alarmSourceNeptun")?.checked ? "" : "none";
+  }
+
+  async function saveModerationAlarm(chatId) {
+    const source = document.querySelector('input[name="alarmSource"]:checked')?.value || "alerts_in_ua";
+    try {
+      await api("/miniapp/profile/moderation/alarm", {
+        method: "POST",
+        body: JSON.stringify({
+          chatId: Number(chatId),
+          automaticEnabled: Boolean(document.getElementById("alarmAutomatic")?.checked),
+          source,
+          location: document.getElementById("alarmLocation")?.value || "kryvyi-rih",
+          restrictionsEnabled: Boolean(document.getElementById("alarmRestrictions")?.checked),
+          manualEnabled: Boolean(document.getElementById("alarmManual")?.checked),
+          alarmText: document.getElementById("alarmText")?.value || "",
+          clearText: document.getElementById("alarmClearText")?.value || ""
+        })
+      });
+      showNotice("Настройки тревоги сохранены.");
+      showModerationManager(chatId);
+    } catch (error) {
+      alert(error.message);
     }
   }
 
@@ -3393,7 +3497,7 @@ MINI_APP_HTML = r"""<!doctype html>
   async function load() {
     const initialView = readStartParam();
     const intendedOwner = readStartOwner();
-    setScreenHeader(["shop", "bag", "profile", "weather", "radio", "reminders"].includes(initialView) ? initialView : "mine");
+    setScreenHeader(["shop", "bag", "profile", "weather", "radio", "reminders", "moderation"].includes(initialView) ? initialView : "mine");
     try {
       state = await api("/miniapp/mine");
       if (intendedOwner && Number(state.userId) !== intendedOwner) {
@@ -3407,6 +3511,7 @@ MINI_APP_HTML = r"""<!doctype html>
       else if (initialView === "weather") await showWeather();
       else if (initialView === "reminders") await showReminders();
       else if (initialView === "radio") showRadio();
+      else if (initialView === "moderation") await showModerationManager();
       else renderMine();
     } catch (error) {
       nameNode.textContent = "Ошибка загрузки";

@@ -22,6 +22,7 @@ from fastapi import APIRouter, File, Header, HTTPException, Query, Response, Upl
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from .config import load_config
+from .alert_providers import DEFAULT_NEPTUN_LOCATION, NEPTUN_LOCATIONS, SOURCE_LABELS
 from .build_info import get_build_info
 from .db import Database, normalize_trigger
 from .dig_game import (
@@ -139,6 +140,17 @@ class MiniAppChatLockSet(BaseModel):
     chatId: int
     seconds: int | None = Field(default=None, ge=1, le=7 * 24 * 60 * 60)
     reason: str = Field(default="", max_length=500)
+
+
+class MiniAppAlarmSettingsSet(BaseModel):
+    chatId: int
+    automaticEnabled: bool
+    source: str = Field(min_length=1, max_length=32)
+    location: str = Field(default=DEFAULT_NEPTUN_LOCATION, min_length=1, max_length=64)
+    restrictionsEnabled: bool = True
+    manualEnabled: bool = False
+    alarmText: str = Field(default="", max_length=2000)
+    clearText: str = Field(default="", max_length=2000)
 
 
 class MiniAppTriggerVariant(BaseModel):
@@ -1093,6 +1105,31 @@ def _miniapp_chat_public(chat: Any) -> dict[str, Any]:
         "title": chat.title or str(chat.chat_id),
         "type": chat.type or "",
         "username": chat.username or "",
+    }
+
+
+def _miniapp_alarm_public(db: Database, chat_id: int, can_manage: bool) -> dict[str, Any]:
+    settings = db.get_alarm_settings(chat_id)
+    source = db.alarm_api_source(chat_id)
+    location_key = db.alarm_api_location(chat_id)
+    location = NEPTUN_LOCATIONS.get(location_key, NEPTUN_LOCATIONS[DEFAULT_NEPTUN_LOCATION])
+    return {
+        "canManage": can_manage,
+        "automaticEnabled": db.alarm_api_enabled(chat_id),
+        "turningOff": db.alarm_api_disable_requested(chat_id),
+        "source": source,
+        "sourceTitle": SOURCE_LABELS.get(source, source),
+        "location": location.key,
+        "locationTitle": location.city,
+        "restrictionsEnabled": db.alarm_restrictions_enabled(chat_id),
+        "manualEnabled": bool(settings.enabled),
+        "alarmText": settings.alarm_text or "",
+        "clearText": settings.clear_text or "",
+        "threadId": settings.alarm_thread_id,
+        "locations": [
+            {"key": item.key, "title": item.city, "area": item.official_area}
+            for item in sorted(NEPTUN_LOCATIONS.values(), key=lambda item: item.city.casefold())
+        ],
     }
 
 
@@ -2830,7 +2867,7 @@ def miniapp_profile_admin_panel(
             "sections": [
                 {"key": "roles", "title": "Роли", "enabled": is_owner, "description": "Выдача ролей приложения."},
                 {"key": "mine", "title": "Шахта", "enabled": _miniapp_can_view_mine_admin(db, user["id"]), "description": "Управление для владельца, просмотр для модераторов."},
-                {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Настройки режимов чата: стоп/старт."},
+                {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Режимы чата и управление тревогой по группам."},
                 {"key": "blacklist", "title": "Чёрный список", "enabled": _miniapp_can_manage_blacklist(db, user["id"]), "description": "Запрещённые слова, формы и синонимы."},
                 {"key": "triggers", "title": "Триггеры", "enabled": _miniapp_can_manage_triggers(db, user["id"]), "description": "Слова и фразы, на которые бот отвечает в чатах."},
             ],
@@ -2866,7 +2903,59 @@ def miniapp_profile_moderation(
             "selectedChat": _miniapp_chat_public(selected_chat) if selected_chat else None,
             "chats": [_miniapp_chat_public(chat) for chat in chats],
             "lock": lock or None,
+            "alarm": (
+                _miniapp_alarm_public(db, selected_chat_id, viewer_role == "admin")
+                if selected_chat else None
+            ),
         }
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/moderation/alarm")
+def miniapp_profile_moderation_alarm(
+    payload: MiniAppAlarmSettingsSet,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not _miniapp_can_admin_chat(db, payload.chatId, user["id"]):
+            raise HTTPException(403, "Управлять тревогой может только администратор этой группы.")
+        if db.get_chat(payload.chatId) is None:
+            raise HTTPException(404, "Чат не найден.")
+        source = payload.source.strip().casefold()
+        if source not in SOURCE_LABELS:
+            raise HTTPException(400, "Неизвестный источник тревоги.")
+        if payload.location not in NEPTUN_LOCATIONS:
+            raise HTTPException(400, "Неизвестный город NEPTUN.")
+        if payload.automaticEnabled and source == "alerts_in_ua" and not load_config().alerts_api_token:
+            raise HTTPException(400, "Для Alerts.in.ua на сервере не настроен ALERTS_API_TOKEN.")
+
+        db.set_alarm_api_source(payload.chatId, source, user["id"])
+        db.set_alarm_api_location(payload.chatId, payload.location, user["id"])
+        db.set_alarm_restrictions_enabled(payload.chatId, payload.restrictionsEnabled, user["id"])
+        db.set_alarm_enabled(payload.chatId, payload.manualEnabled, user["id"])
+        db.set_alarm_texts(
+            payload.chatId,
+            alarm_text=payload.alarmText.strip() or None,
+            clear_text=payload.clearText.strip() or None,
+            updated_by=user["id"],
+        )
+        if payload.automaticEnabled:
+            if not db.alarm_api_enabled(payload.chatId) or db.alarm_api_disable_requested(payload.chatId):
+                db.set_alarm_api_enabled(payload.chatId, True, user["id"])
+        elif db.alarm_api_enabled(payload.chatId):
+            settings = db.get_alarm_settings(payload.chatId)
+            if (
+                db.alarm_api_last_notified_status(payload.chatId) == "A"
+                or settings.permissions_json
+                or settings.reactions_json is not None
+            ):
+                db.request_alarm_api_disabled(payload.chatId, user["id"])
+            else:
+                db.set_alarm_api_enabled(payload.chatId, False, user["id"])
+        return {"ok": True, "alarm": _miniapp_alarm_public(db, payload.chatId, True)}
     finally:
         db.close()
 

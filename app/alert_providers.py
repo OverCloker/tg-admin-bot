@@ -1,4 +1,4 @@
-"""Alert provider contract and NEPTUN official-alert adapter."""
+"""Alert provider contract and NEPTUN active-threat adapter."""
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -36,8 +36,8 @@ def _normalize_geo_name(value: str) -> str:
     return value.strip().casefold().replace("’", "'").replace("ʼ", "'").replace("`", "'")
 
 
-# Cities published in NEPTUN's sitemap on 2026-09-13. The alert endpoint itself
-# exposes official district/oblast status, so each city is mapped to that area.
+# Cities published in NEPTUN's sitemap on 2026-09-13. The district/oblast map
+# lets one shared threat snapshot be filtered independently for each group.
 NEPTUN_LOCATIONS = {
     item.key: item
     for item in (
@@ -130,50 +130,75 @@ def parse_neptun_alerts(
     payload: object,
     location_key: str = DEFAULT_NEPTUN_LOCATION,
 ) -> AlertsLocationState:
-    """Convert official district/oblast lists to a state for one configured city."""
+    """Convert NEPTUN active threats to a state for one configured city."""
 
     location = NEPTUN_LOCATIONS.get(location_key)
     if location is None:
         raise ValueError("NEPTUN: unknown location")
     if not isinstance(payload, dict):
         raise ValueError("NEPTUN: expected an alert snapshot")
-    for field in ("raions", "oblasts"):
-        items = payload.get(field)
-        if not isinstance(items, list):
-            raise ValueError(f"NEPTUN: missing {field} list")
-        for item in items:
-            if not isinstance(item, dict) or any(
-                not isinstance(item.get(key), str) or not item[key].strip()
-                for key in ("key", "name")
-            ):
-                raise ValueError("NEPTUN: invalid alert entry")
-            if field == "raions" and not isinstance(item.get("oblast"), str):
-                raise ValueError("NEPTUN: missing district oblast")
+    items = payload.get("threats")
+    if not isinstance(items, list):
+        raise ValueError("NEPTUN: missing threats list")
 
+    normalized_city = _normalize_geo_name(location.city)
+    normalized_district = _normalize_geo_name(location.district or "")
     normalized_oblast = _normalize_geo_name(location.oblast)
-    matched = []
-    if location.district:
-        normalized_district = _normalize_geo_name(location.district)
-        matched.extend(
-            item
-            for item in payload["raions"]
-            if _normalize_geo_name(item["name"]) == normalized_district
-            and _normalize_geo_name(item["oblast"]) == normalized_oblast
-        )
-    matched.extend(
-        item
-        for item in payload["oblasts"]
-        if _normalize_geo_name(item["name"]) == normalized_oblast
-    )
-    levels = {
-        str(item.get("level") or "").strip().lower()
-        for item in matched
-        if isinstance(item, dict)
+    type_map = {
+        "uav": ("drones", "yellow"),
+        "fpv": ("drones", "yellow"),
+        "recon": ("drones", "yellow"),
+        "missile": ("unspecified_missiles", "red"),
+        "ballistic": ("ballistic_missiles", "red"),
+        "kab": ("guided_aerial_bombs", "red"),
+        "mig31k": ("mig31k_departure", "red"),
+        "unknown": ("unknown", None),
     }
-    alert_level = "red" if "red" in levels else "yellow" if "yellow" in levels else None
+    matched: list[AlertsThreat] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("NEPTUN: invalid threat entry")
+        raw_type = item.get("type")
+        status = item.get("status")
+        if not isinstance(raw_type, str) or not raw_type.strip() or not isinstance(status, str):
+            raise ValueError("NEPTUN: invalid threat fields")
+        if status.strip().casefold() != "active" or bool(item.get("advisory")):
+            continue
+        region = _normalize_geo_name(str(item.get("region") or ""))
+        district = _normalize_geo_name(str(item.get("district") or ""))
+        locality = _normalize_geo_name(str(item.get("locality") or ""))
+        explanation = str(item.get("explanationShort") or "").strip()
+        explanation_geo = _normalize_geo_name(explanation)
+        region_matches = region == normalized_oblast or (
+            location.key == "kyiv-city" and region in {"київ", "м. київ"}
+        )
+        direct_match = (
+            locality == normalized_city and (not region or region_matches)
+        ) or (normalized_city in explanation_geo and region_matches)
+        district_match = bool(normalized_district and district == normalized_district)
+        area_match = region_matches and (bool(item.get("areaOnly")) or location.district is None)
+        if not (direct_match or (region_matches and district_match) or area_match):
+            continue
+        threat_type, level = type_map.get(raw_type.strip().casefold(), ("unknown", None))
+        scope = str(item.get("locality") or item.get("district") or item.get("region") or "").strip()
+        matched.append(
+            AlertsThreat(
+                threat_type=threat_type,
+                level=level,
+                started_at=str(item.get("confirmedAt") or item.get("updatedAt") or "").strip() or None,
+                source_message=explanation or str(item.get("title") or "").strip() or None,
+                location_title=scope or None,
+            )
+        )
+    alert_level = (
+        "red" if any(item.level == "red" for item in matched)
+        else "yellow" if any(item.level == "yellow" for item in matched)
+        else None
+    )
     return AlertsLocationState(
         "A" if matched else "N",
         alert_level=alert_level,
+        threats=tuple(matched),
         source="neptun",
         location_title=location.city,
         official_area=(
@@ -189,7 +214,7 @@ class NeptunProvider:
 
     async def fetch(self) -> object:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-            async with session.get("https://neptun.in.ua/api/v1/alerts") as response:
+            async with session.get("https://neptun.in.ua/api/v1/threats") as response:
                 response.raise_for_status()
                 return await response.json()
 

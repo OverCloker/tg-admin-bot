@@ -178,7 +178,7 @@ def test_mine_actions_refresh_without_scrolling_to_top() -> None:
 
 
 def test_shop_deep_link_opens_a_distinct_compact_screen() -> None:
-    assert '["shop", "bag", "profile", "weather", "radio", "reminders"].includes(initialView)' in MINI_APP_HTML
+    assert '["shop", "bag", "profile", "weather", "radio", "reminders", "moderation"].includes(initialView)' in MINI_APP_HTML
     assert 'screenTitle.textContent = "🛒 Магазин"' in MINI_APP_HTML
     assert 'setScreenHeader("shop");' in MINI_APP_HTML
     assert 'class="shop-hero"' in MINI_APP_HTML
@@ -190,6 +190,14 @@ def test_shop_deep_link_opens_a_distinct_compact_screen() -> None:
     assert 'class="btn shop-buy"' in MINI_APP_HTML
     assert 'window.scrollTo(0, 0)' in MINI_APP_HTML
     assert 'class="inventory-group"' in MINI_APP_HTML
+
+
+def test_moderation_contains_alarm_source_switch_and_settings_endpoint() -> None:
+    assert 'id="alarmSourceAlerts"' in MINI_APP_HTML
+    assert 'id="alarmSourceNeptun"' in MINI_APP_HTML
+    assert 'class="alarm-source-knob"' in MINI_APP_HTML
+    assert '"/miniapp/profile/moderation/alarm"' in MINI_APP_HTML
+    assert 'else if (initialView === "moderation") await showModerationManager();' in MINI_APP_HTML
 
 
 def test_miniapp_has_profile_weather_and_radio_screens() -> None:
