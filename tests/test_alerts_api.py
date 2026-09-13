@@ -196,11 +196,15 @@ def test_alerts_api_uses_last_modified_cache(monkeypatch) -> None:
     monkeypatch.setattr(bot_module.aiohttp, "ClientSession", FakeSession)
     monkeypatch.setattr(bot_module, "ALERTS_API_TOKEN", "test-token")
     monkeypatch.setattr(bot_module, "ALERTS_API_CACHE", bot_module.AlertsApiCache())
+    captures = []
+    monkeypatch.setattr(bot_module, "save_alerts_response", lambda *args: captures.append(args))
 
     first = asyncio.run(bot_module.fetch_alerts_location_state())
     second = asyncio.run(bot_module.fetch_alerts_location_state())
 
     assert first == second == AlertsLocationState(status="A", alert_level="red")
+    assert [capture[1] for capture in captures] == [200, 304]
+    assert captures[0][2] == payload
     assert "If-Modified-Since" not in FakeSession.request_headers[0]
     assert FakeSession.request_headers[1]["If-Modified-Since"] == "Thu, 10 Sep 2026 10:00:00 GMT"
 

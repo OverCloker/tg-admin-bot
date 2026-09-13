@@ -32,6 +32,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, FSInputFile, Gift, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, InputRichBlockDetails, InputRichBlockParagraph, InputRichBlockTable, InputRichMessage, LabeledPrice, MenuButtonWebApp, Message, MessageReactionUpdated, PreCheckoutQuery, RichBlockTableCell, StarAmount, SuccessfulPayment, User, WebAppInfo
 
 from .config import load_config
+from .alerts_diagnostics import save_alerts_response
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
 from .dig_game import (
     INTERACTIVE_DIG_DURABILITY,
@@ -10731,13 +10732,18 @@ async def fetch_alerts_location_state() -> AlertsLocationState:
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.get(url, headers=headers) as response:
             if response.status == 304:
+                await asyncio.to_thread(save_alerts_response, load_config().db_path, 304, None,
+                                        ALERTS_API_CACHE.last_modified, ALERTS_API_TOKEN)
                 if ALERTS_API_CACHE.state is None:
                     raise RuntimeError("Alerts.in.ua вернул 304 без сохранённого состояния")
                 return ALERTS_API_CACHE.state
             if response.status != 200:
                 body = await response.text()
                 raise RuntimeError(f"Alerts.in.ua HTTP {response.status}: {body[:200]}")
-            state = parse_alerts_location_state(await response.json(content_type=None))
+            payload = await response.json(content_type=None)
+            await asyncio.to_thread(save_alerts_response, load_config().db_path, 200, payload,
+                                    response.headers.get("Last-Modified"), ALERTS_API_TOKEN)
+            state = parse_alerts_location_state(payload)
             ALERTS_API_CACHE.last_modified = response.headers.get("Last-Modified") or None
             ALERTS_API_CACHE.state = state
             return state
