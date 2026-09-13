@@ -183,15 +183,26 @@ def test_chat_lock_storage_and_expiration(tmp_path) -> None:
 def test_blacklist_variants_storage_and_delete(tmp_path) -> None:
     db = _db(tmp_path)
 
-    db.replace_blacklist_variants(-100, "Плохое слово", ["плохие слова", "плохое слово", "плохиш"], 1)
+    db.replace_blacklist_variants(-100, "Плохое слово", ["плохие слова", "плохое слово", "плохиш"], 1, 45)
     rules = db.list_blacklist_rules(-100)
     assert rules[0].word == "плохое слово"
+    assert rules[0].mute_minutes == 45
     assert rules[0].variants == ("плохие слова", "плохиш")
     assert [variant.variant for variant in db.list_blacklist_variants(-100, "плохое слово")] == ["плохие слова", "плохиш"]
 
     assert db.delete_blacklist_word(-100, "плохое слово") is True
     assert db.list_blacklist_rules(-100) == []
     assert db.list_blacklist_variants(-100, "плохое слово") == []
+
+
+def test_blacklist_keeps_twenty_variants(tmp_path) -> None:
+    db = _db(tmp_path)
+
+    db.replace_blacklist_variants(-100, "слово", [f"вариант {index}" for index in range(25)], 1)
+
+    rules = db.list_blacklist_rules(-100)
+    assert len(rules[0].variants) == 20
+    assert rules[0].variants[-1] == "вариант 19"
 
 
 @pytest.mark.anyio

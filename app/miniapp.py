@@ -125,8 +125,9 @@ class MiniAppModeratorRoleClear(BaseModel):
 class MiniAppBlacklistSave(BaseModel):
     chatId: int
     word: str = Field(min_length=1, max_length=120)
-    variants: list[str] = Field(default_factory=list, max_length=10)
-    replies: list[str] = Field(default_factory=list, max_length=10)
+    variants: list[str] = Field(default_factory=list, max_length=20)
+    replies: list[str] = Field(default_factory=list, max_length=20)
+    muteMinutes: int = Field(default=0, ge=0, le=10080)
 
 
 class MiniAppBlacklistDelete(BaseModel):
@@ -1117,6 +1118,7 @@ def _miniapp_blacklist_public(db: Database, item: Any) -> dict[str, Any]:
         "chatId": int(item.chat_id),
         "word": item.word,
         "createdAt": item.created_at,
+        "muteMinutes": int(getattr(item, "mute_minutes", 0) or 0),
         "variants": [variant.variant for variant in variants],
         "variantCount": len(variants),
     }
@@ -1297,7 +1299,7 @@ def _clean_blacklist_variants(word: str, variants: list[str]) -> list[str]:
         text = normalize_trigger(str(variant or ""))
         if text and text != normalized_word and text not in cleaned:
             cleaned.append(text[:120])
-        if len(cleaned) >= 10:
+        if len(cleaned) >= 20:
             break
     return cleaned
 
@@ -3012,7 +3014,7 @@ def miniapp_profile_blacklist_save(
             raise HTTPException(400, "Укажи слово или выражение.")
         raw_variants = payload.variants or payload.replies
         variants = _clean_blacklist_variants(word, raw_variants)
-        db.replace_blacklist_variants(payload.chatId, word, variants, user["id"])
+        db.replace_blacklist_variants(payload.chatId, word, variants, user["id"], payload.muteMinutes)
         saved = next((item for item in db.list_blacklist_words(payload.chatId) if item.word == word), None)
         return {
             "ok": True,

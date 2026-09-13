@@ -11186,18 +11186,18 @@ async def handle_blacklist(message: Message) -> bool:
 
     text = normalize_blacklist_text(content)
     matched_chat_id = None
-    matched = False
+    matched_rule = None
     for rules_chat_id in await blacklist_rule_chat_ids(message):
         for item in db.list_blacklist_rules(rules_chat_id):
             words = (item.word, *tuple(getattr(item, "variants", ()) or ()))
             if any(has_normalized_trigger(text, normalize_blacklist_text(word)) for word in words):
                 matched_chat_id = rules_chat_id
-                matched = True
+                matched_rule = item
                 break
-        if matched:
+        if matched_rule:
             break
 
-    if matched:
+    if matched_rule:
         notice_chat_id = matched_chat_id or message.chat.id
         deleted = False
         for attempt in range(2):
@@ -11213,13 +11213,57 @@ async def handle_blacklist(message: Message) -> bool:
             except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound) as exc:
                 logging.warning("Blacklist deletion failed: chat=%s rules_chat=%s error=%s", message.chat.id, notice_chat_id, exc.message)
                 break
+        mute_minutes = int(getattr(matched_rule, "mute_minutes", 0) or 0)
+        muted = False
+        actor = getattr(message, "from_user", None)
+        if mute_minutes > 0 and actor and not getattr(actor, "is_bot", False) and getattr(message, "bot", None):
+            try:
+                if not await is_chat_admin(message.bot, message.chat.id, actor.id):
+                    mute_minutes = max(1, min(10080, mute_minutes))
+                    await message.bot.restrict_chat_member(
+                        chat_id=message.chat.id,
+                        user_id=actor.id,
+                        permissions=ChatPermissions(
+                            can_send_messages=False,
+                            can_send_audios=False,
+                            can_send_documents=False,
+                            can_send_photos=False,
+                            can_send_videos=False,
+                            can_send_video_notes=False,
+                            can_send_voice_notes=False,
+                            can_send_polls=False,
+                            can_send_other_messages=False,
+                            can_add_web_page_previews=False,
+                            can_react_to_messages=False,
+                        ),
+                        until_date=datetime.now(timezone.utc) + timedelta(minutes=mute_minutes),
+                        use_independent_chat_permissions=True,
+                    )
+                    muted = True
+                    db.add_moderator_action(
+                        message.chat.id,
+                        0,
+                        actor.id,
+                        "mute",
+                        mute_minutes,
+                        f"Чёрный список: {matched_rule.word}",
+                    )
+            except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound) as exc:
+                logging.warning(
+                    "Blacklist mute failed: chat=%s user=%s rules_chat=%s error=%s",
+                    message.chat.id,
+                    actor.id,
+                    notice_chat_id,
+                    exc.message,
+                )
         # Limit notices, never deletion checks: spam must not exhaust the
         # sendMessage rate limit and interrupt filtering subsequent updates.
         now = time.monotonic()
         if deleted and now - BLACKLIST_NOTICE_AT.get(notice_chat_id, float('-inf')) >= 30:
             BLACKLIST_NOTICE_AT[notice_chat_id] = now
             try:
-                await message.answer("Данные выражения запрещены в чате.")
+                suffix = f" Мут на {format_quiet_duration(mute_minutes)}." if muted else ""
+                await message.answer(f"Данные выражения запрещены в чате.{suffix}")
             except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
                 logging.warning("Blacklist notice could not be delivered: chat=%s", message.chat.id)
         return True

@@ -48,6 +48,34 @@ def test_every_variant_and_normalized_spelling_matches(rules, content):
     msg.delete.assert_awaited_once()
 
 
+def test_blacklist_rule_can_mute_user(rules):
+    db, _path = rules
+    db.replace_blacklist_variants(-100, 'мутслово', [], 1, 90)
+    bot = SimpleNamespace(
+        get_chat_member=AsyncMock(return_value=SimpleNamespace(status='member')),
+        restrict_chat_member=AsyncMock(),
+    )
+    msg = SimpleNamespace(
+        text='мутслово',
+        caption=None,
+        chat=SimpleNamespace(id=-100),
+        from_user=SimpleNamespace(id=7, is_bot=False),
+        bot=bot,
+        delete=AsyncMock(),
+        answer=AsyncMock(),
+    )
+
+    assert asyncio.run(app_bot.handle_blacklist(msg))
+
+    bot.restrict_chat_member.assert_awaited_once()
+    kwargs = bot.restrict_chat_member.await_args.kwargs
+    assert kwargs['chat_id'] == -100
+    assert kwargs['user_id'] == 7
+    assert kwargs['permissions'].can_send_messages is False
+    assert '90 минут' in msg.answer.await_args.args[0]
+    assert db.latest_active_moderator_mute(-100, 7) is not None
+
+
 def test_word_boundaries_are_preserved(rules):
     msg = SimpleNamespace(text='банановая', caption=None, chat=SimpleNamespace(id=-100), delete=AsyncMock(), answer=AsyncMock())
     assert not asyncio.run(app_bot.handle_blacklist(msg))

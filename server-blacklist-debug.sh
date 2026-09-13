@@ -61,6 +61,7 @@ try:
             matched = True
         print({
             "word": rule.word,
+            "mute_minutes": rule.mute_minutes,
             "variants": list(rule.variants or ()),
             "hits": hits,
         })
@@ -69,4 +70,3 @@ try:
 finally:
     db.close()
 PY
-

@@ -363,6 +363,7 @@ class BlacklistWord:
     word: str
     added_by: int | None
     created_at: str
+    mute_minutes: int = 0
 
 
 @dataclass(frozen=True)
@@ -382,6 +383,7 @@ class BlacklistRule:
     word: str
     added_by: int | None
     created_at: str
+    mute_minutes: int = 0
     variants: tuple[str, ...] = ()
 
 
@@ -994,6 +996,7 @@ class Database:
                 word text not null,
                 added_by integer,
                 created_at text not null,
+                mute_minutes integer not null default 0,
                 primary key (chat_id, word),
                 foreign key (chat_id) references chats(chat_id) on delete cascade
             );
@@ -1300,6 +1303,7 @@ class Database:
         self._migrate_quote_media()
         self._migrate_alarm_settings()
         self._migrate_alarm_api_settings()
+        self._migrate_blacklist_words()
         self._migrate_advertisements()
         self._migrate_global_dig_game()
         self._conn.execute(
@@ -1363,6 +1367,14 @@ class Database:
             self._conn.execute("alter table alarm_api_settings add column last_alarm_action_message_id integer")
         if "last_clear_action_message_id" not in columns:
             self._conn.execute("alter table alarm_api_settings add column last_clear_action_message_id integer")
+
+    def _migrate_blacklist_words(self) -> None:
+        columns = {
+            row["name"]
+            for row in self._conn.execute("pragma table_info(blacklist_words)").fetchall()
+        }
+        if "mute_minutes" not in columns:
+            self._conn.execute("alter table blacklist_words add column mute_minutes integer not null default 0")
 
     def _migrate_advertisements(self) -> None:
         columns = {
@@ -4695,16 +4707,17 @@ class Database:
         )
         self._conn.commit()
 
-    def add_blacklist_word(self, chat_id: int, word: str, added_by: int | None) -> None:
+    def add_blacklist_word(self, chat_id: int, word: str, added_by: int | None, mute_minutes: int = 0) -> None:
         self._conn.execute(
             """
-            insert into blacklist_words (chat_id, word, added_by, created_at)
-            values (?, ?, ?, ?)
+            insert into blacklist_words (chat_id, word, added_by, created_at, mute_minutes)
+            values (?, ?, ?, ?, ?)
             on conflict(chat_id, word) do update set
                 added_by = excluded.added_by,
-                created_at = excluded.created_at
+                created_at = excluded.created_at,
+                mute_minutes = excluded.mute_minutes
             """,
-            (chat_id, normalize_trigger(word), added_by, utc_now()),
+            (chat_id, normalize_trigger(word), added_by, utc_now(), max(0, min(10080, int(mute_minutes)))),
         )
         self._conn.commit()
 
@@ -4724,7 +4737,7 @@ class Database:
     def list_blacklist_words(self, chat_id: int) -> list[BlacklistWord]:
         rows = self._conn.execute(
             """
-            select chat_id, word, added_by, created_at
+            select chat_id, word, added_by, created_at, mute_minutes
             from blacklist_words
             where chat_id = ?
             order by word collate nocase
@@ -4739,14 +4752,41 @@ class Database:
         word: str,
         variants: list[str],
         updated_by: int | None,
+        mute_minutes: int | None = None,
     ) -> None:
         with self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
-            self._replace_blacklist_variants(chat_id, word, variants, updated_by)
+            self._replace_blacklist_variants(chat_id, word, variants, updated_by, mute_minutes)
 
-    def _replace_blacklist_variants(self, chat_id: int, word: str, variants: list[str], updated_by: int | None) -> None:
+    def _replace_blacklist_variants(
+        self,
+        chat_id: int,
+        word: str,
+        variants: list[str],
+        updated_by: int | None,
+        mute_minutes: int | None = None,
+    ) -> None:
         normalized = normalize_trigger(word)
-        self._conn.execute("insert into blacklist_words(chat_id,word,added_by,created_at) values(?,?,?,?) on conflict(chat_id,word) do update set added_by=excluded.added_by,created_at=excluded.created_at", (chat_id, normalized, updated_by, utc_now()))
+        current = self._conn.execute(
+            "select mute_minutes from blacklist_words where chat_id = ? and word = ?",
+            (chat_id, normalized),
+        ).fetchone()
+        safe_mute_minutes = (
+            max(0, min(10080, int(mute_minutes)))
+            if mute_minutes is not None
+            else int(current["mute_minutes"]) if current else 0
+        )
+        self._conn.execute(
+            """
+            insert into blacklist_words(chat_id,word,added_by,created_at,mute_minutes)
+            values(?,?,?,?,?)
+            on conflict(chat_id,word) do update set
+                added_by=excluded.added_by,
+                created_at=excluded.created_at,
+                mute_minutes=excluded.mute_minutes
+            """,
+            (chat_id, normalized, updated_by, utc_now(), safe_mute_minutes),
+        )
         self._conn.execute(
             "delete from blacklist_reply_variants where chat_id = ? and word = ?",
             (chat_id, normalized),
@@ -4757,7 +4797,7 @@ class Database:
             text = normalize_trigger(str(variant or ""))
             if text and text != normalized and text not in cleaned:
                 cleaned.append(text[:120])
-            if len(cleaned) >= 10:
+            if len(cleaned) >= 20:
                 break
         for position, text in enumerate(cleaned):
             self._conn.execute(
@@ -4808,6 +4848,7 @@ class Database:
                 word=item.word,
                 added_by=item.added_by,
                 created_at=item.created_at,
+                mute_minutes=item.mute_minutes,
                 variants=tuple(variants.get(item.word, ())),
             )
             for item in words
