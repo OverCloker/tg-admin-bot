@@ -11,6 +11,7 @@ from app.alert_providers import (
     AlertsLocationState,
     NeptunProvider,
     parse_neptun_alerts,
+    parse_neptun_official_alerts,
 )
 from app.db import Database
 
@@ -84,6 +85,32 @@ def neptun_snapshot(status):
     return {"threats": [threat()] if status == "A" else []}
 
 
+def test_neptun_official_alarm_uses_district_or_oblast_presence():
+    payload = {
+        "raions": [{
+            "key": "kryvorizkyi",
+            "name": "Криворізький район",
+            "oblast": "Дніпропетровська область",
+            "level": "red",
+        }],
+        "oblasts": [],
+    }
+    state = parse_neptun_official_alerts(payload)
+    assert (state.status, state.alert_level, state.provider_mode) == ("A", "red", "alerts")
+    assert parse_neptun_official_alerts({"raions": [], "oblasts": []}).status == "N"
+    oblast = parse_neptun_official_alerts({
+        "raions": [],
+        "oblasts": [{"key": "dnipro", "name": "Дніпропетровська область", "level": "yellow"}],
+    })
+    assert (oblast.status, oblast.alert_level) == ("A", "yellow")
+
+
+@pytest.mark.parametrize("payload", [None, {}, {"raions": [], "oblasts": None}, {"raions": [None], "oblasts": []}])
+def test_neptun_official_invalid_snapshot_is_never_clear(payload):
+    with pytest.raises(ValueError):
+        parse_neptun_official_alerts(payload)
+
+
 @pytest.mark.parametrize("payload", [None, {}, {"threats": None}, {"threats": [None]},
     {"threats": [{"type": "uav"}]}])
 def test_invalid_snapshot_is_never_clear(payload):
@@ -115,6 +142,7 @@ def test_migration_from_existing_schema(tmp_path):
     db.init()
     assert db.alarm_api_source(-1) == "alerts_in_ua"
     assert db.alarm_api_location(-1) == DEFAULT_NEPTUN_LOCATION
+    assert db.alarm_api_neptun_mode(-1) == "threats"
     assert db.alarm_api_last_status(-1) == "A"
     db.close()
 
@@ -126,11 +154,14 @@ def test_source_persistence_and_group_isolation(database):
     db.set_alarm_api_status_message_id(-1, "A", 123)
     db.set_alarm_api_source(-1, "neptun", 1)
     db.set_alarm_api_location(-1, "dnipro", 1)
+    db.set_alarm_api_neptun_mode(-1, "alerts", 1)
     db.init()
     assert db.alarm_api_source(-1) == "neptun"
     assert db.alarm_api_source(-2) == "alerts_in_ua"
     assert db.alarm_api_location(-1) == "dnipro"
     assert db.alarm_api_location(-2) == DEFAULT_NEPTUN_LOCATION
+    assert db.alarm_api_neptun_mode(-1) == "alerts"
+    assert db.alarm_api_neptun_mode(-2) == "threats"
     assert db.alarm_api_last_status(-1) == "A"
     assert db.alarm_api_last_notified_status(-1) == "A"
     assert db.alarm_api_status_message_id(-1, "A") == 123
@@ -141,6 +172,8 @@ def test_source_persistence_and_group_isolation(database):
         db.set_alarm_api_source(-1, "invalid", 1)
     with pytest.raises(ValueError):
         db.set_alarm_api_location(-1, "invalid", 1)
+    with pytest.raises(ValueError):
+        db.set_alarm_api_neptun_mode(-1, "invalid", 1)
     assert db.alarm_api_source(-1) == "neptun"
 
 
@@ -314,7 +347,7 @@ def test_neptun_chat_status_is_compact(database, monkeypatch):
         official_area="Криворізький район, Дніпропетровська область",
     )
     monkeypatch.setattr(bot, "db", database, raising=False)
-    monkeypatch.setattr(bot, "PROVIDER_STATES", {("neptun", DEFAULT_NEPTUN_LOCATION): state})
+    monkeypatch.setattr(bot, "PROVIDER_STATES", {("neptun_threats", DEFAULT_NEPTUN_LOCATION): state})
     text = bot.alarm_status_text(-1)
     assert "Город: <b>Кривий Ріг</b>" in text
     assert "Угроза: <b>ударные БПЛА</b>" in text

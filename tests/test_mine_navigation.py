@@ -196,6 +196,8 @@ def test_moderation_contains_alarm_source_switch_and_settings_endpoint() -> None
     assert 'id="alarmSourceAlerts"' in MINI_APP_HTML
     assert 'id="alarmSourceNeptun"' in MINI_APP_HTML
     assert 'class="alarm-source-knob"' in MINI_APP_HTML
+    assert 'id="neptunModeAlerts"' in MINI_APP_HTML
+    assert 'id="neptunModeThreats"' in MINI_APP_HTML
     assert '"/miniapp/profile/moderation/alarm"' in MINI_APP_HTML
     assert 'else if (initialView === "moderation") await showModerationManager();' in MINI_APP_HTML
 

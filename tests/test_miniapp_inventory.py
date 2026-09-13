@@ -1098,6 +1098,7 @@ def test_miniapp_alarm_settings_are_scoped_to_chat_admin(tmp_path, monkeypatch) 
         automaticEnabled=True,
         source="neptun",
         location="dnipro",
+        neptunMode="alerts",
         restrictionsEnabled=False,
         manualEnabled=True,
         alarmText="Тревога test",
@@ -1106,6 +1107,7 @@ def test_miniapp_alarm_settings_are_scoped_to_chat_admin(tmp_path, monkeypatch) 
     saved = miniapp.miniapp_profile_moderation_alarm(payload, x_telegram_init_data="test")
     assert saved["alarm"]["source"] == "neptun"
     assert saved["alarm"]["location"] == "dnipro"
+    assert saved["alarm"]["neptunMode"] == "alerts"
     assert saved["alarm"]["automaticEnabled"] is True
     assert saved["alarm"]["restrictionsEnabled"] is False
     listed = miniapp.miniapp_profile_moderation(chat_id=-100, x_telegram_init_data="test")

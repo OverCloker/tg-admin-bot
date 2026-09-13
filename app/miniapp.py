@@ -147,6 +147,7 @@ class MiniAppAlarmSettingsSet(BaseModel):
     automaticEnabled: bool
     source: str = Field(min_length=1, max_length=32)
     location: str = Field(default=DEFAULT_NEPTUN_LOCATION, min_length=1, max_length=64)
+    neptunMode: str = Field(default="threats", min_length=1, max_length=16)
     restrictionsEnabled: bool = True
     manualEnabled: bool = False
     alarmText: str = Field(default="", max_length=2000)
@@ -1121,6 +1122,7 @@ def _miniapp_alarm_public(db: Database, chat_id: int, can_manage: bool) -> dict[
         "sourceTitle": SOURCE_LABELS.get(source, source),
         "location": location.key,
         "locationTitle": location.city,
+        "neptunMode": db.alarm_api_neptun_mode(chat_id),
         "restrictionsEnabled": db.alarm_restrictions_enabled(chat_id),
         "manualEnabled": bool(settings.enabled),
         "alarmText": settings.alarm_text or "",
@@ -2929,11 +2931,15 @@ def miniapp_profile_moderation_alarm(
             raise HTTPException(400, "Неизвестный источник тревоги.")
         if payload.location not in NEPTUN_LOCATIONS:
             raise HTTPException(400, "Неизвестный город NEPTUN.")
+        neptun_mode = payload.neptunMode.strip().casefold()
+        if neptun_mode not in {"alerts", "threats"}:
+            raise HTTPException(400, "Неизвестный режим NEPTUN.")
         if payload.automaticEnabled and source == "alerts_in_ua" and not load_config().alerts_api_token:
             raise HTTPException(400, "Для Alerts.in.ua на сервере не настроен ALERTS_API_TOKEN.")
 
         db.set_alarm_api_source(payload.chatId, source, user["id"])
         db.set_alarm_api_location(payload.chatId, payload.location, user["id"])
+        db.set_alarm_api_neptun_mode(payload.chatId, neptun_mode, user["id"])
         db.set_alarm_restrictions_enabled(payload.chatId, payload.restrictionsEnabled, user["id"])
         db.set_alarm_enabled(payload.chatId, payload.manualEnabled, user["id"])
         db.set_alarm_texts(

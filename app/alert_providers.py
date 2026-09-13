@@ -8,6 +8,8 @@ import aiohttp
 
 
 SOURCE_LABELS = {"alerts_in_ua": "Alerts.in.ua", "neptun": "NEPTUN"}
+NEPTUN_MODES = {"alerts": "Официальная тревога", "threats": "Конкретные угрозы"}
+DEFAULT_NEPTUN_MODE = "threats"
 DEFAULT_NEPTUN_LOCATION = "kryvyi-rih"
 NEPTUN_NOTICE = (
     '\n\nДанные: <a href="https://neptun.in.ua/">NEPTUN</a>. '
@@ -103,6 +105,7 @@ class AlertsLocationState:
     source: str = "alerts_in_ua"
     location_title: str = "Криворізький район"
     official_area: str | None = None
+    provider_mode: str | None = None
 
 
 class AlertProvider(Protocol):
@@ -206,17 +209,81 @@ def parse_neptun_alerts(
             if location.district
             else location.oblast
         ),
+        provider_mode="threats",
     )
 
 
+def parse_neptun_official_alerts(
+    payload: object,
+    location_key: str = DEFAULT_NEPTUN_LOCATION,
+) -> AlertsLocationState:
+    """Convert NEPTUN's official district/oblast alarm snapshot."""
+
+    location = NEPTUN_LOCATIONS.get(location_key)
+    if location is None:
+        raise ValueError("NEPTUN: unknown location")
+    if not isinstance(payload, dict):
+        raise ValueError("NEPTUN: expected an alert snapshot")
+    raions = payload.get("raions")
+    oblasts = payload.get("oblasts")
+    if not isinstance(raions, list) or not isinstance(oblasts, list):
+        raise ValueError("NEPTUN: missing raions/oblasts lists")
+
+    def find(items: list[object], expected: str, oblast: str | None = None) -> dict | None:
+        normalized_expected = _normalize_geo_name(expected)
+        normalized_oblast = _normalize_geo_name(oblast or "")
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("NEPTUN: invalid official alert entry")
+            name = item.get("name") or item.get("title")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("NEPTUN: invalid official alert entry")
+            item_oblast = _normalize_geo_name(str(item.get("oblast") or ""))
+            if (
+                _normalize_geo_name(name) == normalized_expected
+                and (not normalized_oblast or item_oblast == normalized_oblast)
+            ):
+                return item
+        return None
+
+    matched = find(raions, location.district, location.oblast) if location.district else None
+    if matched is None:
+        matched = find(oblasts, location.oblast)
+    if matched is None:
+        return AlertsLocationState(
+            "N", source="neptun", location_title=location.city,
+            official_area=location.official_area, provider_mode="alerts",
+        )
+
+    raw_level = str(matched.get("level") or "").strip().casefold()
+    level = raw_level if raw_level in {"yellow", "red"} else None
+    return AlertsLocationState(
+        "A",
+        alert_level=level,
+        source="neptun",
+        location_title=location.city,
+        official_area=location.official_area,
+        provider_mode="alerts",
+    )
+
+
+@dataclass
 class NeptunProvider:
-    """Fetch one shared snapshot; derive each group's city state locally."""
+    """Fetch one NEPTUN endpoint; derive each group's city state locally."""
+
+    mode: str = DEFAULT_NEPTUN_MODE
+
+    def __post_init__(self) -> None:
+        if self.mode not in NEPTUN_MODES:
+            raise ValueError("Unknown NEPTUN mode")
 
     async def fetch(self) -> object:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-            async with session.get("https://neptun.in.ua/api/v1/threats") as response:
+            async with session.get(f"https://neptun.in.ua/api/v1/{self.mode}") as response:
                 response.raise_for_status()
                 return await response.json()
 
     def state_for(self, snapshot: object, location_key: str) -> AlertsLocationState:
+        if self.mode == "alerts":
+            return parse_neptun_official_alerts(snapshot, location_key)
         return parse_neptun_alerts(snapshot, location_key)

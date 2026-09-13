@@ -734,6 +734,7 @@ class Database:
                 disable_requested integer not null default 0,
                 alert_source text not null default 'alerts_in_ua',
                 alert_location text not null default 'kryvyi-rih',
+                neptun_mode text not null default 'threats',
                 last_status text,
                 last_notified_status text,
                 last_alarm_message_id integer,
@@ -1364,6 +1365,8 @@ class Database:
             self._conn.execute("alter table alarm_api_settings add column alert_source text not null default 'alerts_in_ua'")
         if "alert_location" not in columns:
             self._conn.execute("alter table alarm_api_settings add column alert_location text not null default 'kryvyi-rih'")
+        if "neptun_mode" not in columns:
+            self._conn.execute("alter table alarm_api_settings add column neptun_mode text not null default 'threats'")
         if "disable_requested" not in columns:
             self._conn.execute("alter table alarm_api_settings add column disable_requested integer not null default 0")
         if "last_notified_status" not in columns:
@@ -3638,6 +3641,27 @@ class Database:
             "select alert_location from alarm_api_settings where chat_id = ?", (chat_id,)
         ).fetchone()
         return row["alert_location"] if row else "kryvyi-rih"
+
+    def alarm_api_neptun_mode(self, chat_id: int) -> str:
+        row = self._conn.execute(
+            "select neptun_mode from alarm_api_settings where chat_id = ?", (chat_id,)
+        ).fetchone()
+        mode = row["neptun_mode"] if row else "threats"
+        return mode if mode in {"alerts", "threats"} else "threats"
+
+    def set_alarm_api_neptun_mode(self, chat_id: int, mode: str, updated_by: int | None) -> None:
+        from .alert_providers import NEPTUN_MODES
+
+        if mode not in NEPTUN_MODES:
+            raise ValueError("Unknown NEPTUN mode")
+        self._conn.execute(
+            """insert into alarm_api_settings (chat_id, enabled, neptun_mode, updated_by, updated_at)
+               values (?, 0, ?, ?, ?)
+               on conflict(chat_id) do update set neptun_mode = excluded.neptun_mode,
+                   updated_by = excluded.updated_by, updated_at = excluded.updated_at""",
+            (chat_id, mode, updated_by, utc_now()),
+        )
+        self._conn.commit()
 
     def set_alarm_api_location(self, chat_id: int, location: str, updated_by: int | None) -> None:
         from .alert_providers import NEPTUN_LOCATIONS
