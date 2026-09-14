@@ -10,6 +10,21 @@ import pytest
 from app.miniapp_ui import MINI_APP_HTML
 
 
+def run_chrome(chrome, arguments, output_dir, name):
+    """Use files instead of Windows pipes, which are flaky under Python 3.14."""
+    stdout_path = output_dir / f'{name}.out.html'
+    stderr_path = output_dir / f'{name}.err.txt'
+    with stdout_path.open('wb') as stdout, stderr_path.open('wb') as stderr:
+        result = subprocess.run(
+            [chrome, *arguments], stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, timeout=45,
+        )
+    return (
+        result.returncode,
+        stdout_path.read_text(encoding='utf-8'),
+        stderr_path.read_text(encoding='utf-8', errors='replace'),
+    )
+
+
 def test_shop_and_owned_backgrounds_follow_theme(tmp_path):
     chrome = shutil.which('chromium') or shutil.which('google-chrome')
     if not chrome:
@@ -38,8 +53,7 @@ def test_shop_and_owned_backgrounds_follow_theme(tmp_path):
     </script>'''
     page = tmp_path / 'themes.html'
     page.write_text(f'<html><head><meta charset="utf-8"><style>{css}</style></head><body>{fixture}</body></html>', encoding='utf-8')
-    result = subprocess.run([
-        chrome,
+    returncode, output, errors = run_chrome(chrome, [
         '--headless=new',
         '--in-process-gpu',
         '--disable-gpu',
@@ -51,11 +65,10 @@ def test_shop_and_owned_backgrounds_follow_theme(tmp_path):
         '--user-data-dir=' + str(tmp_path / 'browser'),
         '--dump-dom',
         page.as_uri(),
-    ], capture_output=True, timeout=45)
-    output = result.stdout.decode('utf-8')
+    ], tmp_path, 'themes')
     match = re.search(r'<pre id="result">(.*?)</pre>', output, re.S)
-    assert result.returncode == 0, result.stderr.decode('utf-8', errors='replace')[-1000:]
-    assert match, result.stderr.decode('utf-8', errors='replace')[-1000:]
+    assert returncode == 0, errors[-1000:]
+    assert match, errors[-1000:]
     themes = json.loads(match.group(1))
     classic = themes['classic']
     assert classic['surface'] == 'rgb(192, 192, 192)'
@@ -79,7 +92,7 @@ def test_responsive_layout_for_tablet_orientations_and_desktop(tmp_path):
         pytest.skip('Headless Chromium not installed')
     css = re.search(r'<style>(.*?)</style>', MINI_APP_HTML, re.S).group(1)
     fixture = '''<main><header class="top"><h1>Профиль</h1><button class="top-profile">Назад</button></header>
-    <div id="content"><section class="panel">Один</section><section class="panel"><div class="profile-grid"><div class="profile-card">1</div><div class="profile-card">2</div><div class="profile-card">3</div></div></section><section class="panel">Три</section><section class="panel">Назад</section></div></main>
+    <div id="content"><section class="panel">Один</section><section class="panel"><div class="profile-grid"><div class="profile-card">1</div><div class="profile-card">2</div><div class="profile-card">3</div></div></section><section class="panel">Три</section><section class="panel">Четыре</section><section class="panel">Пять</section><section class="panel">Назад</section></div></main>
     <pre id="result"></pre><script>
     const style = node => getComputedStyle(node);
     const columns = value => value.split(/\\s+/).filter(Boolean).length;
@@ -92,7 +105,9 @@ def test_responsive_layout_for_tablet_orientations_and_desktop(tmp_path):
       mainWidth: document.querySelector('main').getBoundingClientRect().width,
       contentDisplay: style(document.getElementById('content')).display,
       contentColumns: columns(style(document.getElementById('content')).gridTemplateColumns),
+      contentAlign: style(document.getElementById('content')).alignItems,
       profileColumns: columns(style(document.querySelector('.profile-grid')).gridTemplateColumns),
+      lastContentSpan: style(document.querySelector('#content > .panel:nth-last-child(2)')).gridColumnEnd,
       overflow: document.documentElement.scrollWidth > innerWidth,
       labelOverflow: style(source.querySelector('label:last-child')).overflow
     });
@@ -104,18 +119,17 @@ def test_responsive_layout_for_tablet_orientations_and_desktop(tmp_path):
             f'<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>{css}</style></head><body data-view="profile">{fixture}</body></html>',
             encoding='utf-8',
         )
-        result = subprocess.run([
-            chrome, '--headless=new', '--in-process-gpu', '--disable-gpu',
+        returncode, output, errors = run_chrome(chrome, [
+            '--headless=new', '--in-process-gpu', '--disable-gpu',
             '--disable-features=Vulkan,SkiaGraphite,UseDawn', '--no-sandbox',
             '--no-first-run', '--no-default-browser-check', '--no-proxy-server',
             f'--window-size={width},{height}', '--force-device-scale-factor=1',
             '--user-data-dir=' + str(tmp_path / f'browser-{width}-{height}'),
             '--dump-dom', page.as_uri(),
-        ], capture_output=True, timeout=45)
-        output = result.stdout.decode('utf-8')
+        ], tmp_path, f'layout-{width}-{height}')
         match = re.search(r'<pre id="result">(.*?)</pre>', output, re.S)
-        assert result.returncode == 0, result.stderr.decode('utf-8', errors='replace')[-1000:]
-        assert match, result.stderr.decode('utf-8', errors='replace')[-1000:]
+        assert returncode == 0, errors[-1000:]
+        assert match, errors[-1000:]
         return json.loads(match.group(1))
 
     portrait = render(800, 1100)
@@ -127,7 +141,9 @@ def test_responsive_layout_for_tablet_orientations_and_desktop(tmp_path):
     for layout in (landscape, desktop):
         assert layout['contentDisplay'] == 'grid'
         assert layout['contentColumns'] == 2
+        assert layout['contentAlign'] == 'stretch'
         assert layout['profileColumns'] == 3
+        assert layout['lastContentSpan'] == '-1'
         assert layout['overflow'] is False
         assert layout['labelOverflow'] == 'hidden'
-    assert desktop['mainWidth'] >= 1150
+    assert 1000 <= desktop['mainWidth'] <= 1060

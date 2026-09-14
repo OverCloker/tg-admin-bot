@@ -1559,6 +1559,7 @@ MINI_APP_HTML = r"""<!doctype html>
       body[data-view="reminders"] main,
       body[data-view="radio"] main { width: min(100%, 820px); }
       body[data-view="mine"] main { width: min(100%, 1100px); }
+      body[data-view="profile"] main { width: min(100%, 1020px); }
       body[data-view="profile"] #content,
       body[data-view="adminPanel"] #content,
       body[data-view="mine"] #content,
@@ -1566,9 +1567,11 @@ MINI_APP_HTML = r"""<!doctype html>
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 16px;
-        align-items: start;
+        align-items: stretch;
         margin-top: 16px;
       }
+      body[data-view="mine"] #content,
+      .mine-admin-screen { align-items: start; }
       body[data-view="profile"] #content > .panel,
       body[data-view="adminPanel"] #content > .panel,
       body[data-view="mine"] #content > :is(.panel, .stats, .utility-actions),
@@ -1576,12 +1579,15 @@ MINI_APP_HTML = r"""<!doctype html>
       body[data-view="profile"] #content > .panel:first-child,
       body[data-view="profile"] #content > .panel:nth-child(2),
       body[data-view="profile"] #content > .panel:last-child,
+      body[data-view="profile"] #content > .panel:nth-last-child(2),
       body[data-view="adminPanel"] #content > .panel:first-child,
       body[data-view="adminPanel"] #content > .panel:last-child,
       body[data-view="mine"] #content > :is(.stats, .utility-actions),
       .mine-admin-screen > .panel:first-child,
       .mine-admin-screen > .panel:nth-last-child(2),
       .mine-admin-screen > .panel:last-child { grid-column: 1 / -1; }
+      body[data-view="profile"] #content > .panel,
+      body[data-view="adminPanel"] #content > .panel { height: 100%; }
       body[data-view="adminPanel"] #content > .panel:nth-child(2):nth-last-child(2) {
         grid-column: 1 / -1;
       }
@@ -1616,6 +1622,7 @@ MINI_APP_HTML = r"""<!doctype html>
     @media (min-width: 1280px) {
       main { width: min(100%, 1220px); }
       body[data-view="mine"] main { width: min(100%, 1180px); }
+      body[data-view="profile"] main { width: min(100%, 1060px); }
       .panel { padding: 22px; }
     }
     @media (prefers-reduced-motion: reduce) {
