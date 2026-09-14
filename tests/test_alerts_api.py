@@ -494,7 +494,12 @@ def test_regular_alarm_update_edits_existing_status_message(monkeypatch) -> None
     )
 
     assert updated is True
-    fake_bot.edit_message_text.assert_awaited_once()
+    fake_bot.edit_message_text.assert_awaited_once_with(
+        chat_id=-100,
+        message_id=321,
+        text=bot_module.build_alarm_alert_text(AlertsLocationState(status="A", alert_level="red")),
+        disable_web_page_preview=True,
+    )
 
 
 def test_alerts_api_is_polled_every_30_seconds() -> None:

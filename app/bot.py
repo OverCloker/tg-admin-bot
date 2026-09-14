@@ -10857,7 +10857,12 @@ async def edit_alarm_status_message(
     message_id = db.alarm_api_status_message_id(chat_id, "A")
     if message_id is not None:
         try:
-            await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text)
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                disable_web_page_preview=True,
+            )
             return True
         except TelegramBadRequest as exc:
             if "message is not modified" in str(exc).casefold():
