@@ -8,7 +8,11 @@ from typing import Protocol
 import aiohttp
 
 
-SOURCE_LABELS = {"alerts_in_ua": "Alerts.in.ua", "neptun": "NEPTUN"}
+SOURCE_LABELS = {
+    "alerts_in_ua": "Alerts.in.ua",
+    "neptun": "NEPTUN",
+    "ukraine_alarm": "UkraineAlarm",
+}
 DEFAULT_NEPTUN_LOCATION = "kryvyi-rih"
 NEPTUN_NOTICE = (
     '\n\nДанные: <a href="https://neptun.in.ua/">NEPTUN</a>. '
@@ -302,3 +306,151 @@ class NeptunProvider:
             provider_mode="combined",
             official_alert=official_active,
         )
+
+
+def _ukraine_alarm_threat_type(alert_type: str, reason: str, level: str | None) -> str:
+    normalized = reason.casefold()
+    if alert_type == "ARTILLERY":
+        return "artillery"
+    if alert_type == "URBAN_FIGHTS":
+        return "urban_fights"
+    if alert_type == "CHEMICAL":
+        return "chemical"
+    if alert_type == "NUCLEAR":
+        return "nuclear"
+    if alert_type == "INFO":
+        return "info"
+    if any(word in normalized for word in ("дрон", "бпла", "шахед")):
+        return "drones"
+    if "баліст" in normalized or "баллист" in normalized:
+        return "ballistic_missiles"
+    if "крилат" in normalized or "крылат" in normalized:
+        return "cruise_missiles"
+    if any(word in normalized for word in ("каб", "керован", "управляем")):
+        return "guided_aerial_bombs"
+    if "міг-31" in normalized or "миг-31" in normalized:
+        return "mig31k_departure"
+    if "ракет" in normalized:
+        return "unspecified_missiles"
+    if level == "yellow":
+        return "air_yellow_level"
+    if level == "red":
+        return "air_red_level"
+    return "unknown"
+
+
+def parse_ukraine_alarm_alerts(
+    payload: object,
+    location_key: str = DEFAULT_NEPTUN_LOCATION,
+) -> AlertsLocationState:
+    """Convert UkraineAlarm v3 active regions and AIR levels for one city."""
+
+    location = NEPTUN_LOCATIONS.get(location_key)
+    if location is None:
+        raise ValueError("UkraineAlarm: unknown location")
+    if not isinstance(payload, list):
+        raise ValueError("UkraineAlarm: expected a region list")
+    names = {
+        _normalize_geo_name(value)
+        for value in (location.city, location.district or "", location.oblast)
+        if value
+    }
+    active = False
+    air_active = False
+    threats: list[AlertsThreat] = []
+    seen: set[tuple[str, str | None, str | None, str | None]] = set()
+    for region in payload:
+        if not isinstance(region, dict):
+            raise ValueError("UkraineAlarm: invalid region entry")
+        region_name = region.get("regionName")
+        active_alerts = region.get("activeAlerts")
+        if not isinstance(region_name, str) or not isinstance(active_alerts, list):
+            raise ValueError("UkraineAlarm: invalid region fields")
+        if _normalize_geo_name(region_name) not in names:
+            continue
+        for alert in active_alerts:
+            if not isinstance(alert, dict) or not isinstance(alert.get("type"), str):
+                raise ValueError("UkraineAlarm: invalid alert entry")
+            alert_type = alert["type"].strip().upper()
+            active = True
+            if alert_type == "AIR":
+                air_active = True
+                levels = alert.get("activeAlertLevels") or []
+                if not isinstance(levels, list):
+                    raise ValueError("UkraineAlarm: invalid AIR levels")
+                for item in levels:
+                    if not isinstance(item, dict):
+                        raise ValueError("UkraineAlarm: invalid AIR level")
+                    raw_level = str(item.get("alertLevel") or "").strip().casefold()
+                    if raw_level not in {"red", "yellow"}:
+                        continue
+                    reason = str(item.get("reason") or "").strip() or None
+                    created_at = str(item.get("createdAt") or "").strip() or None
+                    threat_type = _ukraine_alarm_threat_type(alert_type, reason or "", raw_level)
+                    key = (threat_type, raw_level, reason, region_name)
+                    if key not in seen:
+                        seen.add(key)
+                        threats.append(AlertsThreat(threat_type, raw_level, created_at, reason, region_name))
+                continue
+            reason = alert_type.replace("_", " ").lower()
+            threat_type = _ukraine_alarm_threat_type(alert_type, reason, "red")
+            key = (threat_type, "red", None, region_name)
+            if key not in seen:
+                seen.add(key)
+                threats.append(AlertsThreat(
+                    threat_type, "red", str(alert.get("lastUpdate") or "").strip() or None,
+                    None, region_name,
+                ))
+    level = (
+        "red" if any(item.level == "red" for item in threats)
+        else "yellow" if any(item.level == "yellow" for item in threats)
+        else None
+    )
+    return AlertsLocationState(
+        "A" if active else "N",
+        alert_level=level,
+        threats=tuple(threats),
+        source="ukraine_alarm",
+        location_title=location.city,
+        official_area=(
+            f"{location.official_area}, {location.oblast}"
+            if location.district else location.oblast
+        ),
+        provider_mode="ukraine_alarm",
+        official_alert=air_active,
+    )
+
+
+class UkraineAlarmProvider:
+    """Poll the lightweight revision and refresh all active regions on change."""
+
+    def __init__(self, token: str) -> None:
+        if not token.strip():
+            raise ValueError("UkraineAlarm token is required")
+        self._token = token.strip()
+        self._last_action_index: int | float | None = None
+        self._snapshot: object | None = None
+
+    async def fetch(self) -> object:
+        headers = {"Authorization": self._token, "Accept": "application/json"}
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get("https://api.ukrainealarm.com/api/v3/alerts/status") as response:
+                response.raise_for_status()
+                status = await response.json()
+            if not isinstance(status, dict) or not isinstance(status.get("lastActionIndex"), (int, float)):
+                raise ValueError("UkraineAlarm: invalid status response")
+            action_index = status["lastActionIndex"]
+            if self._snapshot is not None and action_index == self._last_action_index:
+                return self._snapshot
+            async with session.get("https://api.ukrainealarm.com/api/v3/alerts") as response:
+                response.raise_for_status()
+                snapshot = await response.json()
+        if not isinstance(snapshot, list):
+            raise ValueError("UkraineAlarm: invalid alerts response")
+        self._last_action_index = action_index
+        self._snapshot = snapshot
+        return snapshot
+
+    def state_for(self, snapshot: object, location_key: str) -> AlertsLocationState:
+        return parse_ukraine_alarm_alerts(snapshot, location_key)

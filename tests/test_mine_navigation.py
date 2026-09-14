@@ -195,6 +195,7 @@ def test_shop_deep_link_opens_a_distinct_compact_screen() -> None:
 def test_moderation_contains_alarm_source_switch_and_settings_endpoint() -> None:
     assert 'id="alarmSourceAlerts"' in MINI_APP_HTML
     assert 'id="alarmSourceNeptun"' in MINI_APP_HTML
+    assert 'id="alarmSourceUkraineAlarm"' in MINI_APP_HTML
     assert 'class="alarm-source-knob"' in MINI_APP_HTML
     assert "NEPTUN объединяет официальный статус тревоги" in MINI_APP_HTML
     assert 'id="neptunModeAlerts"' not in MINI_APP_HTML

@@ -927,7 +927,7 @@ MINI_APP_HTML = r"""<!doctype html>
     .alarm-source-track {
       position: relative;
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(3, 1fr);
       min-height: 48px;
       overflow: hidden;
       border: 1px solid color-mix(in srgb, var(--line) 72%, #ffffff);
@@ -948,7 +948,7 @@ MINI_APP_HTML = r"""<!doctype html>
       position: absolute;
       top: 4px;
       left: 4px;
-      width: calc(50% - 6px);
+      width: calc(33.333% - 6px);
       height: calc(100% - 8px);
       border: 1px solid color-mix(in srgb, var(--accent) 70%, #ffffff);
       border-radius: 999px;
@@ -958,6 +958,7 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     #alarmSourceAlerts:checked ~ .alarm-source-track .alarm-source-knob { transform: translateX(0); }
     #alarmSourceNeptun:checked ~ .alarm-source-track .alarm-source-knob { transform: translateX(calc(100% + 4px)); }
+    #alarmSourceUkraineAlarm:checked ~ .alarm-source-track .alarm-source-knob { transform: translateX(calc(200% + 8px)); }
     .alarm-source-switch:focus-within .alarm-source-track {
       outline: 3px solid color-mix(in srgb, var(--accent) 24%, transparent);
       outline-offset: 4px;
@@ -2479,19 +2480,21 @@ MINI_APP_HTML = r"""<!doctype html>
         ${alarm.canManage ? `<div class="alarm-source-switch">
           <input type="radio" name="alarmSource" id="alarmSourceAlerts" value="alerts_in_ua" ${alarm.source === "alerts_in_ua" ? "checked" : ""} onchange="toggleAlarmLocation()">
           <input type="radio" name="alarmSource" id="alarmSourceNeptun" value="neptun" ${alarm.source === "neptun" ? "checked" : ""} onchange="toggleAlarmLocation()">
+          <input type="radio" name="alarmSource" id="alarmSourceUkraineAlarm" value="ukraine_alarm" ${alarm.source === "ukraine_alarm" ? "checked" : ""} onchange="toggleAlarmLocation()">
           <div class="alarm-source-track">
             <span class="alarm-source-knob"></span>
             <label for="alarmSourceAlerts">Alerts.in.ua</label>
             <label for="alarmSourceNeptun">NEPTUN</label>
+            <label for="alarmSourceUkraineAlarm">UkraineAlarm</label>
           </div>
         </div>
-        <div id="alarmLocationBlock" class="mine-admin-form wide" style="${alarm.source === "neptun" ? "" : "display:none"}">
-          <label class="wide">Город NEPTUN
+        <div id="alarmLocationBlock" class="mine-admin-form wide" style="${["neptun", "ukraine_alarm"].includes(alarm.source) ? "" : "display:none"}">
+          <label class="wide">Город / территория
             <select id="alarmLocation" class="wide">
               ${(alarm.locations || []).map(item => `<option value="${escapeHtml(item.key)}" ${item.key === alarm.location ? "selected" : ""}>${escapeHtml(item.title)} · ${escapeHtml(item.area)}</option>`).join("")}
             </select>
           </label>
-          <p class="muted wide">NEPTUN объединяет официальный статус тревоги и конкретные активные угрозы.</p>
+          <p id="alarmLocationHint" class="muted wide">${alarm.source === "ukraine_alarm" ? "UkraineAlarm передаёт официальные тревоги, уровни Yellow/Red и причины угроз." : "NEPTUN объединяет официальный статус тревоги и конкретные активные угрозы."}</p>
         </div>
         <div class="settings-checks">
           <label><input id="alarmAutomatic" type="checkbox" ${alarm.automaticEnabled ? "checked" : ""}> Автоматические оповещения${alarm.turningOff ? " (идёт отключение…)" : ""}</label>
@@ -2525,7 +2528,12 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function toggleAlarmLocation() {
     const block = document.getElementById("alarmLocationBlock");
-    if (block) block.style.display = document.getElementById("alarmSourceNeptun")?.checked ? "" : "none";
+    const source = document.querySelector('input[name="alarmSource"]:checked')?.value || "alerts_in_ua";
+    if (block) block.style.display = ["neptun", "ukraine_alarm"].includes(source) ? "" : "none";
+    const hint = document.getElementById("alarmLocationHint");
+    if (hint) hint.textContent = source === "ukraine_alarm"
+      ? "UkraineAlarm передаёт официальные тревоги, уровни Yellow/Red и причины угроз."
+      : "NEPTUN объединяет официальный статус тревоги и конкретные активные угрозы.";
   }
 
   async function saveModerationAlarm(chatId) {

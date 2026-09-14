@@ -42,6 +42,7 @@ from .alert_providers import (
     AlertsLocationState,
     AlertsThreat,
     NeptunProvider,
+    UkraineAlarmProvider,
 )
 from .alerts_diagnostics import save_alerts_response
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
@@ -198,6 +199,13 @@ ALERTS_THREAT_LABELS = {
     "drones": "ударные БПЛА",
     "guided_aerial_bombs": "управляемые авиабомбы",
     "air_defense": "работа ПВО",
+    "air_yellow_level": "жёлтый уровень воздушной тревоги",
+    "air_red_level": "красный уровень воздушной тревоги",
+    "artillery": "угроза артобстрела",
+    "urban_fights": "уличные бои",
+    "chemical": "химическая угроза",
+    "nuclear": "радиационная угроза",
+    "info": "информационное предупреждение",
     "unknown": "неуточнённая угроза",
 }
 ALERTS_IMPORTANT_THREATS = {
@@ -646,6 +654,7 @@ router = Router()
 db: Database
 BOT_ADMIN_IDS: set[int] = set()
 ALERTS_API_TOKEN: str | None = None
+UKRAINE_ALARM_API_TOKEN: str | None = None
 staff_service: StaffService | None = None
 premium_service: PremiumService | None = None
 BOT_STARTED_AT = datetime.now(timezone.utc)
@@ -820,7 +829,7 @@ def cached_alarm_runtime(chat_id: int) -> tuple[bool, bool, str | None, bool]:
 
 
 def configured_alert_location(chat_id: int) -> str:
-    if db.alarm_api_source(chat_id) != "neptun":
+    if db.alarm_api_source(chat_id) == "alerts_in_ua":
         return ALERTS_LOCATION_TITLE
     location = NEPTUN_LOCATIONS.get(db.alarm_api_location(chat_id))
     if location is None:
@@ -8672,6 +8681,9 @@ async def cb_alarm(callback: CallbackQuery, state: FSMContext) -> None:
             if source == "alerts_in_ua" and not ALERTS_API_TOKEN:
                 await callback.answer("Добавь ALERTS_API_TOKEN в .env и перезапусти бота.", show_alert=True)
                 return
+            if source == "ukraine_alarm" and not UKRAINE_ALARM_API_TOKEN:
+                await callback.answer("Добавь UKRAINE_ALARM_API_TOKEN в .env и перезапусти бота.", show_alert=True)
+                return
             db.set_alarm_api_source(chat_id, source, callback.from_user.id)
             invalidate_chat_runtime_cache(chat_id)
         source = db.alarm_api_source(chat_id)
@@ -8719,10 +8731,10 @@ async def cb_alarm(callback: CallbackQuery, state: FSMContext) -> None:
         await safe_edit(
             callback,
             f"Группа: <b>{mention_chat(chat)}</b>\n\n"
-            f"Город NEPTUN: <b>{location.city}</b>\n"
+            f"Город / территория: <b>{location.city}</b>\n"
             f"Зона отслеживания: <b>{official_area}</b>.\n\n"
-            "NEPTUN публикует активные угрозы с территорией, поэтому город "
-            "сопоставлен с населённым пунктом, районом и областью.",
+            "Источник сопоставляет выбранный город с населённым пунктом, "
+            "районом и областью.",
             reply_markup=neptun_location_menu(chat_id, selected, page),
         )
     elif action == "api":
@@ -8730,6 +8742,9 @@ async def cb_alarm(callback: CallbackQuery, state: FSMContext) -> None:
             return
         if not db.alarm_api_enabled(chat_id) and db.alarm_api_source(chat_id) == "alerts_in_ua" and not ALERTS_API_TOKEN:
             await callback.answer("Добавь ALERTS_API_TOKEN в файл .env и перезапусти бота.", show_alert=True)
+            return
+        if not db.alarm_api_enabled(chat_id) and db.alarm_api_source(chat_id) == "ukraine_alarm" and not UKRAINE_ALARM_API_TOKEN:
+            await callback.answer("Добавь UKRAINE_ALARM_API_TOKEN в файл .env и перезапусти бота.", show_alert=True)
             return
         enabled = not db.alarm_api_enabled(chat_id)
         previous_status = db.alarm_api_last_status(chat_id)
@@ -10779,6 +10794,15 @@ def build_alarm_alert_text(state: AlertsLocationState) -> str:
         lines.append("ℹ️ Данные обновляются автоматически каждые 30 секунд.")
         lines.append(NEPTUN_NOTICE.strip())
         return "\n\n".join(lines)
+    if state.source == "ukraine_alarm" and not state.official_alert:
+        lines = [
+            f"UkraineAlarm сообщает: активная угроза для <b>{escape(state.location_title)}</b>."
+        ]
+        details = format_alerts_location_details(state)
+        if details:
+            lines.append(details)
+        lines.append("ℹ️ Данные обновляются автоматически каждые 30 секунд.")
+        return "\n\n".join(lines)
     alarm_kind = "частичная воздушная тревога" if state.status == "P" else "воздушная тревога"
     lines = [
         f"{SOURCE_LABELS[state.source]} сообщает: объявлена {alarm_kind} — "
@@ -11103,6 +11127,8 @@ async def deactivate_alarm_from_api(bot: Bot, chat_id: int, source: str = "alert
             "🟢 <b>NEPTUN: воздушная тревога отбита, активных угроз для города нет.</b>"
             + NEPTUN_NOTICE
             if source == "neptun"
+            else "🟢 <b>UkraineAlarm: тревога и активные угрозы завершены.</b>"
+            if source == "ukraine_alarm"
             else "🟢 <b>Отбой воздушной тревоги.</b>"
         ),
     )
@@ -11126,6 +11152,8 @@ async def alerts_monitor_loop(bot: Bot) -> None:
         "alerts_in_ua": AlertsInUaProvider(lambda: fetch_alerts_location_state()),
         "neptun": NeptunProvider(),
     }
+    if UKRAINE_ALARM_API_TOKEN:
+        providers["ukraine_alarm"] = UkraineAlarmProvider(UKRAINE_ALARM_API_TOKEN)
     selections_seen: dict[int, tuple[str, str]] = {}
     notified_states: dict[int, AlertsLocationState] = {}
     pending_escalations: dict[int, AlertsEscalationCandidate] = {}
@@ -11150,7 +11178,9 @@ async def alerts_monitor_loop(bot: Bot) -> None:
             chat_ids = active_chat_ids
             sources = {chat_id: db.alarm_api_source(chat_id) for chat_id in chat_ids}
             locations = {chat_id: db.alarm_api_location(chat_id) for chat_id in chat_ids}
-            requested = sorted(set(sources.values()))
+            requested = sorted(source for source in set(sources.values()) if source in providers)
+            for source in sorted(set(sources.values()) - providers.keys()):
+                logging.warning("Alert provider %s is selected but not configured", source)
             results = await asyncio.gather(
                 *(providers[source].fetch() for source in requested), return_exceptions=True
             )
@@ -11296,7 +11326,7 @@ def alarm_status_text(chat_id: int) -> str:
         if source == "alerts_in_ua"
         else PROVIDER_STATES.get((source, location))
     )
-    if source == "neptun":
+    if source in {"neptun", "ukraine_alarm"}:
         configured = NEPTUN_LOCATIONS.get(location, NEPTUN_LOCATIONS[DEFAULT_NEPTUN_LOCATION])
         city = state.location_title if state is not None else configured.city
         lines = [f"Город: <b>{escape(city)}</b>"]
@@ -11323,7 +11353,10 @@ def alarm_status_text(chat_id: int) -> str:
             icon = "🔴" if state.alert_level == "red" else "🟡"
             threat_text = ", ".join(labels) if labels else "активная угроза"
             lines.append(f"{icon} Угроза: <b>{escape(threat_text)}</b>.")
-        lines.append('Источник: <a href="https://neptun.in.ua/">NEPTUN</a>.')
+        if source == "neptun":
+            lines.append('Источник: <a href="https://neptun.in.ua/">NEPTUN</a>.')
+        else:
+            lines.append("Источник: <b>UkraineAlarm</b>.")
         return "\n".join(lines)
     if state is not None:
         return format_current_alarm_status(state)
@@ -13698,10 +13731,12 @@ async def main() -> None:
     global db
     global BOT_ADMIN_IDS
     global ALERTS_API_TOKEN
+    global UKRAINE_ALARM_API_TOKEN
     global staff_service
     global premium_service
     BOT_ADMIN_IDS = config.bot_admin_ids
     ALERTS_API_TOKEN = config.alerts_api_token
+    UKRAINE_ALARM_API_TOKEN = config.ukraine_alarm_api_token
     db = Database(config.db_path)
     db.init()
     premium_service = PremiumService(config.db_path)

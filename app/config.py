@@ -13,6 +13,7 @@ class Config:
     bot_admin_ids: set[int]
     owner_id: int | None
     alerts_api_token: str | None
+    ukraine_alarm_api_token: str | None = None
 
 
 def load_config() -> Config:
@@ -41,4 +42,5 @@ def load_config() -> Config:
         bot_admin_ids=admin_ids,
         owner_id=owner_id,
         alerts_api_token=os.getenv("ALERTS_API_TOKEN", "").strip() or None,
+        ukraine_alarm_api_token=os.getenv("UKRAINE_ALARM_API_TOKEN", "").strip() or None,
     )

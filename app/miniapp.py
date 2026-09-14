@@ -2928,9 +2928,13 @@ def miniapp_profile_moderation_alarm(
         if source not in SOURCE_LABELS:
             raise HTTPException(400, "Неизвестный источник тревоги.")
         if payload.location not in NEPTUN_LOCATIONS:
-            raise HTTPException(400, "Неизвестный город NEPTUN.")
-        if payload.automaticEnabled and source == "alerts_in_ua" and not load_config().alerts_api_token:
-            raise HTTPException(400, "Для Alerts.in.ua на сервере не настроен ALERTS_API_TOKEN.")
+            raise HTTPException(400, "Неизвестный город или территория.")
+        if payload.automaticEnabled and source in {"alerts_in_ua", "ukraine_alarm"}:
+            config = load_config()
+            if source == "alerts_in_ua" and not config.alerts_api_token:
+                raise HTTPException(400, "Для Alerts.in.ua на сервере не настроен ALERTS_API_TOKEN.")
+            if source == "ukraine_alarm" and not config.ukraine_alarm_api_token:
+                raise HTTPException(400, "Для UkraineAlarm на сервере не настроен UKRAINE_ALARM_API_TOKEN.")
 
         db.set_alarm_api_source(payload.chatId, source, user["id"])
         db.set_alarm_api_location(payload.chatId, payload.location, user["id"])
