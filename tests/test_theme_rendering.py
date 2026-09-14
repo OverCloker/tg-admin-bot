@@ -68,3 +68,66 @@ def test_shop_and_owned_backgrounds_follow_theme(tmp_path):
     assert themes['classic']['frame'] == themes['expressive']['frame']
     assert themes['glass']['name'] == themes['glass']['coins'] == 'rgb(251, 253, 255)'
     assert themes['expressive']['name'] == themes['expressive']['coins'] == 'rgb(251, 252, 255)'
+
+
+def test_responsive_layout_for_tablet_orientations_and_desktop(tmp_path):
+    chrome = shutil.which('chromium') or shutil.which('google-chrome')
+    if not chrome:
+        candidate = Path('C:/Program Files/Google/Chrome/Application/chrome.exe')
+        chrome = str(candidate) if candidate.exists() else None
+    if not chrome:
+        pytest.skip('Headless Chromium not installed')
+    css = re.search(r'<style>(.*?)</style>', MINI_APP_HTML, re.S).group(1)
+    fixture = '''<main><header class="top"><h1>Профиль</h1><button class="top-profile">Назад</button></header>
+    <div id="content"><section class="panel">Один</section><section class="panel"><div class="profile-grid"><div class="profile-card">1</div><div class="profile-card">2</div><div class="profile-card">3</div></div></section><section class="panel">Три</section><section class="panel">Назад</section></div></main>
+    <pre id="result"></pre><script>
+    const style = node => getComputedStyle(node);
+    const columns = value => value.split(/\\s+/).filter(Boolean).length;
+    const source = document.createElement('div');
+    source.className = 'alarm-source-track';
+    source.innerHTML = '<label>Alerts.in.ua</label><label>NEPTUN</label><label>UkraineAlarm</label>';
+    document.querySelector('.panel').appendChild(source);
+    document.getElementById('result').textContent=JSON.stringify({
+      viewport: innerWidth,
+      mainWidth: document.querySelector('main').getBoundingClientRect().width,
+      contentDisplay: style(document.getElementById('content')).display,
+      contentColumns: columns(style(document.getElementById('content')).gridTemplateColumns),
+      profileColumns: columns(style(document.querySelector('.profile-grid')).gridTemplateColumns),
+      overflow: document.documentElement.scrollWidth > innerWidth,
+      labelOverflow: style(source.querySelector('label:last-child')).overflow
+    });
+    </script>'''
+
+    def render(width, height):
+        page = tmp_path / f'layout-{width}-{height}.html'
+        page.write_text(
+            f'<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>{css}</style></head><body data-view="profile">{fixture}</body></html>',
+            encoding='utf-8',
+        )
+        result = subprocess.run([
+            chrome, '--headless=new', '--in-process-gpu', '--disable-gpu',
+            '--disable-features=Vulkan,SkiaGraphite,UseDawn', '--no-sandbox',
+            '--no-first-run', '--no-default-browser-check', '--no-proxy-server',
+            f'--window-size={width},{height}', '--force-device-scale-factor=1',
+            '--user-data-dir=' + str(tmp_path / f'browser-{width}-{height}'),
+            '--dump-dom', page.as_uri(),
+        ], capture_output=True, timeout=45)
+        output = result.stdout.decode('utf-8')
+        match = re.search(r'<pre id="result">(.*?)</pre>', output, re.S)
+        assert result.returncode == 0, result.stderr.decode('utf-8', errors='replace')[-1000:]
+        assert match, result.stderr.decode('utf-8', errors='replace')[-1000:]
+        return json.loads(match.group(1))
+
+    portrait = render(800, 1100)
+    landscape = render(1024, 700)
+    desktop = render(1440, 900)
+    assert portrait['contentDisplay'] == 'block'
+    assert 700 <= portrait['mainWidth'] <= 760
+    assert portrait['profileColumns'] == 3
+    for layout in (landscape, desktop):
+        assert layout['contentDisplay'] == 'grid'
+        assert layout['contentColumns'] == 2
+        assert layout['profileColumns'] == 3
+        assert layout['overflow'] is False
+        assert layout['labelOverflow'] == 'hidden'
+    assert desktop['mainWidth'] >= 1150

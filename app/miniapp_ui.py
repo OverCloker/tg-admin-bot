@@ -1538,6 +1538,86 @@ MINI_APP_HTML = r"""<!doctype html>
     @keyframes chest-glow {
       45% { box-shadow: 0 0 35px #f8c34c99; }
     }
+    @media (min-width: 700px) {
+      body {
+        padding: max(22px, env(safe-area-inset-top)) 24px max(30px, env(safe-area-inset-bottom));
+      }
+      main { width: min(100%, 760px); }
+      h1 { font-size: 36px; }
+      .panel { padding: 20px; }
+      .profile-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+      .mine-admin-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+      .role-manager-form { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
+      .role-manager-form .btn { width: auto; min-width: 150px; margin: 0; }
+      .personal-weather-toggle { grid-template-columns: auto minmax(0, 1fr) 140px; }
+      .persistent-radio { width: min(calc(100% - 48px), 720px); }
+    }
+    @media (min-width: 960px) {
+      body { padding-inline: 28px; }
+      main { width: min(100%, 1120px); }
+      body[data-view="weather"] main,
+      body[data-view="reminders"] main,
+      body[data-view="radio"] main { width: min(100%, 820px); }
+      body[data-view="mine"] main { width: min(100%, 1100px); }
+      body[data-view="profile"] #content,
+      body[data-view="adminPanel"] #content,
+      body[data-view="mine"] #content,
+      .mine-admin-screen {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+        align-items: start;
+        margin-top: 16px;
+      }
+      body[data-view="profile"] #content > .panel,
+      body[data-view="adminPanel"] #content > .panel,
+      body[data-view="mine"] #content > :is(.panel, .stats, .utility-actions),
+      .mine-admin-screen > .panel { margin-top: 0; }
+      body[data-view="profile"] #content > .panel:first-child,
+      body[data-view="profile"] #content > .panel:nth-child(2),
+      body[data-view="profile"] #content > .panel:last-child,
+      body[data-view="adminPanel"] #content > .panel:first-child,
+      body[data-view="adminPanel"] #content > .panel:last-child,
+      body[data-view="mine"] #content > :is(.stats, .utility-actions),
+      .mine-admin-screen > .panel:first-child,
+      .mine-admin-screen > .panel:nth-last-child(2),
+      .mine-admin-screen > .panel:last-child { grid-column: 1 / -1; }
+      body[data-view="adminPanel"] #content > .panel:nth-child(2):nth-last-child(2) {
+        grid-column: 1 / -1;
+      }
+      body[data-view="adminPanel"] #content > .panel > .role-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .admin-list-row,
+      .mine-admin-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 14px;
+      }
+      .admin-list-row > .utility-actions,
+      .mine-admin-row > .utility-actions { width: auto; min-width: 230px; }
+      .mine-admin-row > .btn { width: auto; min-width: 170px; }
+      .shop-products {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        padding: 14px;
+      }
+      .product {
+        min-width: 0;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: color-mix(in srgb, var(--panel-color) 88%, var(--accent) 4%);
+      }
+      .product:last-child { border-bottom: 1px solid var(--line); }
+      .inventory { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+      .persistent-radio { width: min(calc(100% - 56px), 820px); }
+    }
+    @media (min-width: 1280px) {
+      main { width: min(100%, 1220px); }
+      body[data-view="mine"] main { width: min(100%, 1180px); }
+      .panel { padding: 22px; }
+    }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation: none !important; transition: none !important; }
     }
