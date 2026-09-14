@@ -939,10 +939,17 @@ MINI_APP_HTML = r"""<!doctype html>
       z-index: 2;
       display: grid;
       place-items: center;
-      padding: 10px;
+      min-width: 0;
+      padding: 8px 2px;
       cursor: pointer;
+      overflow: hidden;
+      font-size: clamp(11px, 3vw, 14px);
       font-weight: 850;
+      line-height: 1.1;
+      letter-spacing: -.02em;
       text-align: center;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .alarm-source-knob {
       position: absolute;

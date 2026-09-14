@@ -197,6 +197,8 @@ def test_moderation_contains_alarm_source_switch_and_settings_endpoint() -> None
     assert 'id="alarmSourceNeptun"' in MINI_APP_HTML
     assert 'id="alarmSourceUkraineAlarm"' in MINI_APP_HTML
     assert 'class="alarm-source-knob"' in MINI_APP_HTML
+    assert "font-size: clamp(11px, 3vw, 14px)" in MINI_APP_HTML
+    assert "text-overflow: ellipsis" in MINI_APP_HTML
     assert "NEPTUN объединяет официальный статус тревоги" in MINI_APP_HTML
     assert 'id="neptunModeAlerts"' not in MINI_APP_HTML
     assert '"/miniapp/profile/moderation/alarm"' in MINI_APP_HTML
