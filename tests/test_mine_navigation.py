@@ -330,8 +330,9 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'api(`/miniapp/radio/search?q=${encodeURIComponent(query)}`)' in MINI_APP_HTML
     assert 'station.streamUrl || station.url_resolved || station.url' in MINI_APP_HTML
     assert 'class="persistent-radio"' in MINI_APP_HTML
-    assert "Редчайшие достижения" in MINI_APP_HTML
-    assert "mine.rareAchievements" in MINI_APP_HTML
+    assert "Редчайшие достижения" not in MINI_APP_HTML
+    assert "mine.rareAchievements" not in MINI_APP_HTML
+    assert "mine.achievementsTotal" not in MINI_APP_HTML
 
 
 def test_miniapp_has_interface_themes() -> None:
@@ -391,14 +392,7 @@ def test_miniapp_replaces_rank_card_with_two_utility_buttons_on_mine() -> None:
     assert '<button class="btn secondary" onclick="showRadio()">Радио</button>' in MINI_APP_HTML
 
 
-def test_secret_message_command_detects_hidden_text_separately() -> None:
-    safe = bot.SECRET_MESSAGE_RE.match("лс @target_user")
-    unsafe = bot.SECRET_MESSAGE_RE.match("лс @target_user этот текст нельзя в группу")
-
-    assert safe
-    assert safe.group(1) == "@target_user"
-    assert safe.group(2) is None
-    assert unsafe
-    assert unsafe.group(1) == "@target_user"
-    assert unsafe.group(2) == "этот текст нельзя в группу"
-    assert bot.SECRET_MESSAGE_ALERT_LIMIT <= 200
+def test_secret_message_command_is_removed() -> None:
+    assert not hasattr(bot, "SECRET_MESSAGE_RE")
+    assert not hasattr(bot, "secret_message_group_command")
+    assert "лс @ник" not in bot.chat_help_text()

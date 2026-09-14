@@ -198,7 +198,7 @@ MINI_APP_HTML = r"""<!doctype html>
     body[data-theme="classic"] {
       font-family: Arial, "MS Sans Serif", sans-serif;
     }
-    body[data-theme="classic"] :is(.panel:not(.bg-lava):not(.bg-old-mine):not(.bg-stars), .shop-screen, .stat, .profile-card, .achievement-card, .inventory-group, .bag-summary, .mine-admin-card, .mine-admin-row, .admin-list-row, .role-row, .friend-row, .reminder-item, .trigger-media-box) {
+    body[data-theme="classic"] :is(.panel:not(.bg-lava):not(.bg-old-mine):not(.bg-stars), .shop-screen, .stat, .profile-card, .inventory-group, .bag-summary, .mine-admin-card, .mine-admin-row, .admin-list-row, .role-row, .friend-row, .reminder-item, .trigger-media-box) {
       border: 3px solid !important;
       border-color: #fff #808080 #808080 #fff !important;
       border-radius: 0 !important;
@@ -276,7 +276,6 @@ MINI_APP_HTML = r"""<!doctype html>
     body[data-theme="glass"] .panel::before,
     body[data-theme="glass"] .stat::before,
     body[data-theme="glass"] .profile-card::before,
-    body[data-theme="glass"] .achievement-card::before,
     body[data-theme="glass"] .inventory-group::before,
     body[data-theme="glass"] .bag-summary::before,
     body[data-theme="glass"] .mine-admin-card::before,
@@ -298,7 +297,6 @@ MINI_APP_HTML = r"""<!doctype html>
     body[data-theme="glass"] .panel::after,
     body[data-theme="glass"] .stat::after,
     body[data-theme="glass"] .profile-card::after,
-    body[data-theme="glass"] .achievement-card::after,
     body[data-theme="glass"] .inventory-group::after,
     body[data-theme="glass"] .bag-summary::after,
     body[data-theme="glass"] .mine-admin-card::after,
@@ -347,6 +345,13 @@ MINI_APP_HTML = r"""<!doctype html>
     .rank-badge { display:inline-flex; align-items:center; gap:7px; margin-top:10px; padding:7px 10px; border:1px solid var(--line); border-radius:var(--radius-sm); background: color-mix(in srgb, var(--rank-color, #678fb2) 18%, var(--panel-color)); font-size:13px; font-weight:800; }
     .utility-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
     .utility-actions .btn { min-height: 46px; margin: 0; }
+    .mine-desktop-layout,
+    .mine-dashboard-column,
+    .mine-footer-grid { display: grid; gap: 14px; }
+    .mine-desktop-layout,
+    .mine-footer-grid { margin-top: 14px; }
+    .mine-dashboard-column > .panel,
+    .mine-footer-grid > .panel { margin-top: 0; }
     .mini-form { display: grid; gap: 8px; margin-top: 12px; }
     .mini-form input,
     .mini-form textarea {
@@ -389,7 +394,6 @@ MINI_APP_HTML = r"""<!doctype html>
     .profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
     .profile-card { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
     body[data-theme="glass"] .profile-card,
-    body[data-theme="glass"] .achievement-card,
     body[data-theme="glass"] .inventory-group,
     body[data-theme="glass"] .bag-summary,
     body[data-theme="glass"] .mine-admin-card,
@@ -644,20 +648,6 @@ MINI_APP_HTML = r"""<!doctype html>
     .inventory-chip.permanent { border-color:#69c18a; background:#112b24; color:#d8ffe6; }
     .inventory-chip.paid { border-color:#f0c66d; background:#302312; color:#ffe7aa; }
     .inventory-chip.tickets { border-color:#d99cff; background:#28173b; color:#f4dcff; }
-    .achievement-showcase { display: grid; gap: 8px; margin-top: 10px; }
-    .achievement-card {
-      padding: 10px 11px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius-sm);
-      background: var(--panel);
-    }
-    .achievement-card b { display:block; }
-    .achievement-rarity { margin-top: 4px; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; }
-    .achievement-card.common { border-color:#6f8798; background:#152537; }
-    .achievement-card.rare { border-color:#56b37a; background:#102c24; color:#eaffef; }
-    .achievement-card.epic { border-color:#9a75ff; background:#241840; color:#f0e9ff; }
-    .achievement-card.legendary { border-color:#e2ad42; background:#31230d; color:#fff0c4; }
-    .achievement-card.mythic { border-color:#ff6e9d; background:linear-gradient(135deg,#3c1225,#23143d); color:#ffe4ef; box-shadow:0 0 18px #ff6e9d22; }
     .radio-player { width: 100%; margin-top: 10px; }
     .persistent-radio {
       position: fixed;
@@ -1562,7 +1552,6 @@ MINI_APP_HTML = r"""<!doctype html>
       body[data-view="profile"] main { width: min(100%, 1020px); }
       body[data-view="profile"] #content,
       body[data-view="adminPanel"] #content,
-      body[data-view="mine"] #content,
       .mine-admin-screen {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1570,11 +1559,9 @@ MINI_APP_HTML = r"""<!doctype html>
         align-items: stretch;
         margin-top: 16px;
       }
-      body[data-view="mine"] #content,
       .mine-admin-screen { align-items: start; }
       body[data-view="profile"] #content > .panel,
       body[data-view="adminPanel"] #content > .panel,
-      body[data-view="mine"] #content > :is(.panel, .stats, .utility-actions),
       .mine-admin-screen > .panel { margin-top: 0; }
       body[data-view="profile"] #content > .panel:first-child,
       body[data-view="profile"] #content > .panel:nth-child(2),
@@ -1582,7 +1569,6 @@ MINI_APP_HTML = r"""<!doctype html>
       body[data-view="profile"] #content > .panel:nth-last-child(2),
       body[data-view="adminPanel"] #content > .panel:first-child,
       body[data-view="adminPanel"] #content > .panel:last-child,
-      body[data-view="mine"] #content > :is(.stats, .utility-actions),
       .mine-admin-screen > .panel:first-child,
       .mine-admin-screen > .panel:nth-last-child(2),
       .mine-admin-screen > .panel:last-child { grid-column: 1 / -1; }
@@ -1617,6 +1603,13 @@ MINI_APP_HTML = r"""<!doctype html>
       }
       .product:last-child { border-bottom: 1px solid var(--line); }
       .inventory { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+      .mine-desktop-layout {
+        grid-template-columns: minmax(0, 1.05fr) minmax(360px, .95fr);
+        gap: 16px;
+        align-items: start;
+      }
+      .mine-dashboard-column { gap: 16px; align-content: start; }
+      .mine-footer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
       .persistent-radio { width: min(calc(100% - 56px), 820px); }
     }
     @media (min-width: 1280px) {
@@ -3309,12 +3302,6 @@ MINI_APP_HTML = r"""<!doctype html>
     const friends = social.friends || [];
     const isSelf = viewer.isSelf !== false;
     const premiumText = premium.active ? (plan.title || "Premium активен") : "не активен";
-    const rareAchievements = (mine.rareAchievements || []).slice(0, 5).map(item => `
-      <div class="achievement-card ${escapeHtml(item.rarity || "common")}">
-        <b>${escapeHtml(item.name)}</b>
-        <div class="achievement-rarity">${escapeHtml(item.rarityTitle || "Обычное")}</div>
-      </div>
-    `).join("");
     const cosmeticsBadges = (cosmetics.badges || []).map(item => `${escapeHtml(item.emoji || "")} ${escapeHtml(item.title || "")}`).join(" · ");
     const cosmeticsHtml = (cosmetics.frame || cosmetics.background || cosmeticsBadges) ? `
       <section class="panel">
@@ -3354,7 +3341,6 @@ MINI_APP_HTML = r"""<!doctype html>
     <section class="panel">
       <h2>Шахта</h2>
       <p class="muted">Рекорд: <b>${mine.bestSessionDepth || 0} м</b> · Серия: <b>${mine.streak || 0}</b> · Маршрут: <b>${escapeHtml(mine.route || "не выбран")}</b></p>
-      <p class="muted">Достижения: <b>${mine.achievementsTotal || 0}/${mine.achievementsKnown || 0}</b></p>
     </section>
     ${cosmeticsHtml}
     ${(social.relationships || []).map(pair => `<section class="panel"><h2>💞 ${escapeHtml(pair.partnerName)}</h2><p class="muted">${escapeHtml(pair.chatTitle)} · вместе с ${escapeHtml(new Date(pair.since).toLocaleDateString())}</p><h3>Уровень ${pair.level}: ${escapeHtml(pair.title)}</h3><div class="meter" role="progressbar" aria-valuenow="${pair.percent}" aria-valuemin="0" aria-valuemax="100"><div class="fill" style="width:${pair.percent}%"></div></div><p>${pair.xp}${pair.nextXp ? ' / '+pair.nextXp+' опыта · осталось '+pair.remaining : ' опыта · максимальный уровень'}</p><button class="btn" ${pair.canCare?'':'disabled'} onclick="careForPartner(${Number(pair.chatId)})">${pair.canCare?'💕 Уделить внимание · +20 опыта':'Внимание сегодня уже уделено'}</button><p class="muted">Каждый может уделить внимание раз в день. Цветок: +10, кристалл: +30, свидание-подарок: +25. От подарков — до 100 опыта пары в день. Новый день по Киеву; пропуски без штрафов.</p><button class="btn secondary" onclick="showShop('relationships')">Подарки паре</button></section>`).join('')}
@@ -3362,7 +3348,6 @@ MINI_APP_HTML = r"""<!doctype html>
     ${social.partner && !(social.relationships || []).length ? `<section class="panel"><h2>💕 Отношения</h2><p>Пара: <b>${escapeHtml(social.partner.fullName || 'Игрок')}</b></p><p class="muted">Цветы, парный кристалл и приглашение на свидание остаются памятными подарками в профиле.</p>${isSelf ? `<button class="btn" onclick="showShop('relationships')">Подарок паре</button>` : ''}</section>` : ''}
     <section class="panel"><h2>🎁 Витрина подарков</h2><p class="muted">Подарки остаются в коллекции. Закреплённые показываются первыми.</p>
     ${(mine.gifts || []).map(gift => `<div class="profile-card" style="margin-bottom:12px"><b>${gift.pinned ? "📌 " : ""}${escapeHtml(gift.title)}</b><p>От: ${escapeHtml(gift.sender)} · ${escapeHtml(new Date(gift.createdAt).toLocaleDateString())}</p>${isSelf ? `<button class="btn secondary" onclick="pinGift(${Number(gift.id)}, ${!gift.pinned})">${gift.pinned ? "Открепить" : "Закрепить"}</button>` : ""}</div>`).join("") || '<p class="muted">Здесь появятся подарки от друзей и пары.</p>'}</section>
-    ${rareAchievements ? `<section class="panel"><h2>Редчайшие достижения</h2><div class="achievement-showcase">${rareAchievements}</div></section>` : ""}
     <section class="panel"><button class="btn secondary" style="margin:0" onclick="${isSelf ? "renderMine()" : "showProfile()"}">${isSelf ? "Назад в шахту" : "Назад к моему профилю"}</button></section>`;
     scrollToTop();
   }
@@ -3445,15 +3430,21 @@ MINI_APP_HTML = r"""<!doctype html>
         <div class="stat">🏆<b>${state.record} м</b></div>
       </div>
       ${utilityActionsHtml()}
-      ${shiftContractHtml()}
-      ${interactiveMineHtml(disabled, cooldown)}
-      ${minesweeperHtml()}
-      ${goldTicketHtml()}
-      ${superGameHtml()}
-      <section class="panel">Уровень <b>${state.level}</b> · XP <b>${state.xp}</b> · серия <b>${state.streak}</b></section>
-      <section class="panel">
-        <button class="btn secondary" style="margin:0" onclick="showBag()">Сумка</button>
-      </section>`;
+      <div class="mine-desktop-layout">
+        <div class="mine-dashboard-column">
+          ${shiftContractHtml()}
+          ${interactiveMineHtml(disabled, cooldown)}
+        </div>
+        <div class="mine-dashboard-column">
+          ${minesweeperHtml()}
+          ${goldTicketHtml()}
+          ${superGameHtml()}
+        </div>
+      </div>
+      <div class="mine-footer-grid">
+        <section class="panel">Уровень <b>${state.level}</b> · XP <b>${state.xp}</b> · серия <b>${state.streak}</b></section>
+        <section class="panel"><button class="btn secondary" style="margin:0" onclick="showBag()">Сумка</button></section>
+      </div>`;
   }
 
   function interactiveMineHtml(disabled, cooldown) {

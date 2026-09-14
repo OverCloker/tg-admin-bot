@@ -92,7 +92,11 @@ def test_responsive_layout_for_tablet_orientations_and_desktop(tmp_path):
         pytest.skip('Headless Chromium not installed')
     css = re.search(r'<style>(.*?)</style>', MINI_APP_HTML, re.S).group(1)
     fixture = '''<main><header class="top"><h1>Профиль</h1><button class="top-profile">Назад</button></header>
-    <div id="content"><section class="panel">Один</section><section class="panel"><div class="profile-grid"><div class="profile-card">1</div><div class="profile-card">2</div><div class="profile-card">3</div></div></section><section class="panel">Три</section><section class="panel">Четыре</section><section class="panel">Пять</section><section class="panel">Назад</section></div></main>
+    <div id="content"><section class="panel">Один</section><section class="panel"><div class="profile-grid"><div class="profile-card">1</div><div class="profile-card">2</div><div class="profile-card">3</div></div></section><section class="panel">Три</section><section class="panel">Четыре</section><section class="panel">Пять</section><section class="panel">Назад</section></div>
+    <div class="mine-desktop-layout"><div class="mine-dashboard-column"><section class="panel">Смена</section><section class="panel">Шахта</section></div><div class="mine-dashboard-column"><section class="panel">Сапёр</section><section class="panel">Билет</section><section class="panel">Супер-игра</section></div></div>
+    <div class="mine-footer-grid"><section class="panel">Уровень</section><section class="panel">Сумка</section></div>
+    <div class="shop-products"><div class="product">Товар 1</div><div class="product">Товар 2</div></div>
+    <div class="inventory"><div>Предмет 1</div><div>Предмет 2</div></div></main>
     <pre id="result"></pre><script>
     const style = node => getComputedStyle(node);
     const columns = value => value.split(/\\s+/).filter(Boolean).length;
@@ -107,6 +111,10 @@ def test_responsive_layout_for_tablet_orientations_and_desktop(tmp_path):
       contentColumns: columns(style(document.getElementById('content')).gridTemplateColumns),
       contentAlign: style(document.getElementById('content')).alignItems,
       profileColumns: columns(style(document.querySelector('.profile-grid')).gridTemplateColumns),
+      mineColumns: columns(style(document.querySelector('.mine-desktop-layout')).gridTemplateColumns),
+      mineFooterColumns: columns(style(document.querySelector('.mine-footer-grid')).gridTemplateColumns),
+      shopColumns: columns(style(document.querySelector('.shop-products')).gridTemplateColumns),
+      inventoryColumns: columns(style(document.querySelector('.inventory')).gridTemplateColumns),
       lastContentSpan: style(document.querySelector('#content > .panel:nth-last-child(2)')).gridColumnEnd,
       overflow: document.documentElement.scrollWidth > innerWidth,
       labelOverflow: style(source.querySelector('label:last-child')).overflow
@@ -138,11 +146,16 @@ def test_responsive_layout_for_tablet_orientations_and_desktop(tmp_path):
     assert portrait['contentDisplay'] == 'block'
     assert 700 <= portrait['mainWidth'] <= 760
     assert portrait['profileColumns'] == 3
+    assert portrait['mineColumns'] == portrait['mineFooterColumns'] == 1
     for layout in (landscape, desktop):
         assert layout['contentDisplay'] == 'grid'
         assert layout['contentColumns'] == 2
         assert layout['contentAlign'] == 'stretch'
         assert layout['profileColumns'] == 3
+        assert layout['mineColumns'] == 2
+        assert layout['mineFooterColumns'] == 2
+        assert layout['shopColumns'] == 2
+        assert layout['inventoryColumns'] == 2
         assert layout['lastContentSpan'] == '-1'
         assert layout['overflow'] is False
         assert layout['labelOverflow'] == 'hidden'
