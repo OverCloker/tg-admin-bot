@@ -390,3 +390,25 @@ def test_neptun_chat_status_is_compact(database, monkeypatch):
     assert "Зона отслеживания" not in text
     assert "Информационный агрегатор" not in text
     assert '<a href="https://neptun.in.ua/">NEPTUN</a>' in text
+
+
+def test_neptun_yellow_threat_shows_only_type_below_city_heading():
+    state = AlertsLocationState(
+        "A",
+        alert_level="red",
+        threats=(bot.AlertsThreat(
+            "drones", "yellow", None,
+            "БПЛА — Кривий Ріг, Дніпропетровська область. Підтверджень: 9.",
+            "Кривий Ріг",
+        ),),
+        source="neptun",
+        location_title="Кривий Ріг",
+        provider_mode="combined",
+        official_alert=True,
+    )
+
+    text = bot.build_alarm_alert_text(state)
+    assert "воздушная тревога — <b>Кривий Ріг</b>" in text
+    assert "🟡 ударные БПЛА\n" in text
+    assert "[по данным API: Кривий Ріг]" not in text
+    assert "Підтверджень: 9" not in text

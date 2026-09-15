@@ -10568,6 +10568,11 @@ def format_alerts_location_details(state: AlertsLocationState) -> str:
         for threat in state.threats[:8]:
             label = alerts_threat_label(threat.threat_type, state.source)
             icon = "🔴" if threat.level == "red" else "🟡" if threat.level == "yellow" else "•"
+            if state.source == "neptun" and threat.level == "yellow":
+                # The selected city is already in the alarm heading; NEPTUN's
+                # free-text description repeats it and can make one line huge.
+                lines.append(f"{icon} {escape(label)}")
+                continue
             source = (threat.source_message or "").strip()
             suffix = f" — {escape(source[:240])}" if source else ""
             scope = f" [по данным API: {escape(threat.location_title)}]" if threat.location_title else ""
