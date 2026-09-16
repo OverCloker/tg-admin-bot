@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from app.bot import auto_weather_slot, build_help_rich_message, chat_help_text, parse_auto_weather_command
+from app.bot import auto_weather_slot, chat_help_text, help_menu, parse_auto_weather_command
 from app.db import Database
 
 
@@ -17,19 +17,18 @@ def test_chat_help_mentions_scheduled_weather() -> None:
     assert "автопогода выкл" in text
 
 
-def test_chat_help_rich_message_is_compact_table_with_details() -> None:
-    message = build_help_rich_message()
-    dumped = message.model_dump(mode="json", exclude_none=True)
-    blocks = dumped["blocks"]
+def test_chat_help_is_split_into_readable_sections() -> None:
+    home = chat_help_text("home")
+    weather = chat_help_text("weather")
+    mine = chat_help_text("mine")
+    keyboard = help_menu("weather")
 
-    assert blocks[0]["type"] == "paragraph"
-    assert blocks[2]["type"] == "table"
-    assert blocks[2]["cells"][0][0]["text"] == "Раздел"
-    assert any(row[0]["text"] == "Погода" for row in blocks[2]["cells"])
-    assert blocks[3]["type"] == "details"
-    assert blocks[3]["summary"] == "Подробнее ниже"
-    assert blocks[3]["is_open"] is False
-    assert any("автопогода Кривой Рог" in item["text"] for item in blocks[3]["blocks"])
+    assert "Выбери нужный раздел" in home
+    assert "автопогода Кривой Рог" in weather
+    assert "карта тревог" in weather
+    assert "достижения" not in mine.casefold()
+    assert len(keyboard.inline_keyboard) == 4
+    assert any(button.text.startswith("• 🌦") for row in keyboard.inline_keyboard for button in row)
 
 
 def test_auto_weather_slot_uses_daily_schedule() -> None:

@@ -1666,68 +1666,121 @@ def render_auto_weather_settings(chat_id: int) -> str:
     )
 
 
-def chat_help_text() -> str:
-    return (
-        "<b>Помощь</b>\n"
-        "Основное: <code>профиль</code>, <code>напоминание</code>.\n"
-        "Отношения: <code>пара @ник</code> или ответом <code>пара</code>; <code>отношения</code>; <code>расстаться</code>.\n"
-        "Развитие пары: <code>отношения внимание</code> — +20 опыта раз в день.\n"
-        "Шахта: <code>копай</code>, <code>сумка</code>, <code>достижения</code>, <code>топ копания</code>.\n"
-        "Погода: <code>погода Кривой Рог</code>, <code>карта тревог</code>, <code>автопогода Кривой Рог</code>, <code>автопогода выкл</code>.\n"
-        "Развлекуха: <code>кто пидор</code>, <code>roll mute</code>, <code>цитата</code>.\n"
-        "Модерация: <code>косяк</code>, <code>затихни</code> (1 ч), <code>затихни 30м/2ч/3д - причина</code>, <code>трещи</code>, <code>-сооб</code>, <code>чат стоп 5м причина</code>."
-    )
+HELP_SECTIONS = {
+    "home": (
+        "<b>📚 Помощь по командам</b>\n\n"
+        "Выбери нужный раздел кнопками ниже. Бот покажет только относящиеся "
+        "к нему команды и короткие примеры."
+    ),
+    "basic": (
+        "<b>👤 Основное</b>\n\n"
+        "<code>профиль</code> — твоя карточка\n"
+        "<code>профиль @ник</code> — карточка участника\n"
+        "<code>напоминание</code> — личный планировщик\n"
+        "<code>напомни через 30м текст</code> — создать напоминание\n"
+        "<code>др 25.12 Имя</code> — добавить день рождения\n"
+        "<code>дни рождения</code> — показать список\n"
+        "<code>/premium</code> — подписка и медиа-функции"
+    ),
+    "mine": (
+        "<b>⛏ Шахта</b>\n\n"
+        "<code>копай</code> — начать раскопку\n"
+        "<code>сумка</code> — добыча и предметы\n"
+        "<code>маршруты</code> — выбрать маршрут\n"
+        "<code>контракты</code> — текущие задания\n"
+        "<code>экспедиция</code> — общий прогресс\n"
+        "<code>топ копания</code> · <code>топ монет</code> · <code>топ рангов</code>\n"
+        "<code>+кличка текст</code> — применить найденную кличку\n\n"
+        "Игры, магазин, оформление и подарки доступны в Mini App."
+    ),
+    "social": (
+        "<b>❤️ Отношения</b>\n\n"
+        "<code>пара @ник</code> — предложить отношения\n"
+        "Можно ответить на сообщение словом <code>пара</code>.\n"
+        "<code>отношения</code> — состояние пары\n"
+        "<code>отношения внимание</code> — ежедневные +20 опыта\n"
+        "<code>расстаться</code> — завершить отношения\n\n"
+        "Дружба, подарки и оформление отношений находятся в Mini App."
+    ),
+    "weather": (
+        "<b>🌦 Погода и тревоги</b>\n\n"
+        "<code>погода Кривой Рог</code> — сейчас\n"
+        "<code>погода Кривой Рог завтра</code> — прогноз\n"
+        "<code>погода Кривой Рог неделя</code> — на 7 дней\n"
+        "<code>автопогода Кривой Рог</code> — включить рассылку\n"
+        "<code>автопогода</code> — состояние рассылки\n"
+        "<code>автопогода выкл</code> — отключить\n"
+        "<code>состояние тревоги</code> — актуальный статус\n"
+        "<code>карта тревог</code> — актуальная карта Украины"
+    ),
+    "fun": (
+        "<b>🎲 Развлечения и цитаты</b>\n\n"
+        "<code>кто пидор</code> — участник дня\n"
+        "<code>топ пидоров</code> — статистика\n"
+        "<code>roll mute</code> — случайный мут\n"
+        "<code>топ roll mute</code> — статистика игры\n"
+        "Ответом <code>в цитаты</code> — сохранить текст или медиа\n"
+        "<code>цитата</code> — случайная цитата\n"
+        "<code>все цитаты</code> — список\n"
+        "<code>цитата 5</code> — цитата по номеру\n"
+        "<code>опрос Вопрос | Да | Нет</code> — создать опрос"
+    ),
+    "moderation": (
+        "<b>🛡 Модерация</b>\n"
+        "Команды цели работают ответом или через <code>@ник</code>.\n\n"
+        "<code>косяк</code> — записать нарушение\n"
+        "<code>затихни</code> — мут на 1 час\n"
+        "<code>затихни 30м - причина</code> — свой срок\n"
+        "Поддерживаются <code>м</code>, <code>ч</code> и <code>д</code>.\n"
+        "<code>трещи</code> — снять мут\n"
+        "<code>-сооб</code> — удалить сообщение\n"
+        "<code>чат стоп 5м причина</code> · <code>чат старт</code>\n"
+        "<code>запрет слово</code> · <code>разрешить слово</code>\n"
+        "<code>черный список</code> — показать правила"
+    ),
+    "roles": (
+        "<b>🔧 Роли персонала</b>\n"
+        "Назначать роли может владелец группы.\n\n"
+        "<code>+помощник</code> · <code>-помощник</code>\n"
+        "<code>+модератор</code> · <code>-модератор</code>\n"
+        "<code>+стМодератор</code> · <code>-стМодератор</code>\n\n"
+        "Команду можно отправить ответом на сообщение или добавить <code>@ник</code>."
+    ),
+}
+
+HELP_SECTION_BUTTONS = (
+    (("👤 Основное", "basic"), ("⛏ Шахта", "mine")),
+    (("❤️ Отношения", "social"), ("🌦 Погода", "weather")),
+    (("🎲 Развлечения", "fun"), ("🛡 Модерация", "moderation")),
+    (("🔧 Роли", "roles"), ("📚 В начало", "home")),
+)
 
 
-def build_help_rich_message() -> InputRichMessage:
-    return InputRichMessage(
-        blocks=[
-            paragraph("📘 Помощь по чату"),
-            paragraph("Основные команды в таблице. Подробнее — ниже."),
-            InputRichBlockTable(
-                cells=[
-                    [rich_cell("Раздел", header=True), rich_cell("Главное", header=True)],
-                    [rich_cell("Профиль"), rich_cell("профиль · напоминание")],
-                    [rich_cell("Отношения"), rich_cell("пара @ник · отношения · расстаться")],
-                    [rich_cell("Шахта"), rich_cell("копай · сумка · достижения · топы")],
-                    [rich_cell("Погода"), rich_cell("погода · карта тревог · автопогода")],
-                    [rich_cell("Игры"), rich_cell("кто пидор · roll mute · цитата")],
-                    [rich_cell("Модерация"), rich_cell("косяк · затихни · трещи · чат стоп")],
-                ],
-                is_bordered=True,
-                is_striped=False,
-            ),
-            InputRichBlockDetails(
-                summary="Подробнее ниже",
-                blocks=[
-                    paragraph("Основное: помощь; профиль; профиль @ник; напоминание — открыть личный планировщик; напомни через 30м текст."),
-                    paragraph("Уровни пары: отношения внимание — бесплатно +20 опыта от каждого участника ежедневно. Цветок +10, кристалл +30, свидание-подарок +25; максимум 100 опыта от подарков за день. Новый день — по Киеву. Пропуски не отнимают опыт."),
-                    paragraph("Шахта: копай; сумка; достижения; +кличка текст; топ копания; топ монет; топ рангов."),
-                    paragraph("Погода и безопасность: погода Кривой Рог; погода Кривой Рог завтра; погода Кривой Рог неделя; карта тревог — актуальная карта Украины; погода каждый день 08:00 Кривой Рог; погода завтра 21:00 Кривой Рог; погода выкл."),
-                    paragraph("Автопогода: автопогода — статус; автопогода Кривой Рог — 08/12/15/18 и завтра в 21; автопогода выкл."),
-                    paragraph("Развлекуха: кто пидор; топ пидоров; roll mute; топ roll mute; в цитаты; цитата."),
-                    paragraph("Модерация: косяк; затихни — 1 час; затихни 30м/2ч/3д - причина; затихни админ — тихий режим администратора; трещи; ударить словарём; -сооб; чат стоп 5м причина; чат старт."),
-                    paragraph("Роли: +помощник; +модератор; +стМодератор; -помощник; -модератор; -стМодератор. Назначение — только владелец."),
-                ],
-                is_open=False,
-            ),
-        ]
-    )
+def chat_help_text(section: str | None = None) -> str:
+    if section is not None:
+        return HELP_SECTIONS.get(section, HELP_SECTIONS["home"])
+    # Compatibility for internal checks: return the complete searchable catalog.
+    return "\n\n".join(HELP_SECTIONS.values())
+
+
+def help_menu(active: str = "home", *, admin_back: bool = False) -> InlineKeyboardMarkup:
+    suffix = ":admin" if admin_back else ""
+    rows = []
+    for pair in HELP_SECTION_BUTTONS:
+        rows.append([
+            InlineKeyboardButton(
+                text=("• " if key == active else "") + label,
+                callback_data=f"help:{key}{suffix}",
+            )
+            for label, key in pair
+        ])
+    if admin_back:
+        rows.append([InlineKeyboardButton(text="← В панель", callback_data="ui:chats")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def send_help_message(message: Message) -> None:
-    try:
-        await message.bot.send_rich_message(
-            chat_id=message.chat.id,
-            rich_message=build_help_rich_message(),
-            message_thread_id=getattr(message, "message_thread_id", None),
-            reply_markup=main_menu() if message.chat.type == "private" else None,
-        )
-    except (TelegramBadRequest, TelegramForbiddenError):
-        await message.answer(
-            chat_help_text(),
-            reply_markup=main_menu() if message.chat.type == "private" else None,
-        )
+    await message.answer(chat_help_text("home"), reply_markup=help_menu())
 
 
 def parse_birthday_payload(text: str | None) -> tuple[int, int, str] | None:
@@ -6867,13 +6920,23 @@ async def cb_interactive_dig_exit(callback: CallbackQuery) -> None:
 async def cb_help(callback: CallbackQuery) -> None:
     await safe_edit(
         callback,
-        "Как пользоваться:\n"
-        "1. Добавь бота в группу или чат обсуждений.\n"
-        "2. Один раз отправь в группе /register_chat.\n"
-        "3. Вернись сюда, выбери группу кнопкой и настраивай ответы.\n\n"
-        "В группе бот отвечает на упоминания @username, фиксированные слова и фразу 'кто пидор'.\n\n"
-        + chat_help_text(),
-        reply_markup=admin_back_menu(),
+        chat_help_text("home"),
+        reply_markup=help_menu(admin_back=True),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(re.compile(r"^help:(home|basic|mine|social|weather|fun|moderation|roles)(:admin)?$")))
+async def cb_help_section(callback: CallbackQuery) -> None:
+    if not callback.data:
+        return
+    parts = callback.data.split(":")
+    section = parts[1]
+    admin_back = len(parts) > 2 and parts[2] == "admin"
+    await safe_edit(
+        callback,
+        chat_help_text(section),
+        reply_markup=help_menu(section, admin_back=admin_back),
     )
     await callback.answer()
 
