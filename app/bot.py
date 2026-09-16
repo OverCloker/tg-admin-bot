@@ -45,7 +45,7 @@ from .alert_providers import (
     UkraineAlarmProvider,
 )
 from .alerts_diagnostics import save_alerts_response
-from .alert_map import fetch_alert_map
+from .alert_map import UnknownMapRegion, fetch_alert_map
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
 from .dig_game import (
     INTERACTIVE_DIG_DURABILITY,
@@ -233,7 +233,7 @@ AUTO_WEATHER_TOMORROW_HOUR = 21
 AUTO_WEATHER_POLL_SECONDS = 30
 ALERT_MAP_RE = re.compile(
     r"^\s*(?:/?карта[ _]+(?:тревог|тривог)|/(?:alertmap|alarm_map|alert_map))"
-    r"(?:@[A-Za-z0-9_]+)?(?:[?!.])?\s*$",
+    r"(?:@[A-Za-z0-9_]+)?(?:\s+(?P<region>[^\n]{1,100}?))?[?!.]?\s*$",
     re.IGNORECASE,
 )
 EMOJI_BASE_RE = (
@@ -1711,7 +1711,8 @@ HELP_SECTIONS = {
         "<code>автопогода</code> — состояние рассылки\n"
         "<code>автопогода выкл</code> — отключить\n"
         "<code>состояние тревоги</code> — актуальный статус\n"
-        "<code>карта тревог</code> — актуальная карта Украины"
+        "<code>карта тревог</code> — актуальная карта Украины\n"
+        "<code>карта тревог днепр</code> — карта области с районами"
     ),
     "fun": (
         "<b>🎲 Развлечения и цитаты</b>\n\n"
@@ -11752,7 +11753,12 @@ async def alert_map_command(message: Message) -> None:
             message_thread_id=message.message_thread_id,
         )
     try:
-        result = await fetch_alert_map()
+        match = ALERT_MAP_RE.fullmatch(message.text or "")
+        region = (match.group("region") or "").strip() if match else ""
+        result = await fetch_alert_map(region) if region else await fetch_alert_map()
+    except UnknownMapRegion as exc:
+        await safe_reply(message, escape(str(exc)))
+        return
     except Exception as exc:
         logging.warning("Could not build current alert map: %s", exc)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
@@ -11767,12 +11773,14 @@ async def alert_map_command(message: Message) -> None:
 
     updated = result.updated_at.astimezone(LOCAL_TIMEZONE).strftime("%d.%m.%Y %H:%M")
     caption = (
-        "<b>🗺 Актуальная карта тревог Украины</b>\n"
+        f"<b>🗺 {escape(result.region_title) if result.region_title else 'Актуальная карта тревог Украины'}</b>\n"
         f"Обновлено: <b>{updated}</b>\n"
         f"Активных территорий: <b>{result.alert_count}</b> · угроз на карте: <b>{result.threat_count}</b>\n\n"
         'Данные: <a href="https://neptun.in.ua/">NEPTUN</a>. '
         "Информационная карта не заменяет официальные сигналы тревоги."
     )
+    if result.region_title:
+        caption += "\nГраницы и статусы районов; детализация до громад недоступна у этого источника."
     await message.answer_photo(
         BufferedInputFile(result.image, filename="alert-map.png"),
         caption=caption,

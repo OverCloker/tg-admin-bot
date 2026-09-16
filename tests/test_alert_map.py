@@ -61,6 +61,7 @@ def test_alert_map_command_sends_generated_photo(monkeypatch):
     )
     monkeypatch.setattr(bot, "fetch_alert_map", AsyncMock(return_value=generated))
     message = SimpleNamespace(
+        text="карта тревог",
         chat=SimpleNamespace(id=42, type="private"),
         bot=SimpleNamespace(send_chat_action=AsyncMock()),
         message_thread_id=None,
@@ -114,3 +115,30 @@ def test_map_download_stops_when_stream_exceeds_limit(monkeypatch):
     with pytest.raises(ValueError, match="too large"):
         asyncio.run(alert_map._fetch_json(session, "/test"))
     assert consumed == [b"123", b"456"]
+
+
+def test_regional_map_filters_neighboring_alerts_and_threats():
+    selected = feature("дніпропетровська", [[30, 46], [34, 46], [34, 50], [30, 50], [30, 46]])
+    selected["properties"]["region"] = "Дніпропетровська область"
+    neighbor = feature("інша", [[35, 46], [38, 46], [38, 50], [35, 50], [35, 46]])
+    inside = feature("local", [[31, 47], [32, 47], [32, 48], [31, 48], [31, 47]])
+    outside = feature("outside", [[36, 47], [37, 47], [37, 48], [36, 48], [36, 47]])
+    geometry = {"type": "FeatureCollection", "features": [selected, neighbor]}
+    raions = {"type": "FeatureCollection", "features": [inside, outside]}
+    for alias in ("днепр", "Дніпро", "Дніпропетровська область", "Кривой Рог"):
+        assert alert_map.resolve_map_region(alias, geometry) == selected
+    alerts = {"raions": [{"key": "local"}, {"key": "outside"}], "oblasts": [{"key": "інша"}]}
+    threats = {"threats": [{"lon": 31.5, "lat": 47.5}, {"lon": 36.5, "lat": 47.5}]}
+    r, o, a, t, title = alert_map.regional_payloads(raions, geometry, alerts, threats, "днепр")
+    assert r["features"] == [inside]
+    assert a == {"raions": [{"key": "local"}], "oblasts": []}
+    assert len(t["threats"]) == 1
+    assert render_alert_map(r, o, a, t, region_title=title).startswith(b"\x89PNG")
+    with pytest.raises(alert_map.UnknownMapRegion):
+        alert_map.resolve_map_region("несуществующая", geometry)
+
+
+def test_regional_command_argument():
+    for command in ("карта тревог днепр", "/alertmap@ypominanieBot Дніпро!"):
+        assert bot.ALERT_MAP_RE.fullmatch(command).group("region").casefold() in {"днепр", "дніпро"}
+    assert bot.ALERT_MAP_RE.fullmatch("карта тревог").group("region") is None
