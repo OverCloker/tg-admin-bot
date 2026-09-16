@@ -112,11 +112,18 @@ API/Mini App image, not the health or version of a separately running bot proces
 and does not claim that the revision is the latest one on GitHub.
 
 ```bash
-docker compose up -d --build
+sh server-deploy.sh main
 docker compose ps
 docker compose logs -f --tail=100 bot
 docker compose logs -f --tail=100 api
 ```
+
+`server-deploy.sh` собирает общий образ `bot`/`api` только один раз и не
+затрагивает тяжёлую сборку локального `telegram-bot-api`. Слои системных и
+Python-зависимостей отделены от исходного кода и повторно используются Docker,
+пока файлы зависимостей не изменились. Для редкого ручного
+обновления базового Python-образа выполните `docker compose build --pull bot`,
+затем `docker compose up -d --no-build bot api`.
 
 To build and start the optional local Telegram Bot API server too:
 

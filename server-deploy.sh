@@ -147,15 +147,16 @@ echo "== docker compose config =="
 docker compose $COMPOSE_PROFILE_ARGS config --quiet
 
 echo "== docker compose build =="
-# shellcheck disable=SC2086
-docker compose $COMPOSE_PROFILE_ARGS build --pull bot api
+# bot and api run the same image. Build it once; rebuilding api separately used
+# to duplicate the slow dependency/export stages on every deployment.
+docker compose build bot
 
 echo "== docker compose up =="
 if [ -n "$COMPOSE_PROFILE_ARGS" ]; then
     # shellcheck disable=SC2086
-    docker compose $COMPOSE_PROFILE_ARGS up -d --remove-orphans
+    docker compose $COMPOSE_PROFILE_ARGS up -d --no-build --remove-orphans
 else
-    docker compose up -d --remove-orphans bot api
+    docker compose up -d --no-build --remove-orphans bot api
 fi
 
 echo "== status =="
