@@ -189,6 +189,24 @@ def test_ukraine_alarm_status_is_compact(tmp_path, monkeypatch):
     database.close()
 
 
+def test_ukraine_alarm_notification_matches_compact_provider_layout():
+    state = parse_ukraine_alarm_alerts([
+        region(alerts=[air(
+            level("Red", "Червоний рівень повітряної тривоги"),
+            level("Yellow", "Дронова загроза (жовтий рівень)"),
+        )]),
+    ])
+
+    text = bot.build_alarm_alert_text(state)
+    assert "UkraineAlarm сообщает: объявлена воздушная тревога — <b>Кривий Ріг</b>" in text
+    assert "Уровень: 🔴 красный" in text
+    assert "🟡 ударные БПЛА" in text
+    assert "красный уровень воздушной тревоги" not in text
+    assert "Официальная территория сигнала" not in text
+    assert "Криворізький район" not in text
+    assert "Дронова загроза" not in text
+
+
 def test_miniapp_requires_token_before_enabling_ukraine_alarm(tmp_path, monkeypatch):
     database = Database(str(tmp_path / "bot.db"))
     database.init()

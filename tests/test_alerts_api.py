@@ -209,7 +209,7 @@ def test_alerts_api_uses_last_modified_cache(monkeypatch) -> None:
     assert FakeSession.request_headers[1]["If-Modified-Since"] == "Thu, 10 Sep 2026 10:00:00 GMT"
 
 
-def test_alerts_details_escape_external_source_text_and_signature_changes() -> None:
+def test_alerts_details_hide_external_source_text_and_signature_changes() -> None:
     first = AlertsLocationState(
         status="A",
         alert_level="yellow",
@@ -224,7 +224,7 @@ def test_alerts_details_escape_external_source_text_and_signature_changes() -> N
     text = format_alerts_location_details(first)
 
     assert "ударные БПЛА" in text
-    assert "&lt;b&gt;не HTML&lt;/b&gt;" in text
+    assert "не HTML" not in text
     assert alerts_location_state_signature(first) != alerts_location_state_signature(second)
 
 
@@ -238,6 +238,19 @@ def test_alerts_signature_ignores_started_at_when_visible_text_is_unchanged() ->
         status="A",
         alert_level="yellow",
         threats=(AlertsThreat("drones", "yellow", "2026-09-07T10:01:00Z", "Дрони"),),
+    )
+
+    assert alerts_location_state_signature(first) == alerts_location_state_signature(second)
+
+
+def test_alerts_signature_ignores_hidden_description_and_geography() -> None:
+    first = AlertsLocationState(
+        status="A", alert_level="yellow",
+        threats=(AlertsThreat("drones", "yellow", None, "Первый текст", "Район"),),
+    )
+    second = AlertsLocationState(
+        status="A", alert_level="yellow",
+        threats=(AlertsThreat("drones", "yellow", None, "Другой текст", "Область"),),
     )
 
     assert alerts_location_state_signature(first) == alerts_location_state_signature(second)
@@ -261,7 +274,7 @@ def test_current_alarm_status_has_no_location_and_uses_api_details() -> None:
 
     assert "Красная тревога" in text
     assert "баллистические ракеты" in text
-    assert "Загроза балістики" in text
+    assert "Загроза балістики" not in text
     assert "Кривор" not in text
     assert format_current_alarm_status(AlertsLocationState(status="N")) == "🟢 Тревоги нет."
 
@@ -292,7 +305,7 @@ def test_alarm_status_command_uses_latest_cached_api_state(monkeypatch) -> None:
 
     assert "Жёлтая тревога" in text
     assert "ударные БПЛА" in text
-    assert "БпЛА у напрямку району" in text
+    assert "БпЛА у напрямку району" not in text
     assert "Кривор" not in text
     assert "тема" not in text
 
@@ -516,7 +529,8 @@ def test_oblast_missiles_are_not_presented_as_district_threats():
     ]})
     for text in (format_alerts_location_details(state), format_current_alarm_status(state),
                  format_important_alarm_update(AlertsLocationState("A", "yellow"), state)):
-        assert "ракетная угроза [по данным API: Дніпропетровська область]" in text
+        assert "Alerts.in.ua передаёт: возможная ракетная угроза" in text
+        assert "Дніпропетровська область" not in text
 
 
 def test_finished_alert_is_ignored_and_red_does_not_invent_missiles():

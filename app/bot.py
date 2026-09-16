@@ -10538,8 +10538,6 @@ def alerts_location_state_signature(state: AlertsLocationState) -> str:
                 {
                     "type": threat.threat_type,
                     "level": threat.level,
-                    "source_message": threat.source_message,
-                    "location_title": threat.location_title,
                 }
                 for threat in state.threats
             ],
@@ -10556,6 +10554,25 @@ def alerts_threat_label(threat_type: str, source: str = "alerts_in_ua") -> str:
     return ALERTS_THREAT_LABELS.get(threat_type, threat_type.replace("_", " "))
 
 
+def compact_alarm_threat_lines(state: AlertsLocationState) -> list[str]:
+    """Render provider-independent threat rows without repeated geography."""
+    lines: list[str] = []
+    seen: set[tuple[str, str | None]] = set()
+    for threat in state.threats:
+        if threat.threat_type in {"air_red_level", "air_yellow_level"}:
+            continue
+        key = (threat.threat_type, threat.level)
+        if key in seen:
+            continue
+        seen.add(key)
+        label = alerts_threat_label(threat.threat_type, state.source)
+        icon = "🔴" if threat.level == "red" else "🟡" if threat.level == "yellow" else "•"
+        lines.append(f"{icon} {escape(label)}")
+        if len(lines) >= 8:
+            break
+    return lines
+
+
 def format_alerts_location_details(state: AlertsLocationState) -> str:
     lines: list[str] = []
     if state.alert_level == "red":
@@ -10563,20 +10580,10 @@ def format_alerts_location_details(state: AlertsLocationState) -> str:
     elif state.alert_level == "yellow":
         lines.append("Уровень: 🟡 жёлтый")
 
-    if state.threats:
+    threat_lines = compact_alarm_threat_lines(state)
+    if threat_lines:
         lines.append("Конкретные угрозы:")
-        for threat in state.threats[:8]:
-            label = alerts_threat_label(threat.threat_type, state.source)
-            icon = "🔴" if threat.level == "red" else "🟡" if threat.level == "yellow" else "•"
-            if state.source == "neptun" and threat.level == "yellow":
-                # The selected city is already in the alarm heading; NEPTUN's
-                # free-text description repeats it and can make one line huge.
-                lines.append(f"{icon} {escape(label)}")
-                continue
-            source = (threat.source_message or "").strip()
-            suffix = f" — {escape(source[:240])}" if source else ""
-            scope = f" [по данным API: {escape(threat.location_title)}]" if threat.location_title else ""
-            lines.append(f"{icon} {escape(label)}{scope}{suffix}")
+        lines.extend(threat_lines)
     return "\n".join(lines)
 
 
@@ -10591,17 +10598,13 @@ def format_current_alarm_status(state: AlertsLocationState) -> str:
     else:
         lines = ["⚠️ <b>Тревога активна.</b>"]
 
-    if not state.threats:
+    threat_lines = compact_alarm_threat_lines(state)
+    if not threat_lines:
         lines.append("Конкретная угроза в API пока не указана.")
         return "\n".join(lines)
 
     lines.append("Угрозы по данным API:")
-    for threat in state.threats[:8]:
-        label = alerts_threat_label(threat.threat_type, state.source)
-        source = (threat.source_message or "").strip()
-        suffix = f" — {escape(source[:240])}" if source else ""
-        scope = f" [по данным API: {escape(threat.location_title)}]" if threat.location_title else ""
-        lines.append(f"• {escape(label)}{scope}{suffix}")
+    lines.extend(threat_lines)
     return "\n".join(lines)
 
 
@@ -10616,7 +10619,6 @@ def build_alarm_alert_text(state: AlertsLocationState) -> str:
             if details:
                 lines.append(details)
             lines.append("ℹ️ Данные обновляются автоматически каждые 30 секунд.")
-            lines.append(NEPTUN_NOTICE.strip())
             return "\n\n".join(lines)
         lines = [
             f'NEPTUN сообщает: активная угроза для <b>{escape(state.location_title)}</b>.'
@@ -10625,7 +10627,6 @@ def build_alarm_alert_text(state: AlertsLocationState) -> str:
         if details:
             lines.append(details)
         lines.append("ℹ️ Данные обновляются автоматически каждые 30 секунд.")
-        lines.append(NEPTUN_NOTICE.strip())
         return "\n\n".join(lines)
     if state.source == "ukraine_alarm" and not state.official_alert:
         lines = [
@@ -10641,14 +10642,10 @@ def build_alarm_alert_text(state: AlertsLocationState) -> str:
         f"{SOURCE_LABELS[state.source]} сообщает: объявлена {alarm_kind} — "
         f"<b>{escape(state.location_title)}</b>."
     ]
-    if state.official_area:
-        lines.append(f"Официальная территория сигнала: <b>{escape(state.official_area)}</b>.")
     details = format_alerts_location_details(state)
     if details:
         lines.append(details)
     lines.append("ℹ️ Данные обновляются автоматически каждые 30 секунд.")
-    if state.source == "neptun":
-        lines.append(NEPTUN_NOTICE.strip())
     return "\n\n".join(lines)
 
 
@@ -10722,11 +10719,10 @@ def format_important_alarm_update(
         }
     )
     if new_important:
-        labels = ", ".join(
+        labels = ", ".join(dict.fromkeys(
             escape(alerts_threat_label(threat.threat_type, current.source))
-            + (f" [по данным API: {escape(threat.location_title)}]" if threat.location_title else "")
             for threat in current.threats if threat.threat_type in new_important
-        )
+        ))
         lines.append(f"Новые серьёзные угрозы: <b>{labels}</b>.")
     return "\n\n".join(lines)
 
@@ -10961,14 +10957,7 @@ async def deactivate_alarm_from_api(bot: Bot, chat_id: int, source: str = "alert
     clear_message = await send_alarm_notification(
         bot,
         chat_id,
-        (
-            "🟢 <b>NEPTUN: воздушная тревога отбита, активных угроз для города нет.</b>"
-            + NEPTUN_NOTICE
-            if source == "neptun"
-            else "🟢 <b>UkraineAlarm: тревога и активные угрозы завершены.</b>"
-            if source == "ukraine_alarm"
-            else "🟢 <b>Отбой воздушной тревоги.</b>"
-        ),
+        "🟢 <b>Отбой воздушной тревоги.</b>",
     )
     if clear_message is not None:
         db.set_alarm_api_status_message_id(chat_id, "N", clear_message.message_id)

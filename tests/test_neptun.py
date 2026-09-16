@@ -362,7 +362,7 @@ def test_attribution_and_status_do_not_use_other_source(database, monkeypatch):
     monkeypatch.setattr(bot, "PROVIDER_STATES", {})
     monkeypatch.setattr(bot, "ALERTS_API_CACHE", bot.AlertsApiCache(state=AlertsLocationState("N")))
     assert "ещё не получен" in bot.alarm_status_text(-1)
-    assert "https://neptun.in.ua/" in bot.build_alarm_alert_text(AlertsLocationState("A", source="neptun"))
+    assert "https://neptun.in.ua/" not in bot.build_alarm_alert_text(AlertsLocationState("A", source="neptun"))
     assert bot.alerts_threat_label("unspecified_missiles", "neptun") == "ракетная угроза"
     assert "Alerts.in.ua" in bot.alerts_threat_label("unspecified_missiles", "alerts_in_ua")
 
