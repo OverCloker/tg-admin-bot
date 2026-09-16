@@ -29,7 +29,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, FSInputFile, Gift, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, InputRichBlockDetails, InputRichBlockParagraph, InputRichBlockTable, InputRichMessage, LabeledPrice, MenuButtonWebApp, Message, MessageReactionUpdated, PreCheckoutQuery, RichBlockTableCell, StarAmount, SuccessfulPayment, User, WebAppInfo
+from aiogram.types import BufferedInputFile, CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, FSInputFile, Gift, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, InputRichBlockDetails, InputRichBlockParagraph, InputRichBlockTable, InputRichMessage, LabeledPrice, MenuButtonWebApp, Message, MessageReactionUpdated, PreCheckoutQuery, RichBlockTableCell, StarAmount, SuccessfulPayment, User, WebAppInfo
 
 from .config import load_config
 from .alert_providers import (
@@ -45,6 +45,7 @@ from .alert_providers import (
     UkraineAlarmProvider,
 )
 from .alerts_diagnostics import save_alerts_response
+from .alert_map import fetch_alert_map
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
 from .dig_game import (
     INTERACTIVE_DIG_DURABILITY,
@@ -230,6 +231,11 @@ AUTO_WEATHER_RE = re.compile(r"^\s*автопогода(?:\s+(.+))?\s*$", re.IGN
 AUTO_WEATHER_HOURS = [8, 12, 15, 18]
 AUTO_WEATHER_TOMORROW_HOUR = 21
 AUTO_WEATHER_POLL_SECONDS = 30
+ALERT_MAP_RE = re.compile(
+    r"^\s*(?:/?карта[ _]+(?:тревог|тривог)|/(?:alertmap|alarm_map|alert_map))"
+    r"(?:@[A-Za-z0-9_]+)?(?:[?!.])?\s*$",
+    re.IGNORECASE,
+)
 EMOJI_BASE_RE = (
     r"(?:[\u00a9\u00ae\u203c\u2049\u2122\u2139\u2194-\u21ff\u2300-\u23ff"
     r"\u24c2\u25aa-\u27bf\u2934\u2935\u2b00-\u2bff\u3030\u303d\u3297\u3299]"
@@ -1667,7 +1673,7 @@ def chat_help_text() -> str:
         "Отношения: <code>пара @ник</code> или ответом <code>пара</code>; <code>отношения</code>; <code>расстаться</code>.\n"
         "Развитие пары: <code>отношения внимание</code> — +20 опыта раз в день.\n"
         "Шахта: <code>копай</code>, <code>сумка</code>, <code>достижения</code>, <code>топ копания</code>.\n"
-        "Погода: <code>погода Кривой Рог</code>, <code>автопогода Кривой Рог</code>, <code>автопогода выкл</code>.\n"
+        "Погода: <code>погода Кривой Рог</code>, <code>карта тревог</code>, <code>автопогода Кривой Рог</code>, <code>автопогода выкл</code>.\n"
         "Развлекуха: <code>кто пидор</code>, <code>roll mute</code>, <code>цитата</code>.\n"
         "Модерация: <code>косяк</code>, <code>затихни</code> (1 ч), <code>затихни 30м/2ч/3д - причина</code>, <code>трещи</code>, <code>-сооб</code>, <code>чат стоп 5м причина</code>."
     )
@@ -1684,7 +1690,7 @@ def build_help_rich_message() -> InputRichMessage:
                     [rich_cell("Профиль"), rich_cell("профиль · напоминание")],
                     [rich_cell("Отношения"), rich_cell("пара @ник · отношения · расстаться")],
                     [rich_cell("Шахта"), rich_cell("копай · сумка · достижения · топы")],
-                    [rich_cell("Погода"), rich_cell("погода · автопогода · автопогода выкл")],
+                    [rich_cell("Погода"), rich_cell("погода · карта тревог · автопогода")],
                     [rich_cell("Игры"), rich_cell("кто пидор · roll mute · цитата")],
                     [rich_cell("Модерация"), rich_cell("косяк · затихни · трещи · чат стоп")],
                 ],
@@ -1697,7 +1703,7 @@ def build_help_rich_message() -> InputRichMessage:
                     paragraph("Основное: помощь; профиль; профиль @ник; напоминание — открыть личный планировщик; напомни через 30м текст."),
                     paragraph("Уровни пары: отношения внимание — бесплатно +20 опыта от каждого участника ежедневно. Цветок +10, кристалл +30, свидание-подарок +25; максимум 100 опыта от подарков за день. Новый день — по Киеву. Пропуски не отнимают опыт."),
                     paragraph("Шахта: копай; сумка; достижения; +кличка текст; топ копания; топ монет; топ рангов."),
-                    paragraph("Погода: погода Кривой Рог; погода Кривой Рог завтра; погода Кривой Рог неделя; погода каждый день 08:00 Кривой Рог; погода завтра 21:00 Кривой Рог; погода выкл."),
+                    paragraph("Погода и безопасность: погода Кривой Рог; погода Кривой Рог завтра; погода Кривой Рог неделя; карта тревог — актуальная карта Украины; погода каждый день 08:00 Кривой Рог; погода завтра 21:00 Кривой Рог; погода выкл."),
                     paragraph("Автопогода: автопогода — статус; автопогода Кривой Рог — 08/12/15/18 и завтра в 21; автопогода выкл."),
                     paragraph("Развлекуха: кто пидор; топ пидоров; roll mute; топ roll mute; в цитаты; цитата."),
                     paragraph("Модерация: косяк; затихни — 1 час; затихни 30м/2ч/3д - причина; затихни админ — тихий режим администратора; трещи; ударить словарём; -сооб; чат стоп 5м причина; чат старт."),
@@ -11667,6 +11673,46 @@ async def channels_ru(message: Message) -> None:
 @router.message(F.text.regexp(re.compile(r"^/?помощь[?!.]?$", re.IGNORECASE)))
 async def help_ru(message: Message) -> None:
     await send_help_message(message)
+
+
+@router.message(F.text.regexp(ALERT_MAP_RE))
+async def alert_map_command(message: Message) -> None:
+    if message.chat.type not in {*SUPPORTED_CHAT_TYPES, "private"}:
+        return
+    if message.chat.type in SUPPORTED_CHAT_TYPES:
+        await remember_sender(message)
+    with suppress(TelegramBadRequest, TelegramForbiddenError):
+        await message.bot.send_chat_action(
+            chat_id=message.chat.id,
+            action="upload_photo",
+            message_thread_id=message.message_thread_id,
+        )
+    try:
+        result = await fetch_alert_map()
+    except Exception as exc:
+        logging.warning("Could not build current alert map: %s", exc)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🗺 Открыть карту NEPTUN", url="https://neptun.in.ua/embed/map?lang=ru")
+        ]])
+        await safe_reply(
+            message,
+            "Не получилось собрать снимок карты. Открой актуальную интерактивную карту по кнопке.",
+            reply_markup=keyboard,
+        )
+        return
+
+    updated = result.updated_at.astimezone(LOCAL_TIMEZONE).strftime("%d.%m.%Y %H:%M")
+    caption = (
+        "<b>🗺 Актуальная карта тревог Украины</b>\n"
+        f"Обновлено: <b>{updated}</b>\n"
+        f"Активных территорий: <b>{result.alert_count}</b> · угроз на карте: <b>{result.threat_count}</b>\n\n"
+        'Данные: <a href="https://neptun.in.ua/">NEPTUN</a>. '
+        "Информационная карта не заменяет официальные сигналы тревоги."
+    )
+    await message.answer_photo(
+        BufferedInputFile(result.image, filename="alert-map.png"),
+        caption=caption,
+    )
 
 
 @router.message(F.text.regexp(re.compile(r"^/?напоминани[ея][?!.]?$", re.IGNORECASE)))

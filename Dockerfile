@@ -14,6 +14,7 @@ RUN apt-get update \
         ffmpeg \
         gosu \
         libgomp1 \
+        fonts-dejavu-core \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
 
