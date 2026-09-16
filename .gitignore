@@ -9,6 +9,8 @@ venv/
 .pytest-tmp/
 .pytest-tmp-*/
 .pytest_cache/
+.pytest_tmp*/
+.ruff_cache/
 *.sqlite3.backup*
 bot.lock
 downloads/

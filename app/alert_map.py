@@ -40,9 +40,11 @@ async def _fetch_json(session: aiohttp.ClientSession, path: str) -> Any:
         response.raise_for_status()
         if response.content_length and response.content_length > MAX_RESPONSE_BYTES:
             raise ValueError(f"NEPTUN response is too large: {path}")
-        body = await response.read()
-        if len(body) > MAX_RESPONSE_BYTES:
-            raise ValueError(f"NEPTUN response is too large: {path}")
+        body = bytearray()
+        async for chunk in response.content.iter_chunked(64 * 1024):
+            if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
+                raise ValueError(f"NEPTUN response is too large: {path}")
+            body.extend(chunk)
         return json.loads(body)
 
 
@@ -76,7 +78,9 @@ async def fetch_alert_map() -> AlertMapResult:
                     _fetch_json(session, "/api/v1/alerts"),
                     _fetch_json(session, "/api/v1/threats"),
                 )
-                _geometry_cache = (now, raions, oblasts)
+                _features(raions)
+                _features(oblasts)
+                _geometry_cache = (time.monotonic(), raions, oblasts)
 
         updated_at = _parse_server_time(threats.get("serverTime") if isinstance(threats, dict) else None)
         image = await asyncio.to_thread(render_alert_map, raions, oblasts, alerts, threats, updated_at)

@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 import aiohttp
-from contextlib import contextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta, timezone
@@ -42,7 +42,16 @@ from .youtube_media import DOWNLOAD_TYPES, YoutubeMediaError, cleanup_youtube_fi
 from .miniapp import router as miniapp_router
 
 
-app = FastAPI(title="Telegram Autoreply Bot Admin API")
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    await start_youtube_worker()
+    try:
+        yield
+    finally:
+        await stop_youtube_worker()
+
+
+app = FastAPI(title="Telegram Autoreply Bot Admin API", lifespan=lifespan)
 app.include_router(miniapp_router)
 YOUTUBE_WORKER_TASK: asyncio.Task | None = None
 
@@ -229,14 +238,12 @@ async def youtube_queue_worker() -> None:
             media.close()
 
 
-@app.on_event("startup")
 async def start_youtube_worker() -> None:
     global YOUTUBE_WORKER_TASK
     if YOUTUBE_WORKER_TASK is None or YOUTUBE_WORKER_TASK.done():
         YOUTUBE_WORKER_TASK = asyncio.create_task(youtube_queue_worker())
 
 
-@app.on_event("shutdown")
 async def stop_youtube_worker() -> None:
     global YOUTUBE_WORKER_TASK
     if YOUTUBE_WORKER_TASK is not None:
@@ -4374,20 +4381,20 @@ def require_admin_feature(db: Database, feature: str, mode: str = "write") -> No
 
 
 def feature_permissions_for_actor(db: Database, chat_id: int | None = None) -> dict[str, bool]:
-    return {item["id"]: feature_permission_modes_for_actor(db, chat_id)[item["id"]]["view"] for item in ADMIN_FEATURES}
+    modes = feature_permission_modes_for_actor(db, chat_id)
+    return {item["id"]: modes[item["id"]]["view"] for item in ADMIN_FEATURES}
 
 
 def feature_permission_modes_for_actor(db: Database, chat_id: int | None = None) -> dict[str, dict[str, bool]]:
     if owner_actions_allowed():
         return {feature_id: {"view": True, "write": True} for feature_id in ADMIN_PERMISSION_IDS}
-    actor_id = current_actor_id()
     items = list(ADMIN_FEATURE_IDS) + [item["id"] for children in ADMIN_SUBFEATURES.values() for item in children]
     return {
-        item["id"]: {
-            "view": admin_feature_allowed(db, item["id"], mode="view", chat_id=chat_id),
-            "write": admin_feature_allowed(db, item["id"], mode="write", chat_id=chat_id),
+        feature_id: {
+            "view": admin_feature_allowed(db, feature_id, mode="view", chat_id=chat_id),
+            "write": admin_feature_allowed(db, feature_id, mode="write", chat_id=chat_id),
         }
-        for item in [{"id": feature_id} for feature_id in items]
+        for feature_id in items
     }
 
 

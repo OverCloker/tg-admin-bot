@@ -16,7 +16,6 @@ from datetime import datetime, timezone, timedelta
 from typing import Any
 from urllib.parse import parse_qsl
 import aiohttp
-from aiogram import Bot
 from aiogram.types import FSInputFile, LabeledPrice
 from fastapi import APIRouter, File, Header, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse

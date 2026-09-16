@@ -20,6 +20,9 @@ __pycache__/
 venv/
 bot.lock
 .pytest-tmp*/
+.pytest_tmp*/
+.ruff_cache/
+backups/
 .pytest_cache/
 portable/
 media_publisher_data/

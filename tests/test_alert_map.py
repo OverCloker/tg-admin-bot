@@ -4,9 +4,12 @@ from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from PIL import Image
 
 import app.bot as bot
+import app.alert_map as alert_map
 from app.alert_map import AlertMapResult, render_alert_map
 
 
@@ -82,3 +85,32 @@ def test_alert_map_command_and_help_aliases_are_registered():
     ):
         assert bot.ALERT_MAP_RE.fullmatch(text)
     assert "карта тревог" in bot.chat_help_text()
+
+
+def test_map_download_stops_when_stream_exceeds_limit(monkeypatch):
+    monkeypatch.setattr(alert_map, "MAX_RESPONSE_BYTES", 5)
+    consumed = []
+
+    class Response:
+        content_length = None
+        content = None
+
+        def raise_for_status(self):
+            pass
+
+        async def iter_chunked(self, size):
+            for chunk in (b"123", b"456", b"789"):
+                consumed.append(chunk)
+                yield chunk
+
+        async def __aenter__(self):
+            self.content = self
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    session = SimpleNamespace(get=lambda url: Response())
+    with pytest.raises(ValueError, match="too large"):
+        asyncio.run(alert_map._fetch_json(session, "/test"))
+    assert consumed == [b"123", b"456"]

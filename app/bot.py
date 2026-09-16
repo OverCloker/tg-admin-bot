@@ -1740,7 +1740,7 @@ HELP_SECTIONS = {
     ),
     "roles": (
         "<b>🔧 Роли персонала</b>\n"
-        "Назначать роли может владелец группы.\n\n"
+        "Назначение ролей доступно администрации бота.\n\n"
         "<code>+помощник</code> · <code>-помощник</code>\n"
         "<code>+модератор</code> · <code>-модератор</code>\n"
         "<code>+стМодератор</code> · <code>-стМодератор</code>\n\n"
@@ -3182,7 +3182,8 @@ def run_private_dig(chat_id: int, user: User) -> DigReply:
         dug,
         DIG_EXPEDITION_TARGET,
     )
-    expedition_rewarded = db.reward_dig_expedition(chat_id, today, DIG_EXPEDITION_REWARD) if expedition["completed"] else []
+    if expedition["completed"]:
+        db.reward_dig_expedition(chat_id, today, DIG_EXPEDITION_REWARD)
 
     achievements = check_dig_achievements(chat_id, user.id, player, dug, coins, collapse_depth, stopped_by_stone)
     display_name = dig_display_name(chat_id, user.id, user.username, user.full_name)
@@ -5328,7 +5329,7 @@ def trigger_page_text(chat_id: int, page: int) -> tuple[str, int, int]:
     start = page * TRIGGERS_PAGE_SIZE
     page_items = triggers[start : start + TRIGGERS_PAGE_SIZE]
 
-    lines = [f"<b>Фиксированные ответы</b>"]
+    lines = ["<b>Фиксированные ответы</b>"]
     if not page_items:
         lines.append("Пока нет фиксированных ответов.")
     else:
@@ -7303,7 +7304,7 @@ async def cb_dig_star(callback: CallbackQuery) -> None:
             prices=[LabeledPrice(label=title, amount=price)],
             provider_token="",
         )
-    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+    except (TelegramBadRequest, TelegramForbiddenError):
         await callback.answer(
             "Не получилось отправить счет в личку. Открой бота в личных сообщениях и нажми /start, потом попробуй снова.",
             show_alert=True,
@@ -13223,9 +13224,9 @@ async def all_quotes(message: Message) -> None:
         return
 
     lines = [f"<b>Все цитаты:</b> {len(quotes)}"]
-    for index, quote in enumerate(quotes, start=1):
-        author = f" — {escape(quote.author_name)}" if quote.author_name else ""
-        lines.append(f"{index}. {quote_list_preview(quote)}{author}")
+    for index, item in enumerate(quotes, start=1):
+        author = f" — {escape(item.author_name)}" if item.author_name else ""
+        lines.append(f"{index}. {quote_list_preview(item)}{author}")
 
     await safe_reply_chunks(message, lines, disable_web_page_preview=True)
 
