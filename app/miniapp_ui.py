@@ -2482,6 +2482,8 @@ MINI_APP_HTML = r"""<!doctype html>
             ? `<button class="btn secondary" onclick="showBlacklistManager()">Открыть список</button>`
           : section.key === "triggers" && section.enabled
             ? `<button class="btn secondary" onclick="showTriggerManager()">Открыть триггеры</button>`
+          : section.key === "inline-stats" && section.enabled
+            ? `<button class="btn secondary" onclick="showInlineStatistics()">Открыть статистику</button>`
             : `<span class="muted">Скоро</span>`;
     return `<div class="admin-list-row">
       <span>
@@ -2522,6 +2524,42 @@ MINI_APP_HTML = r"""<!doctype html>
         <div class="role-list">${sections.map(adminSectionHtml).join("")}</div>
       </section>
       <section class="panel"><button class="btn secondary" style="margin:0" onclick="showProfile()">Назад к профилю</button></section>`;
+      scrollToTop();
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  function inlineStatsCards(title, stats) {
+    const values = stats || {};
+    return `<section class="panel">
+      <h2>${escapeHtml(title)}</h2>
+      <div class="mine-admin-grid">
+        <div class="mine-admin-card">За 24 часа<b>${Number(values.day || 0)}</b></div>
+        <div class="mine-admin-card">За 7 дней<b>${Number(values.week || 0)}</b></div>
+        <div class="mine-admin-card">За 30 дней<b>${Number(values.month || 0)}</b></div>
+        <div class="mine-admin-card">За всё время<b>${Number(values.all || 0)}</b></div>
+      </div>
+    </section>`;
+  }
+
+  async function showInlineStatistics() {
+    setScreenHeader("adminPanel");
+    content.innerHTML = `<section class="panel muted">Загружаю статистику inline-команд...</section>`;
+    try {
+      const data = await api("/miniapp/profile/inline-statistics");
+      const regions = (data.alertMapRegions || []).map(item => `<div class="admin-list-row">
+        <span><b>${escapeHtml(item.region || "Без региона")}</b><br><span class="muted">24 ч: ${Number(item.day || 0)} · 7 дней: ${Number(item.week || 0)} · 30 дней: ${Number(item.month || 0)}</span></span>
+        <b>${Number(item.all || 0)}</b>
+      </div>`).join("");
+      content.innerHTML = `${inlineStatsCards("🌤 Погода", data.weather)}
+        ${inlineStatsCards("🗺 Карта тревог", data.alertMap)}
+        <section class="panel">
+          <h2>Карты по областям</h2>
+          <p class="muted">Количество успешных inline-вызовов. Список отсортирован по общему числу запросов.</p>
+          <div class="role-list">${regions || `<p class="muted">Запросов карт пока нет.</p>`}</div>
+        </section>
+        <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
       scrollToTop();
     } catch (error) {
       showError(error);

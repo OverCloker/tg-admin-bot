@@ -46,7 +46,7 @@ from .alert_providers import (
     UkraineAlarmProvider,
 )
 from .alerts_diagnostics import save_alerts_response
-from .alert_map import UnknownMapRegion, fetch_alert_map
+from .alert_map import AlertMapResult, UnknownMapRegion, fetch_alert_map
 from .inline_media import inline_photo_url, save_inline_photo
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
 from .dig_game import (
@@ -238,10 +238,13 @@ ALERT_MAP_RE = re.compile(
     r"(?:@[A-Za-z0-9_]+)?(?:\s+(?P<region>[^\n]{1,100}?))?[?!.]?\s*$",
     re.IGNORECASE,
 )
-INLINE_CACHE_SECONDS = 30
+INLINE_CACHE_SECONDS = 15 * 60
 INLINE_ANSWER_CACHE_SECONDS = 20
 INLINE_WEATHER_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
 INLINE_WEATHER_TASKS: dict[tuple[str, str], asyncio.Task[str]] = {}
+INLINE_MAP_CACHE: dict[str, tuple[float, AlertMapResult]] = {}
+INLINE_MAP_TASKS: dict[str, asyncio.Task[AlertMapResult]] = {}
+INLINE_USER_LIMITS: dict[tuple[int, str], float] = {}
 DEVELOPER_URL = "https://t.me/YourLittleCat"
 PRIVATE_UTILITY_HINT = (
     "В личке доступны:\n"
@@ -1638,7 +1641,7 @@ def inline_help_result() -> InlineQueryResultArticle:
 
 
 async def fetch_inline_weather(city: str, period: str) -> str:
-    """Coalesce keystroke bursts and briefly cache identical forecasts."""
+    """Coalesce identical requests and reuse one forecast for 15 minutes."""
     key = (city.casefold(), period)
     now = time.monotonic()
     cached = INLINE_WEATHER_CACHE.get(key)
@@ -1667,6 +1670,98 @@ async def fetch_inline_weather(city: str, period: str) -> str:
 
         task.add_done_callback(finished)
     return await asyncio.wait_for(asyncio.shield(task), timeout=8)
+
+
+async def fetch_inline_alert_map(region: str) -> AlertMapResult:
+    """Coalesce identical map requests and reuse one rendered map for 15 minutes."""
+    key = " ".join(region.casefold().split())
+    now = time.monotonic()
+    cached = INLINE_MAP_CACHE.get(key)
+    if cached and now - cached[0] < INLINE_CACHE_SECONDS:
+        return cached[1]
+    task = INLINE_MAP_TASKS.get(key)
+    if task is None or task.done():
+        if sum(not item.done() for item in INLINE_MAP_TASKS.values()) >= 4:
+            raise RuntimeError("too many inline alert-map requests")
+        task = asyncio.create_task(fetch_alert_map(region) if region else fetch_alert_map())
+        INLINE_MAP_TASKS[key] = task
+
+        def finished(completed: asyncio.Task[AlertMapResult]) -> None:
+            if INLINE_MAP_TASKS.get(key) is completed:
+                INLINE_MAP_TASKS.pop(key, None)
+            if completed.cancelled():
+                return
+            try:
+                value = completed.result()
+            except Exception:
+                return
+            INLINE_MAP_CACHE[key] = (time.monotonic(), value)
+            if len(INLINE_MAP_CACHE) > 64:
+                oldest = min(INLINE_MAP_CACHE, key=lambda item: INLINE_MAP_CACHE[item][0])
+                INLINE_MAP_CACHE.pop(oldest, None)
+
+        task.add_done_callback(finished)
+    return await asyncio.wait_for(asyncio.shield(task), timeout=8)
+
+
+def inline_request_is_reusable(command_type: str, key: object, now: float | None = None) -> bool:
+    current = time.monotonic() if now is None else now
+    if command_type == "weather":
+        cached = INLINE_WEATHER_CACHE.get(key)  # type: ignore[arg-type]
+        return bool(
+            (cached and current - cached[0] < INLINE_CACHE_SECONDS)
+            or (key in INLINE_WEATHER_TASKS and not INLINE_WEATHER_TASKS[key].done())  # type: ignore[index]
+        )
+    cached = INLINE_MAP_CACHE.get(str(key))
+    return bool(
+        (cached and current - cached[0] < INLINE_CACHE_SECONDS)
+        or (str(key) in INLINE_MAP_TASKS and not INLINE_MAP_TASKS[str(key)].done())
+    )
+
+
+def reserve_inline_request(
+    user_id: int,
+    command_type: str,
+    *,
+    reusable: bool,
+    now: float | None = None,
+) -> tuple[int, float | None]:
+    """Return remaining cooldown seconds and a reservation timestamp for rollback."""
+    current = time.monotonic() if now is None else now
+    owner_id = load_config().owner_id
+    if reusable or (owner_id is not None and int(user_id) == int(owner_id)):
+        return 0, None
+    key = (int(user_id), command_type)
+    last = INLINE_USER_LIMITS.get(key)
+    if last is not None and current - last < INLINE_CACHE_SECONDS:
+        return max(1, math.ceil(INLINE_CACHE_SECONDS - (current - last))), None
+    INLINE_USER_LIMITS[key] = current
+    return 0, current
+
+
+def release_inline_request(user_id: int, command_type: str, reservation: float | None) -> None:
+    if reservation is None:
+        return
+    key = (int(user_id), command_type)
+    if INLINE_USER_LIMITS.get(key) == reservation:
+        INLINE_USER_LIMITS.pop(key, None)
+
+
+def inline_cooldown_result(command_type: str, remaining_seconds: int) -> InlineQueryResultArticle:
+    minutes = max(1, math.ceil(remaining_seconds / 60))
+    label = "погоды" if command_type == "weather" else "карты тревог"
+    return inline_error_result(
+        f"⏳ Новый запрос через {minutes} мин.",
+        f"Новый запрос {label} доступен через {minutes} мин. Повтор прежнего запроса можно отправить сразу.",
+        f"inline-{command_type}-cooldown-{minutes}",
+    )
+
+
+def record_inline_usage(user_id: int, command_type: str, *, target: str = "", region: str = "") -> None:
+    try:
+        db.record_inline_usage(user_id, command_type, target=target, region=region)
+    except Exception as exc:
+        logging.warning("Could not record inline usage: %s", exc)
 
 
 def parse_auto_weather_command(text: str | None) -> tuple[str, str | None] | None:
@@ -11927,18 +12022,34 @@ def inline_error_result(title: str, message: str, result_id: str) -> InlineQuery
 @router.inline_query()
 async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
     query = " ".join((inline_query.query or "").split())
+    user_id = int(getattr(getattr(inline_query, "from_user", None), "id", 0) or 0)
     if not query:
-        await inline_query.answer(inline_usage_results(), cache_time=INLINE_ANSWER_CACHE_SECONDS)
+        await inline_query.answer(
+            inline_usage_results(), cache_time=INLINE_ANSWER_CACHE_SECONDS, is_personal=True
+        )
         return
 
     if query.casefold().strip(" ?!.") in {"помощь", "help", "/help", "/помощь"}:
-        await inline_query.answer([inline_help_result()], cache_time=INLINE_ANSWER_CACHE_SECONDS)
+        await inline_query.answer(
+            [inline_help_result()], cache_time=INLINE_ANSWER_CACHE_SECONDS, is_personal=True
+        )
         return
 
     weather_request = parse_weather_request(query)
     map_match = ALERT_MAP_RE.fullmatch(query)
     if weather_request:
         city, period = weather_request
+        weather_key = (city.casefold(), period)
+        remaining, reservation = reserve_inline_request(
+            user_id,
+            "weather",
+            reusable=inline_request_is_reusable("weather", weather_key),
+        )
+        if remaining:
+            await inline_query.answer(
+                [inline_cooldown_result("weather", remaining)], cache_time=5, is_personal=True
+            )
+            return
         cache_time = INLINE_ANSWER_CACHE_SECONDS
         try:
             forecast = await fetch_inline_weather(city, period)
@@ -11956,7 +12067,9 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
                     link_preview_options={"is_disabled": True},
                 ),
             )
+            record_inline_usage(user_id, "weather", target=city)
         except (TimeoutError, asyncio.TimeoutError):
+            release_inline_request(user_id, "weather", reservation)
             cache_time = 5
             result = inline_error_result(
                 "Погода отвечает слишком долго",
@@ -11964,6 +12077,7 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
                 "inline-weather-timeout",
             )
         except Exception as exc:
+            release_inline_request(user_id, "weather", reservation)
             cache_time = 5
             logging.warning("Could not answer inline weather query %r: %s", query, exc)
             result = inline_error_result(
@@ -11971,13 +12085,24 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
                 "Не получилось получить погоду. Проверьте название города, например: погода Киев завтра.",
                 "inline-weather-error",
             )
-        await inline_query.answer([result], cache_time=cache_time)
+        await inline_query.answer([result], cache_time=cache_time, is_personal=True)
         return
 
     if map_match:
         region = (map_match.group("region") or "").strip()
+        map_key = " ".join(region.casefold().split())
+        remaining, reservation = reserve_inline_request(
+            user_id,
+            "alert_map",
+            reusable=inline_request_is_reusable("alert_map", map_key),
+        )
+        if remaining:
+            await inline_query.answer(
+                [inline_cooldown_result("alert_map", remaining)], cache_time=5, is_personal=True
+            )
+            return
         try:
-            result = await asyncio.wait_for(fetch_alert_map(region) if region else fetch_alert_map(), timeout=8)
+            result = await fetch_inline_alert_map(region)
             filename, _ = await asyncio.to_thread(save_inline_photo, result.image)
             photo_url = inline_photo_url(filename)
             if not photo_url:
@@ -11997,13 +12122,24 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
                 caption=alert_map_caption(result),
                 parse_mode=ParseMode.HTML,
             )
-            await inline_query.answer([photo], cache_time=INLINE_ANSWER_CACHE_SECONDS)
+            record_inline_usage(
+                user_id,
+                "alert_map",
+                target=region or "Вся Украина",
+                region=result.region_title or "Вся Украина",
+            )
+            await inline_query.answer(
+                [photo], cache_time=INLINE_ANSWER_CACHE_SECONDS, is_personal=True
+            )
         except UnknownMapRegion as exc:
+            release_inline_request(user_id, "alert_map", reservation)
             await inline_query.answer(
                 [inline_error_result("Область не найдена", str(exc), "inline-map-region-error")],
                 cache_time=INLINE_ANSWER_CACHE_SECONDS,
+                is_personal=True,
             )
         except (TimeoutError, asyncio.TimeoutError):
+            release_inline_request(user_id, "alert_map", reservation)
             await inline_query.answer(
                 [inline_error_result(
                     "Карта обновляется",
@@ -12011,8 +12147,10 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
                     "inline-map-timeout",
                 )],
                 cache_time=5,
+                is_personal=True,
             )
         except Exception as exc:
+            release_inline_request(user_id, "alert_map", reservation)
             logging.warning("Could not answer inline alert-map query %r: %s", query, exc)
             await inline_query.answer(
                 [inline_error_result(
@@ -12021,10 +12159,13 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
                     "inline-map-error",
                 )],
                 cache_time=5,
+                is_personal=True,
             )
         return
 
-    await inline_query.answer(inline_usage_results(), cache_time=INLINE_ANSWER_CACHE_SECONDS)
+    await inline_query.answer(
+        inline_usage_results(), cache_time=INLINE_ANSWER_CACHE_SECONDS, is_personal=True
+    )
 
 
 @router.message(F.text.regexp(re.compile(r"^/?напоминани[ея][?!.]?$", re.IGNORECASE)))

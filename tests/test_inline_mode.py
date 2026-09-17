@@ -16,10 +16,28 @@ from fastapi import HTTPException
 from PIL import Image
 
 from app import bot
+from app import miniapp
 from app.admin_api import inline_media_photo
 from app.alert_map import AlertMapResult
 from app import inline_media
 from app.admin_api import app
+from app.db import Database
+from app.miniapp_ui import MINI_APP_HTML
+
+
+@pytest.fixture(autouse=True)
+def reset_inline_runtime(tmp_path, monkeypatch):
+    database = Database(str(tmp_path / "inline.sqlite3"))
+    database.init()
+    monkeypatch.setattr(bot, "db", database, raising=False)
+    monkeypatch.setattr(bot, "load_config", lambda: SimpleNamespace(owner_id=999))
+    bot.INLINE_WEATHER_CACHE.clear()
+    bot.INLINE_WEATHER_TASKS.clear()
+    bot.INLINE_MAP_CACHE.clear()
+    bot.INLINE_MAP_TASKS.clear()
+    bot.INLINE_USER_LIMITS.clear()
+    yield database
+    database.close()
 
 
 def png_bytes(size=(80, 60)) -> bytes:
@@ -73,6 +91,47 @@ def test_inline_weather_routes_to_forecast(monkeypatch):
     assert "Киев · на завтра" in results[0].description
     assert results[0].input_message_content.message_text.startswith("<b>Погода")
     assert answer.await_args.kwargs["cache_time"] == bot.INLINE_ANSWER_CACHE_SECONDS
+    assert answer.await_args.kwargs["is_personal"] is True
+
+
+def test_inline_weather_reuses_same_query_but_limits_a_new_city(monkeypatch):
+    fetch = AsyncMock(return_value="<b>Прогноз</b>")
+    monkeypatch.setattr(bot, "fetch_weather", fetch)
+
+    async def run():
+        first = AsyncMock()
+        repeated = AsyncMock()
+        limited = AsyncMock()
+        await bot.inline_weather_or_alert_map(SimpleNamespace(
+            query="погода Киев", from_user=SimpleNamespace(id=10), answer=first,
+        ))
+        await bot.inline_weather_or_alert_map(SimpleNamespace(
+            query="погода Киев", from_user=SimpleNamespace(id=10), answer=repeated,
+        ))
+        await bot.inline_weather_or_alert_map(SimpleNamespace(
+            query="погода Львов", from_user=SimpleNamespace(id=10), answer=limited,
+        ))
+        return first, repeated, limited
+
+    _, repeated, limited = asyncio.run(run())
+
+    fetch.assert_awaited_once_with("Киев", "now")
+    assert repeated.await_args.args[0][0].title == "🌤 Погода выбранного города"
+    assert limited.await_args.args[0][0].title.startswith("⏳ Новый запрос через")
+
+
+def test_inline_owner_is_not_rate_limited(monkeypatch):
+    fetch = AsyncMock(side_effect=["<b>Киев</b>", "<b>Львов</b>"])
+    monkeypatch.setattr(bot, "fetch_weather", fetch)
+
+    async def run():
+        for city in ("Киев", "Львов"):
+            await bot.inline_weather_or_alert_map(SimpleNamespace(
+                query=f"погода {city}", from_user=SimpleNamespace(id=999), answer=AsyncMock(),
+            ))
+
+    asyncio.run(run())
+    assert fetch.await_count == 2
 
 
 def test_inline_alert_map_produces_public_jpeg_result(tmp_path, monkeypatch):
@@ -102,6 +161,43 @@ def test_inline_alert_map_produces_public_jpeg_result(tmp_path, monkeypatch):
     saved = tmp_path / "media_storage" / "inline_maps" / result.photo_url.rsplit("/", 1)[1]
     assert saved.read_bytes().startswith(b"\xff\xd8")
     assert "Обновлено" in result.caption
+
+
+def test_inline_usage_statistics_include_periods_and_regions(reset_inline_runtime):
+    database = reset_inline_runtime
+    now = datetime(2026, 9, 17, 12, tzinfo=timezone.utc)
+    database.record_inline_usage(1, "weather", target="Киев", created_at="2026-09-17T11:00:00+00:00")
+    database.record_inline_usage(2, "weather", target="Львов", created_at="2026-09-10T11:00:00+00:00")
+    database.record_inline_usage(
+        1, "alert_map", target="днепр", region="Дніпропетровська область",
+        created_at="2026-09-17T11:30:00+00:00",
+    )
+    database.record_inline_usage(
+        2, "alert_map", target="киев", region="Київська область",
+        created_at="2026-08-01T10:00:00+00:00",
+    )
+
+    stats = database.inline_usage_statistics(now)
+
+    assert stats["weather"] == {"day": 1, "week": 1, "month": 2, "all": 2}
+    assert stats["alertMap"] == {"day": 1, "week": 1, "month": 1, "all": 2}
+    assert stats["alertMapRegions"][0]["region"] == "Дніпропетровська область"
+
+
+def test_miniapp_owner_can_view_inline_statistics(reset_inline_runtime, monkeypatch):
+    database = reset_inline_runtime
+    database.record_inline_usage(1, "weather", target="Киев")
+    database.record_inline_usage(1, "alert_map", target="днепр", region="Дніпропетровська область")
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(database.path)))
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _data: {"id": 999})
+    monkeypatch.setattr(miniapp, "load_config", lambda: SimpleNamespace(owner_id=999))
+
+    payload = miniapp.miniapp_profile_inline_statistics(x_telegram_init_data="signed")
+
+    assert payload["weather"]["all"] == 1
+    assert payload["alertMap"]["all"] == 1
+    assert payload["alertMapRegions"][0]["region"] == "Дніпропетровська область"
+    assert 'api("/miniapp/profile/inline-statistics")' in MINI_APP_HTML
 
 
 @pytest.mark.parametrize("text", ["", "погода", "что-нибудь другое"])

@@ -2869,8 +2869,23 @@ def miniapp_profile_admin_panel(
                 {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Режимы чата и управление тревогой по группам."},
                 {"key": "blacklist", "title": "Чёрный список", "enabled": _miniapp_can_manage_blacklist(db, user["id"]), "description": "Запрещённые слова, формы и синонимы."},
                 {"key": "triggers", "title": "Триггеры", "enabled": _miniapp_can_manage_triggers(db, user["id"]), "description": "Слова и фразы, на которые бот отвечает в чатах."},
+                {"key": "inline-stats", "title": "Inline-статистика", "enabled": is_app_admin, "description": "Вызовы погоды и карт тревог за день, неделю и месяц."},
             ],
         }
+    finally:
+        db.close()
+
+
+@router.get("/miniapp/profile/inline-statistics")
+def miniapp_profile_inline_statistics(
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not _miniapp_is_app_admin(db, user["id"]):
+            raise HTTPException(403, "Статистика inline-команд доступна владельцу и администраторам.")
+        return {"ok": True, **db.inline_usage_statistics()}
     finally:
         db.close()
 

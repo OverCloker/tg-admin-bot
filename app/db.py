@@ -641,6 +641,19 @@ class Database:
                 created_at text not null
             );
 
+            create table if not exists inline_usage_events (
+                id integer primary key autoincrement,
+                user_id integer not null,
+                command_type text not null,
+                target text not null default '',
+                region text not null default '',
+                created_at text not null
+            );
+            create index if not exists idx_inline_usage_events_type_created
+                on inline_usage_events(command_type, created_at);
+            create index if not exists idx_inline_usage_events_region
+                on inline_usage_events(command_type, region, created_at);
+
             create table if not exists device_events (
                 id integer primary key autoincrement,
                 app text not null,
@@ -3137,6 +3150,83 @@ class Database:
                 (chat_id, safe_limit),
             ).fetchall()
         return [AuditLog(**dict(row)) for row in rows]
+
+    def record_inline_usage(
+        self,
+        user_id: int,
+        command_type: str,
+        *,
+        target: str = "",
+        region: str = "",
+        created_at: str | None = None,
+    ) -> int:
+        kind = str(command_type).strip().casefold()
+        if kind not in {"weather", "alert_map"}:
+            raise ValueError("Unsupported inline command type")
+        cur = self._conn.execute(
+            """
+            insert into inline_usage_events(user_id, command_type, target, region, created_at)
+            values (?, ?, ?, ?, ?)
+            """,
+            (
+                int(user_id),
+                kind,
+                str(target).strip()[:120],
+                str(region).strip()[:120],
+                created_at or utc_now(),
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def inline_usage_statistics(self, moment: datetime | None = None) -> dict:
+        now = moment or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        else:
+            now = now.astimezone(timezone.utc)
+        cutoffs = {
+            "day": (now - timedelta(days=1)).isoformat(timespec="seconds"),
+            "week": (now - timedelta(days=7)).isoformat(timespec="seconds"),
+            "month": (now - timedelta(days=30)).isoformat(timespec="seconds"),
+        }
+
+        def totals(command_type: str, region: str | None = None) -> dict[str, int]:
+            where = "command_type = ?"
+            params: list[object] = [command_type]
+            if region is not None:
+                where += " and region = ?"
+                params.append(region)
+            result = {
+                name: int(self._conn.execute(
+                    f"select count(*) from inline_usage_events where {where} and created_at >= ?",
+                    (*params, cutoff),
+                ).fetchone()[0])
+                for name, cutoff in cutoffs.items()
+            }
+            result["all"] = int(self._conn.execute(
+                f"select count(*) from inline_usage_events where {where}",
+                tuple(params),
+            ).fetchone()[0])
+            return result
+
+        region_rows = self._conn.execute(
+            """
+            select region, count(*) as calls
+            from inline_usage_events
+            where command_type = 'alert_map' and region <> ''
+            group by region
+            order by calls desc, region collate nocase
+            """
+        ).fetchall()
+        return {
+            "weather": totals("weather"),
+            "alertMap": totals("alert_map"),
+            "alertMapRegions": [
+                {"region": str(row["region"]), **totals("alert_map", str(row["region"]))}
+                for row in region_rows
+            ],
+        }
 
     def add_device_event(
         self,
