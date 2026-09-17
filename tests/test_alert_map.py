@@ -2,14 +2,15 @@ import asyncio
 from datetime import datetime, timezone
 from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import pytest
-
+from aiogram import Bot, Dispatcher
+from aiogram.types import Message, Update
 from PIL import Image
 
-import app.bot as bot
 import app.alert_map as alert_map
+import app.bot as bot
 from app.alert_map import AlertMapResult, render_alert_map
 
 
@@ -142,3 +143,65 @@ def test_regional_command_argument():
     for command in ("карта тревог днепр", "/alertmap@ypominanieBot Дніпро!"):
         assert bot.ALERT_MAP_RE.fullmatch(command).group("region").casefold() in {"днепр", "дніпро"}
     assert bot.ALERT_MAP_RE.fullmatch("карта тревог").group("region") is None
+
+
+def test_private_weather_and_alert_map_reach_registered_handlers(monkeypatch):
+    forecast = "<b>PRIVATE WEATHER</b>"
+    generated = AlertMapResult(
+        image=b"\x89PNG\r\n\x1a\nmock",
+        updated_at=datetime(2026, 9, 16, 10, tzinfo=timezone.utc),
+        alert_count=2,
+        threat_count=1,
+    )
+    replies = AsyncMock()
+    photos = AsyncMock()
+    monkeypatch.setattr(bot, "fetch_weather", AsyncMock(return_value=forecast))
+    monkeypatch.setattr(bot, "fetch_alert_map", AsyncMock(return_value=generated))
+    monkeypatch.setattr(Message, "reply", replies)
+    monkeypatch.setattr(Message, "answer_photo", photos)
+    monkeypatch.setattr(Bot, "send_chat_action", AsyncMock())
+
+    async def run() -> None:
+        client = Bot("123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi")
+        dispatcher = Dispatcher()
+        dispatcher.include_router(bot.router)
+        try:
+            texts = (
+                "погода Кривой Рог",
+                "погода Кривой Рог завтра",
+                "погода Кривой Рог неделя",
+                "карта тревог",
+                "карта тревог днепр",
+            )
+            for update_id, text in enumerate(texts, start=1):
+                await dispatcher.feed_update(
+                    client,
+                    Update.model_validate(
+                        {
+                            "update_id": update_id,
+                            "message": {
+                                "message_id": update_id,
+                                "date": datetime.now(timezone.utc),
+                                "chat": {"id": 42, "type": "private", "first_name": "User"},
+                                "from": {"id": 42, "is_bot": False, "first_name": "User"},
+                                "text": text,
+                            },
+                        }
+                    ),
+                )
+        finally:
+            await client.session.close()
+            dispatcher.sub_routers.remove(bot.router)
+            bot.router._parent_router = None
+
+    asyncio.run(run())
+
+    assert bot.fetch_weather.await_args_list == [
+        call("Кривой Рог", "now"),
+        call("Кривой Рог", "tomorrow"),
+        call("Кривой Рог", "week"),
+    ]
+    assert sum(item.args and item.args[0] == forecast for item in replies.await_args_list) == 3
+    assert bot.fetch_alert_map.await_args_list == [call(), call("днепр")]
+    assert photos.await_count == 2
+    assert all(item.args[0].filename == "alert-map.png" for item in photos.await_args_list)

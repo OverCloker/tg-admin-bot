@@ -236,6 +236,12 @@ ALERT_MAP_RE = re.compile(
     r"(?:@[A-Za-z0-9_]+)?(?:\s+(?P<region>[^\n]{1,100}?))?[?!.]?\s*$",
     re.IGNORECASE,
 )
+PRIVATE_UTILITY_HINT = (
+    "В личке доступны:\n"
+    "<code>погода Кривой Рог</code> · <code>погода Кривой Рог завтра</code> · "
+    "<code>погода Кривой Рог неделя</code>\n"
+    "<code>карта тревог</code> · <code>карта тревог днепр</code>"
+)
 EMOJI_BASE_RE = (
     r"(?:[\u00a9\u00ae\u203c\u2049\u2122\u2139\u2194-\u21ff\u2300-\u23ff"
     r"\u24c2\u25aa-\u27bf\u2934\u2935\u2b00-\u2bff\u3030\u303d\u3297\u3299]"
@@ -1555,6 +1561,7 @@ def parse_weather_request(text: str | None) -> tuple[str, str] | None:
         (" завтра", "tomorrow"),
         (" на неделю", "week"),
         (" неделю", "week"),
+        (" неделя", "week"),
         (" на 7 дней", "week"),
         (" 7 дней", "week"),
     ]
@@ -5451,7 +5458,7 @@ async def start(message: Message, state: FSMContext) -> None:
             )
             return
         await message.answer(
-            "Выбери раздел.",
+            "Выбери раздел.\n\n" + PRIVATE_UTILITY_HINT,
             reply_markup=await main_menu_for_user(message.bot, message.from_user.id if message.from_user else None),
         )
         return
@@ -13445,7 +13452,7 @@ async def auto_weather_settings(message: Message) -> None:
 
 @router.message(F.text.regexp(re.compile(r"^погода\s+.+", re.IGNORECASE)))
 async def weather(message: Message) -> None:
-    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+    if message.chat.type not in {*SUPPORTED_CHAT_TYPES, "private"}:
         return
 
     await remember_sender(message)
@@ -13679,7 +13686,7 @@ async def personal_notifications_loop(bot: Bot) -> None:
 @router.message(F.chat.type == "private")
 async def private_fallback(message: Message) -> None:
     await message.answer(
-        "Выбери группу и действие кнопками.",
+        "Выбери группу и действие кнопками.\n\n" + PRIVATE_UTILITY_HINT,
         reply_markup=await main_menu_for_user(message.bot, message.from_user.id if message.from_user else None),
     )
 
