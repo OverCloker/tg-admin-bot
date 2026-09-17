@@ -242,6 +242,7 @@ INLINE_CACHE_SECONDS = 30
 INLINE_ANSWER_CACHE_SECONDS = 20
 INLINE_WEATHER_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
 INLINE_WEATHER_TASKS: dict[tuple[str, str], asyncio.Task[str]] = {}
+DEVELOPER_URL = "https://t.me/YourLittleCat"
 PRIVATE_UTILITY_HINT = (
     "В личке доступны:\n"
     "<code>погода Кривой Рог</code> · <code>погода Кривой Рог завтра</code> · "
@@ -1583,8 +1584,8 @@ def inline_usage_results() -> list[InlineQueryResultArticle]:
     return [
         InlineQueryResultArticle(
             id="inline-weather-help",
-            title="🌤 Погода",
-            description="Например: погода Киев, погода Киев завтра или погода Киев неделя",
+            title="🌤 Погода выбранного города",
+            description="Погода Киев · погода Киев завтра · погода Киев неделя",
             input_message_content=InputTextMessageContent(
                 message_text=(
                     "🌤 <b>Погода через @ypominanieBot</b>\n"
@@ -1596,8 +1597,8 @@ def inline_usage_results() -> list[InlineQueryResultArticle]:
         ),
         InlineQueryResultArticle(
             id="inline-alert-map-help",
-            title="🗺 Карта тревог",
-            description="Например: карта тревог или карта тревог днепр",
+            title="🗺 Карта тревог выбранного региона",
+            description="Карта всей Украины или выбранной области, например: карта тревог днепр",
             input_message_content=InputTextMessageContent(
                 message_text=(
                     "🗺 <b>Карта тревог через @ypominanieBot</b>\n"
@@ -1607,7 +1608,33 @@ def inline_usage_results() -> list[InlineQueryResultArticle]:
                 parse_mode=ParseMode.HTML,
             ),
         ),
+        inline_help_result(),
     ]
+
+
+def inline_help_result() -> InlineQueryResultArticle:
+    return InlineQueryResultArticle(
+        id="inline-help",
+        title="❓ Помощь",
+        description="Команды погоды, карты тревог и связь с разработчиком",
+        input_message_content=InputTextMessageContent(
+            message_text=(
+                "<b>Помощь по inline-командам</b>\n\n"
+                "<code>погода Киев</code> — погода сейчас\n"
+                "<code>погода Киев завтра</code> — прогноз на завтра\n"
+                "<code>погода Киев неделя</code> — прогноз на неделю\n"
+                "<code>карта тревог</code> — карта Украины\n"
+                "<code>карта тревог днепр</code> — карта выбранной области\n\n"
+                "Для связи с разработчиком нажмите кнопку ниже или откройте "
+                '<a href="https://t.me/YourLittleCat">@YourLittleCat</a>.'
+            ),
+            parse_mode=ParseMode.HTML,
+            link_preview_options={"is_disabled": True},
+        ),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="💬 Связаться с разработчиком", url=DEVELOPER_URL)
+        ]]),
+    )
 
 
 async def fetch_inline_weather(city: str, period: str) -> str:
@@ -11904,6 +11931,10 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
         await inline_query.answer(inline_usage_results(), cache_time=INLINE_ANSWER_CACHE_SECONDS)
         return
 
+    if query.casefold().strip(" ?!.") in {"помощь", "help", "/help", "/помощь"}:
+        await inline_query.answer([inline_help_result()], cache_time=INLINE_ANSWER_CACHE_SECONDS)
+        return
+
     weather_request = parse_weather_request(query)
     map_match = ALERT_MAP_RE.fullmatch(query)
     if weather_request:
@@ -11913,8 +11944,12 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
             forecast = await fetch_inline_weather(city, period)
             result = InlineQueryResultArticle(
                 id=hashlib.sha256(f"weather:{city.casefold()}:{period}:{forecast}".encode()).hexdigest()[:32],
-                title=f"🌤 Погода: {city}",
-                description={"now": "Сейчас", "tomorrow": "На завтра", "week": "На 7 дней"}[period],
+                title="🌤 Погода выбранного города",
+                description=(
+                    f"{city} · "
+                    + {"now": "сейчас", "tomorrow": "на завтра", "week": "на 7 дней"}[period]
+                    + " · нажмите, чтобы отправить"
+                ),
                 input_message_content=InputTextMessageContent(
                     message_text=forecast,
                     parse_mode=ParseMode.HTML,
@@ -11952,8 +11987,13 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
                 id=hashlib.sha256(f"map:{filename}:{region.casefold()}".encode()).hexdigest()[:32],
                 photo_url=photo_url,
                 thumbnail_url=photo_url,
-                title=f"🗺 {result.region_title or 'Карта тревог Украины'}",
-                description=f"Обновлено {updated} · активных территорий: {result.alert_count}",
+                photo_width=1200,
+                photo_height=900,
+                title="🗺 Карта тревог выбранного региона",
+                description=(
+                    f"{result.region_title or 'Вся Украина'} · обновлено {updated} · "
+                    f"активных территорий: {result.alert_count}"
+                ),
                 caption=alert_map_caption(result),
                 parse_mode=ParseMode.HTML,
             )

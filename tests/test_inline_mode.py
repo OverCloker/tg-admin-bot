@@ -69,6 +69,8 @@ def test_inline_weather_routes_to_forecast(monkeypatch):
     results = answer.await_args.args[0]
     assert len(results) == 1
     assert isinstance(results[0], InlineQueryResultArticle)
+    assert results[0].title == "🌤 Погода выбранного города"
+    assert "Киев · на завтра" in results[0].description
     assert results[0].input_message_content.message_text.startswith("<b>Погода")
     assert answer.await_args.kwargs["cache_time"] == bot.INLINE_ANSWER_CACHE_SECONDS
 
@@ -92,6 +94,9 @@ def test_inline_alert_map_produces_public_jpeg_result(tmp_path, monkeypatch):
     bot.fetch_alert_map.assert_awaited_once_with("днепр")
     result = answer.await_args.args[0][0]
     assert isinstance(result, InlineQueryResultPhoto)
+    assert result.title == "🗺 Карта тревог выбранного региона"
+    assert "Дніпропетровська область" in result.description
+    assert (result.photo_width, result.photo_height) == (1200, 900)
     assert result.photo_url.startswith("https://app.example.test/inline-media/")
     assert result.photo_url.endswith(".jpg")
     saved = tmp_path / "media_storage" / "inline_maps" / result.photo_url.rsplit("/", 1)[1]
@@ -104,7 +109,26 @@ def test_empty_and_invalid_inline_queries_return_usage(text):
     answer = AsyncMock()
     asyncio.run(bot.inline_weather_or_alert_map(SimpleNamespace(query=text, answer=answer)))
     results = answer.await_args.args[0]
-    assert [item.title for item in results] == ["🌤 Погода", "🗺 Карта тревог"]
+    assert [item.title for item in results] == [
+        "🌤 Погода выбранного города",
+        "🗺 Карта тревог выбранного региона",
+        "❓ Помощь",
+    ]
+
+
+@pytest.mark.parametrize("text", ["помощь", "help", "/help"])
+def test_inline_help_has_developer_contact_button(text):
+    answer = AsyncMock()
+    asyncio.run(bot.inline_weather_or_alert_map(SimpleNamespace(query=text, answer=answer)))
+
+    results = answer.await_args.args[0]
+    assert len(results) == 1
+    result = results[0]
+    assert result.title == "❓ Помощь"
+    assert "@YourLittleCat" in result.input_message_content.message_text
+    button = result.reply_markup.inline_keyboard[0][0]
+    assert button.text == "💬 Связаться с разработчиком"
+    assert button.url == "https://t.me/YourLittleCat"
 
 
 def test_production_polling_subscribes_to_inline_queries():
