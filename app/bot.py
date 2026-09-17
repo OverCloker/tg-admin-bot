@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -29,7 +30,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, FSInputFile, Gift, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, InputRichBlockDetails, InputRichBlockParagraph, InputRichBlockTable, InputRichMessage, LabeledPrice, MenuButtonWebApp, Message, MessageReactionUpdated, PreCheckoutQuery, RichBlockTableCell, StarAmount, SuccessfulPayment, User, WebAppInfo
+from aiogram.types import BufferedInputFile, CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, FSInputFile, Gift, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery, InlineQueryResultArticle, InlineQueryResultPhoto, InputMediaPhoto, InputMediaVideo, InputRichBlockDetails, InputRichBlockParagraph, InputRichBlockTable, InputRichMessage, InputTextMessageContent, LabeledPrice, MenuButtonWebApp, Message, MessageReactionUpdated, PreCheckoutQuery, RichBlockTableCell, StarAmount, SuccessfulPayment, User, WebAppInfo
 
 from .config import load_config
 from .alert_providers import (
@@ -46,6 +47,7 @@ from .alert_providers import (
 )
 from .alerts_diagnostics import save_alerts_response
 from .alert_map import UnknownMapRegion, fetch_alert_map
+from .inline_media import inline_photo_url, save_inline_photo
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
 from .dig_game import (
     INTERACTIVE_DIG_DURABILITY,
@@ -236,6 +238,10 @@ ALERT_MAP_RE = re.compile(
     r"(?:@[A-Za-z0-9_]+)?(?:\s+(?P<region>[^\n]{1,100}?))?[?!.]?\s*$",
     re.IGNORECASE,
 )
+INLINE_CACHE_SECONDS = 30
+INLINE_ANSWER_CACHE_SECONDS = 20
+INLINE_WEATHER_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
+INLINE_WEATHER_TASKS: dict[tuple[str, str], asyncio.Task[str]] = {}
 PRIVATE_UTILITY_HINT = (
     "В личке доступны:\n"
     "<code>погода Кривой Рог</code> · <code>погода Кривой Рог завтра</code> · "
@@ -1571,6 +1577,69 @@ def parse_weather_request(text: str | None) -> tuple[str, str] | None:
             return (city, value) if city else None
 
     return (payload, period) if payload else None
+
+
+def inline_usage_results() -> list[InlineQueryResultArticle]:
+    return [
+        InlineQueryResultArticle(
+            id="inline-weather-help",
+            title="🌤 Погода",
+            description="Например: погода Киев, погода Киев завтра или погода Киев неделя",
+            input_message_content=InputTextMessageContent(
+                message_text=(
+                    "🌤 <b>Погода через @ypominanieBot</b>\n"
+                    "Введите после имени бота: <code>погода Киев</code>, "
+                    "<code>погода Киев завтра</code> или <code>погода Киев неделя</code>."
+                ),
+                parse_mode=ParseMode.HTML,
+            ),
+        ),
+        InlineQueryResultArticle(
+            id="inline-alert-map-help",
+            title="🗺 Карта тревог",
+            description="Например: карта тревог или карта тревог днепр",
+            input_message_content=InputTextMessageContent(
+                message_text=(
+                    "🗺 <b>Карта тревог через @ypominanieBot</b>\n"
+                    "Введите после имени бота: <code>карта тревог</code> или "
+                    "<code>карта тревог днепр</code>."
+                ),
+                parse_mode=ParseMode.HTML,
+            ),
+        ),
+    ]
+
+
+async def fetch_inline_weather(city: str, period: str) -> str:
+    """Coalesce keystroke bursts and briefly cache identical forecasts."""
+    key = (city.casefold(), period)
+    now = time.monotonic()
+    cached = INLINE_WEATHER_CACHE.get(key)
+    if cached and now - cached[0] < INLINE_CACHE_SECONDS:
+        return cached[1]
+    task = INLINE_WEATHER_TASKS.get(key)
+    if task is None or task.done():
+        if sum(not item.done() for item in INLINE_WEATHER_TASKS.values()) >= 8:
+            raise RuntimeError("too many inline weather requests")
+        task = asyncio.create_task(fetch_weather(city, period))
+        INLINE_WEATHER_TASKS[key] = task
+
+        def finished(completed: asyncio.Task[str]) -> None:
+            if INLINE_WEATHER_TASKS.get(key) is completed:
+                INLINE_WEATHER_TASKS.pop(key, None)
+            if completed.cancelled():
+                return
+            try:
+                value = completed.result()
+            except Exception:
+                return
+            INLINE_WEATHER_CACHE[key] = (time.monotonic(), value)
+            if len(INLINE_WEATHER_CACHE) > 64:
+                oldest = min(INLINE_WEATHER_CACHE, key=lambda item: INLINE_WEATHER_CACHE[item][0])
+                INLINE_WEATHER_CACHE.pop(oldest, None)
+
+        task.add_done_callback(finished)
+    return await asyncio.wait_for(asyncio.shield(task), timeout=8)
 
 
 def parse_auto_weather_command(text: str | None) -> tuple[str, str | None] | None:
@@ -11798,6 +11867,14 @@ async def alert_map_command(message: Message) -> None:
         )
         return
 
+    caption = alert_map_caption(result)
+    await message.answer_photo(
+        BufferedInputFile(result.image, filename="alert-map.png"),
+        caption=caption,
+    )
+
+
+def alert_map_caption(result) -> str:
     updated = result.updated_at.astimezone(LOCAL_TIMEZONE).strftime("%d.%m.%Y %H:%M")
     caption = (
         f"<b>🗺 {escape(result.region_title) if result.region_title else 'Актуальная карта тревог Украины'}</b>\n"
@@ -11808,10 +11885,106 @@ async def alert_map_command(message: Message) -> None:
     )
     if result.region_title:
         caption += "\nГраницы и статусы районов; детализация до громад недоступна у этого источника."
-    await message.answer_photo(
-        BufferedInputFile(result.image, filename="alert-map.png"),
-        caption=caption,
+    return caption
+
+
+def inline_error_result(title: str, message: str, result_id: str) -> InlineQueryResultArticle:
+    return InlineQueryResultArticle(
+        id=result_id,
+        title=title,
+        description=message,
+        input_message_content=InputTextMessageContent(message_text=message),
     )
+
+
+@router.inline_query()
+async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
+    query = " ".join((inline_query.query or "").split())
+    if not query:
+        await inline_query.answer(inline_usage_results(), cache_time=INLINE_ANSWER_CACHE_SECONDS)
+        return
+
+    weather_request = parse_weather_request(query)
+    map_match = ALERT_MAP_RE.fullmatch(query)
+    if weather_request:
+        city, period = weather_request
+        cache_time = INLINE_ANSWER_CACHE_SECONDS
+        try:
+            forecast = await fetch_inline_weather(city, period)
+            result = InlineQueryResultArticle(
+                id=hashlib.sha256(f"weather:{city.casefold()}:{period}:{forecast}".encode()).hexdigest()[:32],
+                title=f"🌤 Погода: {city}",
+                description={"now": "Сейчас", "tomorrow": "На завтра", "week": "На 7 дней"}[period],
+                input_message_content=InputTextMessageContent(
+                    message_text=forecast,
+                    parse_mode=ParseMode.HTML,
+                    link_preview_options={"is_disabled": True},
+                ),
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            cache_time = 5
+            result = inline_error_result(
+                "Погода отвечает слишком долго",
+                "Сервис погоды не успел ответить. Повторите запрос через несколько секунд.",
+                "inline-weather-timeout",
+            )
+        except Exception as exc:
+            cache_time = 5
+            logging.warning("Could not answer inline weather query %r: %s", query, exc)
+            result = inline_error_result(
+                "Погода временно недоступна",
+                "Не получилось получить погоду. Проверьте название города, например: погода Киев завтра.",
+                "inline-weather-error",
+            )
+        await inline_query.answer([result], cache_time=cache_time)
+        return
+
+    if map_match:
+        region = (map_match.group("region") or "").strip()
+        try:
+            result = await asyncio.wait_for(fetch_alert_map(region) if region else fetch_alert_map(), timeout=8)
+            filename, _ = await asyncio.to_thread(save_inline_photo, result.image)
+            photo_url = inline_photo_url(filename)
+            if not photo_url:
+                raise RuntimeError("ADMIN_PUBLIC_URL must be an HTTPS URL for inline map photos")
+            updated = result.updated_at.astimezone(LOCAL_TIMEZONE).strftime("%d.%m.%Y %H:%M")
+            photo = InlineQueryResultPhoto(
+                id=hashlib.sha256(f"map:{filename}:{region.casefold()}".encode()).hexdigest()[:32],
+                photo_url=photo_url,
+                thumbnail_url=photo_url,
+                title=f"🗺 {result.region_title or 'Карта тревог Украины'}",
+                description=f"Обновлено {updated} · активных территорий: {result.alert_count}",
+                caption=alert_map_caption(result),
+                parse_mode=ParseMode.HTML,
+            )
+            await inline_query.answer([photo], cache_time=INLINE_ANSWER_CACHE_SECONDS)
+        except UnknownMapRegion as exc:
+            await inline_query.answer(
+                [inline_error_result("Область не найдена", str(exc), "inline-map-region-error")],
+                cache_time=INLINE_ANSWER_CACHE_SECONDS,
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            await inline_query.answer(
+                [inline_error_result(
+                    "Карта обновляется",
+                    "Источник карты не успел ответить. Повторите запрос через несколько секунд.",
+                    "inline-map-timeout",
+                )],
+                cache_time=5,
+            )
+        except Exception as exc:
+            logging.warning("Could not answer inline alert-map query %r: %s", query, exc)
+            await inline_query.answer(
+                [inline_error_result(
+                    "Карта временно недоступна",
+                    "Не получилось подготовить карту. Попробуйте ещё раз через несколько секунд.",
+                    "inline-map-error",
+                )],
+                cache_time=5,
+            )
+        return
+
+    await inline_query.answer(inline_usage_results(), cache_time=INLINE_ANSWER_CACHE_SECONDS)
 
 
 @router.message(F.text.regexp(re.compile(r"^/?напоминани[ея][?!.]?$", re.IGNORECASE)))
@@ -13757,6 +13930,7 @@ async def main() -> None:
                 "channel_post",
                 "edited_channel_post",
                 "callback_query",
+                "inline_query",
                 "message_reaction",
                 "pre_checkout_query",
                 "my_chat_member",

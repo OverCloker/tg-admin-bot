@@ -40,6 +40,7 @@ from .telegram_client import create_bot
 from .user_profile import build_user_profile
 from .youtube_media import DOWNLOAD_TYPES, YoutubeMediaError, cleanup_youtube_file, download_youtube, inspect_youtube
 from .miniapp import router as miniapp_router
+from .inline_media import resolve_inline_photo
 
 
 @asynccontextmanager
@@ -54,6 +55,18 @@ async def lifespan(application: FastAPI):
 app = FastAPI(title="Telegram Autoreply Bot Admin API", lifespan=lifespan)
 app.include_router(miniapp_router)
 YOUTUBE_WORKER_TASK: asyncio.Task | None = None
+
+
+@app.get("/inline-media/{filename}", include_in_schema=False)
+def inline_media_photo(filename: str) -> FileResponse:
+    path = resolve_inline_photo(filename)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Inline photo not found")
+    return FileResponse(
+        path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400, immutable", "X-Content-Type-Options": "nosniff"},
+    )
 
 CURRENT_ADMIN_ACTOR_ID: ContextVar[int | None] = ContextVar("current_admin_actor_id", default=None)
 CURRENT_ADMIN_CHAT_ID: ContextVar[int | None] = ContextVar("current_admin_chat_id", default=None)
