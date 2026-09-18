@@ -15,6 +15,7 @@ from threading import Lock
 from datetime import datetime, timezone, timedelta
 from typing import Any
 from urllib.parse import parse_qsl
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import aiohttp
 from aiogram.types import FSInputFile, LabeledPrice
 from fastapi import APIRouter, File, Header, HTTPException, Query, Response, UploadFile
@@ -52,7 +53,9 @@ from .telegram_client import create_bot
 from .user_profile import build_user_profile
 
 router = APIRouter()
-DIG_LOCK = Lock()
+DIG_LOCKS = tuple(Lock() for _ in range(64))
+DB_INIT_LOCK = Lock()
+INITIALIZED_DB_PATHS: set[str] = set()
 MINE_ACCESS_CACHE_LOCK = Lock()
 MINE_ACCESS_CACHE_SECONDS = 30.0
 MINE_ACCESS_CACHE: dict[int, tuple[float, bool]] = {}
@@ -65,6 +68,10 @@ TRIGGER_MEDIA_TYPES = {
 }
 DYNAMITE_MISHAP_CHANCE = 20
 DYNAMITE_MISHAP_MESSAGE = "Из-за неосторожного обращения динамит взорвался в руках. Метр не пробит."
+
+
+def _dig_user_lock(user_id: int) -> Lock:
+    return DIG_LOCKS[int(user_id) % len(DIG_LOCKS)]
 
 
 class TicketPick(BaseModel):
@@ -83,6 +90,7 @@ class PersonalReminderCreate(BaseModel):
     text: str = Field(min_length=1, max_length=500)
     remindAt: str = Field(min_length=10, max_length=50)
     timezoneOffsetMinutes: int = Field(default=-180, ge=-840, le=840)
+    timezoneName: str = Field(default="Europe/Kyiv", min_length=1, max_length=64)
 
 
 class PersonalReminderDelete(BaseModel):
@@ -92,6 +100,7 @@ class PersonalReminderDelete(BaseModel):
 class PersonalWeatherSave(BaseModel):
     city: str = Field(min_length=1, max_length=120)
     timezoneOffsetMinutes: int = Field(default=-180, ge=-840, le=840)
+    timezoneName: str = Field(default="Europe/Kyiv", min_length=1, max_length=64)
     dailyEnabled: bool = False
     dailyTime: str = Field(default="08:00", pattern=r"^\d{2}:\d{2}$")
     tomorrowEnabled: bool = False
@@ -100,6 +109,7 @@ class PersonalWeatherSave(BaseModel):
 
 class ShopPurchase(BaseModel):
     item_key: str = Field(min_length=1, max_length=64)
+    request_id: str = Field(default="", max_length=80)
 
 
 class ProfileRoleSet(BaseModel):
@@ -162,6 +172,7 @@ class MiniAppTriggerVariant(BaseModel):
 class MiniAppTriggerSave(BaseModel):
     chatId: int
     trigger: str = Field(min_length=1, max_length=120)
+    originalTrigger: str | None = Field(default=None, max_length=120)
     aliases: list[str] = Field(default_factory=list, max_length=30)
     text: str | None = Field(default=None, max_length=4000)
     variants: list[MiniAppTriggerVariant] = Field(default_factory=list, max_length=14)
@@ -361,8 +372,13 @@ def _apply_interactive_repair_kit(
 
 
 def _db() -> Database:
-    db = Database(load_config().db_path)
-    db.init()
+    path = str(load_config().db_path)
+    db = Database(path)
+    if path not in INITIALIZED_DB_PATHS:
+        with DB_INIT_LOCK:
+            if path not in INITIALIZED_DB_PATHS:
+                db.init()
+                INITIALIZED_DB_PATHS.add(path)
     return db
 
 
@@ -2257,9 +2273,10 @@ def miniapp_shop_buy(
     user = _telegram_user(x_telegram_init_data)
     from . import bot as game
 
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
         try:
+            _ensure_mine_not_blocked(db, user["id"])
             player = db.get_dig_player(0, user["id"])
             if not player:
                 raise HTTPException(400, "Сначала зарегистрируйтесь в шахте.")
@@ -2270,11 +2287,12 @@ def miniapp_shop_buy(
             purchase_error = game.dig_purchase_error(items, payload.item_key)
             if purchase_error:
                 raise HTTPException(400, purchase_error)
-            status = db.purchase_dig_item(
+            status = db.purchase_dig_item_idempotent(
                 0,
                 user["id"],
                 payload.item_key,
                 game.dig_shop_price(payload.item_key, items),
+                payload.request_id,
                 quantity=1,
                 unique=payload.item_key in game.DIG_PERMANENT_ITEMS,
             )
@@ -2333,9 +2351,10 @@ def miniapp_shop_use(
     user = _telegram_user(x_telegram_init_data)
     from . import bot as game
 
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
         try:
+            _ensure_mine_not_blocked(db, user["id"])
             player = db.get_dig_player(0, user["id"])
             if not player:
                 raise HTTPException(400, "Сначала зарегистрируйтесь в шахте.")
@@ -2364,7 +2383,7 @@ def miniapp_merchant_sell(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
         try:
             _ensure_mine_not_blocked(db, user["id"])
@@ -2442,9 +2461,10 @@ def miniapp_shop_gift(
     user = _telegram_user(x_telegram_init_data)
     from . import bot as game
 
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
         try:
+            _ensure_mine_not_blocked(db, user["id"])
             player = db.get_dig_player(0, user["id"])
             if not player:
                 raise HTTPException(400, "Сначала зарегистрируйтесь в шахте.")
@@ -2505,7 +2525,7 @@ def profile_wardrobe(x_telegram_init_data: str | None = Header(default=None, ali
 def profile_style(payload: ProfileStyleSet, x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict:
     user = _telegram_user(x_telegram_init_data)
     from . import bot as game
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
         try:
             owned = _items_map(db, user["id"])
@@ -2638,7 +2658,7 @@ def miniapp_shift_contract(
     _ensure_miniapp_mine_access(user["id"])
     from . import bot as game
 
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
         try:
             if not db.get_dig_player(0, user["id"]):
@@ -2671,10 +2691,9 @@ async def miniapp_profile(
     viewer_id = int(user["id"])
     target_id = int(user_id or viewer_id)
     config = load_config()
-    db = Database(config.db_path)
+    db = _db()
     premium = PremiumService(config.db_path)
     try:
-        db.init()
         relation = _miniapp_social_target(db, viewer_id, target_id)
         if relation is None and not _miniapp_can_manage_roles(viewer_id):
             raise HTTPException(403, "Этот профиль доступен только вам, друзьям или паре.")
@@ -2869,7 +2888,7 @@ def miniapp_profile_admin_panel(
                 {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Режимы чата и управление тревогой по группам."},
                 {"key": "blacklist", "title": "Чёрный список", "enabled": _miniapp_can_manage_blacklist(db, user["id"]), "description": "Запрещённые слова, формы и синонимы."},
                 {"key": "triggers", "title": "Триггеры", "enabled": _miniapp_can_manage_triggers(db, user["id"]), "description": "Слова и фразы, на которые бот отвечает в чатах."},
-                {"key": "inline-stats", "title": "Inline-статистика", "enabled": is_app_admin, "description": "Вызовы погоды и карт тревог за день, неделю и месяц."},
+                {"key": "inline-stats", "title": "Inline-статистика", "enabled": _miniapp_has_global_admin_access(db, user["id"]), "description": "Глобальные вызовы погоды и карт тревог за день, неделю и месяц."},
             ],
         }
     finally:
@@ -2883,8 +2902,8 @@ def miniapp_profile_inline_statistics(
     user = _telegram_user(x_telegram_init_data)
     db = _db()
     try:
-        if not _miniapp_is_app_admin(db, user["id"]):
-            raise HTTPException(403, "Статистика inline-команд доступна владельцу и администраторам.")
+        if not _miniapp_has_global_admin_access(db, user["id"]):
+            raise HTTPException(403, "Глобальная inline-статистика доступна владельцу и глобальным администраторам.")
         return {"ok": True, **db.inline_usage_statistics()}
     finally:
         db.close()
@@ -3188,6 +3207,7 @@ def miniapp_profile_trigger_save(
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
     db = _db()
+    db.atomic_on_close()
     try:
         if not _miniapp_can_manage_triggers(db, user["id"]):
             raise HTTPException(403, "Триггеры доступны владельцу и администраторам групп.")
@@ -3199,6 +3219,12 @@ def miniapp_profile_trigger_save(
         if not normalized:
             raise HTTPException(400, "Укажи слово или фразу для триггера.")
         existing = next((item for item in db.list_triggers(payload.chatId) if item.trigger == normalized), None)
+        original = normalize_trigger(payload.originalTrigger or "")
+        if original and original != normalized:
+            if existing is not None:
+                raise HTTPException(409, "Триггер с новым названием уже существует.")
+            if not db.delete_trigger(payload.chatId, original):
+                raise HTTPException(409, "Исходный триггер уже изменён или удалён. Обновите список.")
         if not payload.variants and payload.text is not None and existing and existing.media_type and existing.media_file_id:
             payload.variants.append(
                 MiniAppTriggerVariant(
@@ -3343,25 +3369,27 @@ def miniapp_profile_mine_admin(
         total = db.count_dig_players()
         players = db.list_dig_players_page(limit=safe_per_page, offset=offset)
         can_manage = _miniapp_can_manage_mine_admin(db, user["id"])
+        can_view_global = _miniapp_has_global_admin_access(db, user["id"])
         return {
             "canManage": can_manage,
             "viewerRole": "admin" if can_manage else "moderator",
             "summary": {
-                "players": total,
-                "totalDepth": sum(int(player.total_depth) for player in db.list_all_dig_players()),
+                "players": total if can_view_global else 0,
+                "totalDepth": sum(int(player.total_depth) for player in db.list_all_dig_players()) if can_view_global else 0,
                 "activeSessions": 0,
             },
             "top": {
-                "depth": [_miniapp_dig_player_public(db, player) for player in db.top_dig_depth(0, limit=10)],
-                "coins": [_miniapp_dig_player_public(db, player) for player in db.top_dig_coins(0, limit=10)],
+                "depth": [_miniapp_dig_player_public(db, player) for player in db.top_dig_depth(0, limit=10)] if can_view_global else [],
+                "coins": [_miniapp_dig_player_public(db, player) for player in db.top_dig_coins(0, limit=10)] if can_view_global else [],
             },
             "players": {
-                "items": [_miniapp_dig_player_public(db, player) for player in players],
-                "total": total,
+                "items": [_miniapp_dig_player_public(db, player) for player in players] if can_view_global else [],
+                "total": total if can_view_global else 0,
                 "page": safe_page,
                 "perPage": safe_per_page,
             },
-            "blocked": [_miniapp_dig_block_public(item) for item in db.list_dig_blocks()],
+            "blocked": [_miniapp_dig_block_public(item) for item in db.list_dig_blocks()] if can_view_global else [],
+            "scope": "global" if can_view_global else "none",
         }
     finally:
         db.close()
@@ -3373,7 +3401,7 @@ def miniapp_profile_mine_admin_grant(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
         try:
             if not _miniapp_can_manage_mine_admin(db, user["id"]):
@@ -3408,7 +3436,7 @@ def miniapp_profile_mine_admin_delete(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
         try:
             if not _miniapp_can_manage_mine_admin(db, user["id"]):
@@ -3425,7 +3453,7 @@ def miniapp_profile_mine_admin_block(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
         try:
             if not _miniapp_can_manage_mine_admin(db, user["id"]):
@@ -3447,7 +3475,7 @@ def miniapp_profile_mine_admin_unblock(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
         try:
             if not _miniapp_can_manage_mine_admin(db, user["id"]):
@@ -3489,6 +3517,7 @@ def _personal_center_state(db: Database, user_id: int) -> dict[str, Any]:
             "tomorrowEnabled": bool(weather.tomorrow_enabled),
             "tomorrowTime": f"{weather.tomorrow_hour:02d}:{weather.tomorrow_minute:02d}",
             "timezoneOffsetMinutes": weather.timezone_offset_minutes,
+            "timezoneName": weather.timezone_name,
         },
     }
 
@@ -3565,6 +3594,10 @@ def miniapp_personal_weather_save(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
+    try:
+        ZoneInfo(payload.timezoneName)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise HTTPException(400, "Неизвестный часовой пояс устройства.") from exc
     daily_hour, daily_minute = _parse_clock(payload.dailyTime)
     tomorrow_hour, tomorrow_minute = _parse_clock(payload.tomorrowTime)
     db = _db()
@@ -3573,6 +3606,7 @@ def miniapp_personal_weather_save(
             user["id"], payload.city, payload.timezoneOffsetMinutes,
             payload.dailyEnabled, daily_hour, daily_minute,
             payload.tomorrowEnabled, tomorrow_hour, tomorrow_minute,
+            timezone_name=payload.timezoneName,
         )
         return {"ok": True, "message": "Личная погода настроена.", **_personal_center_state(db, user["id"])}
     finally:
@@ -3699,9 +3733,11 @@ def miniapp_register(x_telegram_init_data: str | None = Header(default=None, ali
 @router.post("/miniapp/gold-ticket/start")
 def gold_ticket_start(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
+        db.atomic_on_close()
         try:
+            _ensure_mine_not_blocked(db, user["id"])
             active = _ticket_public(db, user["id"])
             if active:
                 return {"ok": True, "game": active, "state": _state(db, user["id"])}
@@ -3723,9 +3759,11 @@ def gold_ticket_pick(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
+        db.atomic_on_close()
         try:
+            _ensure_mine_not_blocked(db, user["id"])
             game = db.get_gold_ticket_game(user["id"])
             if not game:
                 raise HTTPException(400, "Сначала открой золотой билет.")
@@ -3754,9 +3792,11 @@ def gold_ticket_pick(
 @router.post("/miniapp/super-game/start")
 def super_game_start(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
+        db.atomic_on_close()
         try:
+            _ensure_mine_not_blocked(db, user["id"])
             active = _super_ticket_public(db, user["id"])
             if active:
                 return {"ok": True, "game": active, "state": _state(db, user["id"])}
@@ -3808,9 +3848,11 @@ def super_game_pick(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
+        db.atomic_on_close()
         try:
+            _ensure_mine_not_blocked(db, user["id"])
             game = db.get_super_ticket_game(user["id"])
             if not game:
                 raise HTTPException(400, "Сначала открой супер-игру.")
@@ -3855,8 +3897,9 @@ def miniapp_interactive_start(
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
     _ensure_miniapp_mine_access(user["id"])
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
+        db.atomic_on_close()
         try:
             from . import bot as game
             _ensure_mine_not_blocked(db, user["id"])
@@ -3873,8 +3916,9 @@ def miniapp_interactive_cell(
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
     _ensure_miniapp_mine_access(user["id"])
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
+        db.atomic_on_close()
         try:
             from . import bot as game
             _ensure_mine_not_blocked(db, user["id"])
@@ -3991,8 +4035,9 @@ def minesweeper_start(
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
     _ensure_miniapp_mine_access(user["id"])
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
+        db.atomic_on_close()
         try:
             from . import bot as game
             _ensure_mine_not_blocked(db, user["id"])
@@ -4027,7 +4072,7 @@ def minesweeper_start(
 def minesweeper_hint(x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")) -> dict:
     user = _telegram_user(x_telegram_init_data)
     _ensure_miniapp_mine_access(user["id"])
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
         try:
             _ensure_mine_not_blocked(db, user["id"])
@@ -4047,8 +4092,9 @@ def minesweeper_pick(
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
     _ensure_miniapp_mine_access(user["id"])
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
+        db.atomic_on_close()
         try:
             from . import bot as game
             _ensure_mine_not_blocked(db, user["id"])
@@ -4159,7 +4205,7 @@ def minesweeper_exit(
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
     _ensure_miniapp_mine_access(user["id"])
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
         try:
             session = db.get_minesweeper_game(user["id"])
@@ -4183,8 +4229,9 @@ def miniapp_interactive_tool(
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
     _ensure_miniapp_mine_access(user["id"])
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
+        db.atomic_on_close()
         try:
             _ensure_mine_not_blocked(db, user["id"])
             session = db.get_active_interactive_dig_session(user["id"])
@@ -4271,8 +4318,9 @@ def miniapp_interactive_event(
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
     _ensure_miniapp_mine_access(user["id"])
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
+        db.atomic_on_close()
         try:
             from . import bot as game
             _ensure_mine_not_blocked(db, user["id"])
@@ -4361,8 +4409,9 @@ def miniapp_interactive_exit(
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
     _ensure_miniapp_mine_access(user["id"])
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
+        db.atomic_on_close()
         try:
             from . import bot as game
             _ensure_mine_not_blocked(db, user["id"])
@@ -4382,8 +4431,9 @@ def miniapp_dig_manual(
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
     _ensure_miniapp_mine_access(user["id"])
-    with DIG_LOCK:
+    with _dig_user_lock(user["id"]):
         db = _db()
+        db.atomic_on_close()
         try:
             from . import bot as game
             _ensure_mine_not_blocked(db, user["id"])

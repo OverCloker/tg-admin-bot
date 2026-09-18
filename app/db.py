@@ -1,6 +1,7 @@
 import sqlite3
 import re
-from contextlib import suppress
+import sys
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -9,6 +10,20 @@ import json
 
 
 DIG_GLOBAL_CHAT_ID = 0
+TELEGRAM_ADMIN_CACHE_TTL = timedelta(minutes=10)
+
+
+class AtomicConnection(sqlite3.Connection):
+    """SQLite connection whose helper-level commits can be deferred atomically."""
+
+    _defer_commits = 0
+
+    def commit(self) -> None:
+        if not self._defer_commits:
+            super().commit()
+
+    def force_commit(self) -> None:
+        super().commit()
 
 
 def utc_now() -> str:
@@ -183,6 +198,7 @@ class PersonalWeatherSettings:
     user_id: int
     city: str
     timezone_offset_minutes: int
+    timezone_name: str
     daily_enabled: int
     daily_hour: int
     daily_minute: int
@@ -441,14 +457,49 @@ class Database:
     def __init__(self, path: str) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
+        self._conn = sqlite3.connect(
+            self.path,
+            timeout=5,
+            check_same_thread=False,
+            factory=AtomicConnection,
+        )
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("pragma journal_mode=WAL")
-        self._conn.execute("pragma busy_timeout=30000")
+        self._conn.execute("pragma busy_timeout=5000")
         self._conn.execute("pragma synchronous=NORMAL")
 
     def close(self) -> None:
+        if self._conn._defer_commits:
+            self._conn._defer_commits = 0
+            if sys.exc_info()[0] is None:
+                self._conn.force_commit()
+            else:
+                self._conn.rollback()
         self._conn.close()
+
+    def atomic_on_close(self) -> None:
+        """Defer helper commits until the request exits and the connection closes."""
+        if not self._conn._defer_commits:
+            self._conn.execute("begin immediate")
+            self._conn._defer_commits = 1
+
+    @contextmanager
+    def atomic(self):
+        """Make existing mutation helpers one transaction, including their commit calls."""
+        if self._conn._defer_commits:
+            yield
+            return
+        self._conn.execute("begin immediate")
+        self._conn._defer_commits += 1
+        try:
+            yield
+        except Exception:
+            self._conn._defer_commits -= 1
+            self._conn.rollback()
+            raise
+        else:
+            self._conn._defer_commits -= 1
+            self._conn.force_commit()
 
     def init(self) -> None:
         self._conn.executescript(
@@ -654,6 +705,22 @@ class Database:
             create index if not exists idx_inline_usage_events_region
                 on inline_usage_events(command_type, region, created_at);
 
+            create table if not exists inline_user_cooldowns (
+                user_id integer not null,
+                command_type text not null,
+                used_at text not null,
+                primary key (user_id, command_type)
+            );
+
+            create table if not exists miniapp_idempotency (
+                user_id integer not null,
+                operation text not null,
+                request_id text not null,
+                response_json text,
+                created_at text not null,
+                primary key (user_id, operation, request_id)
+            );
+
             create table if not exists device_events (
                 id integer primary key autoincrement,
                 app text not null,
@@ -755,6 +822,8 @@ class Database:
                 remind_at text not null,
                 status text not null default 'pending',
                 last_error text,
+                attempts integer not null default 0,
+                next_attempt_at text,
                 created_at text not null,
                 updated_at text not null
             );
@@ -766,6 +835,7 @@ class Database:
                 user_id integer primary key,
                 city text not null default 'Кривой Рог',
                 timezone_offset_minutes integer not null default -180,
+                timezone_name text not null default 'Europe/Kyiv',
                 daily_enabled integer not null default 0,
                 daily_hour integer not null default 8,
                 daily_minute integer not null default 0,
@@ -1277,6 +1347,8 @@ class Database:
         self._migrate_blacklist_words()
         self._migrate_advertisements()
         self._migrate_global_dig_game()
+        self._migrate_personal_reminders()
+        self._migrate_personal_weather()
         self._conn.execute(
             "delete from star_payments where charge_id <> '' and id not in "
             "(select min(id) from star_payments where charge_id <> '' group by charge_id)"
@@ -1286,6 +1358,26 @@ class Database:
             "on star_payments(charge_id) where charge_id <> ''"
         )
         self._conn.commit()
+
+    def _migrate_personal_reminders(self) -> None:
+        columns = {
+            row["name"]
+            for row in self._conn.execute("pragma table_info(personal_reminders)").fetchall()
+        }
+        if "attempts" not in columns:
+            self._conn.execute("alter table personal_reminders add column attempts integer not null default 0")
+        if "next_attempt_at" not in columns:
+            self._conn.execute("alter table personal_reminders add column next_attempt_at text")
+
+    def _migrate_personal_weather(self) -> None:
+        columns = {
+            row["name"]
+            for row in self._conn.execute("pragma table_info(personal_weather_settings)").fetchall()
+        }
+        if "timezone_name" not in columns:
+            self._conn.execute(
+                "alter table personal_weather_settings add column timezone_name text not null default 'Europe/Kyiv'"
+            )
 
     def _migrate_reply_media(self) -> None:
         for table in ("auto_replies", "trigger_replies"):
@@ -2274,15 +2366,41 @@ class Database:
         return {int(row["chat_id"]) for row in rows}
 
     def user_telegram_admin_chat_ids(self, user_id: int) -> set[int]:
+        fresh_after = (datetime.now(timezone.utc) - TELEGRAM_ADMIN_CACHE_TTL).isoformat(timespec="seconds")
         rows = self._conn.execute(
             """
             select distinct chat_id
             from chat_telegram_admins
-            where user_id = ? and is_bot = 0
+            where user_id = ? and is_bot = 0 and updated_at >= ?
             """,
-            (int(user_id),),
+            (int(user_id), fresh_after),
         ).fetchall()
         return {int(row["chat_id"]) for row in rows}
+
+    def update_chat_telegram_admin(self, chat_id: int, admin: dict | None, user_id: int) -> None:
+        if admin is None:
+            self._conn.execute(
+                "delete from chat_telegram_admins where chat_id = ? and user_id = ?",
+                (int(chat_id), int(user_id)),
+            )
+        else:
+            self._conn.execute(
+                """
+                insert into chat_telegram_admins
+                    (chat_id, user_id, username, full_name, status, custom_title, is_bot, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(chat_id, user_id) do update set
+                    username = excluded.username, full_name = excluded.full_name,
+                    status = excluded.status, custom_title = excluded.custom_title,
+                    is_bot = excluded.is_bot, updated_at = excluded.updated_at
+                """,
+                (
+                    int(chat_id), int(user_id), normalize_username(admin.get("username")) if admin.get("username") else None,
+                    str(admin.get("full_name") or user_id), str(admin.get("status") or "administrator"),
+                    admin.get("custom_title"), int(bool(admin.get("is_bot"))), utc_now(),
+                ),
+            )
+        self._conn.commit()
 
     def replace_chat_telegram_admins(self, chat_id: int, admins: list[dict]) -> None:
         now = utc_now()
@@ -3179,6 +3297,89 @@ class Database:
         self._conn.commit()
         return int(cur.lastrowid)
 
+    def reserve_inline_cooldown(
+        self,
+        user_id: int,
+        command_type: str,
+        *,
+        used_at: datetime | None = None,
+        ttl_seconds: int = 900,
+    ) -> int:
+        """Atomically reserve a confirmed inline send; return remaining seconds."""
+        now = (used_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        kind = str(command_type).strip().casefold()
+        if kind not in {"weather", "alert_map"}:
+            raise ValueError("Unsupported inline command type")
+        try:
+            self._conn.execute("begin immediate")
+            row = self._conn.execute(
+                "select used_at from inline_user_cooldowns where user_id = ? and command_type = ?",
+                (int(user_id), kind),
+            ).fetchone()
+            if row:
+                previous = datetime.fromisoformat(str(row["used_at"]))
+                if previous.tzinfo is None:
+                    previous = previous.replace(tzinfo=timezone.utc)
+                remaining = int(ttl_seconds - (now - previous.astimezone(timezone.utc)).total_seconds())
+                if remaining > 0:
+                    self._conn.rollback()
+                    return remaining
+            self._conn.execute(
+                """
+                insert into inline_user_cooldowns(user_id, command_type, used_at)
+                values (?, ?, ?)
+                on conflict(user_id, command_type) do update set used_at = excluded.used_at
+                """,
+                (int(user_id), kind, now.isoformat(timespec="seconds")),
+            )
+            self._conn.commit()
+            return 0
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def inline_cooldown_remaining(
+        self,
+        user_id: int,
+        command_type: str,
+        *,
+        now: datetime | None = None,
+        ttl_seconds: int = 900,
+    ) -> int:
+        row = self._conn.execute(
+            "select used_at from inline_user_cooldowns where user_id=? and command_type=?",
+            (int(user_id), str(command_type).strip().casefold()),
+        ).fetchone()
+        if not row:
+            return 0
+        current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        previous = datetime.fromisoformat(str(row["used_at"]))
+        if previous.tzinfo is None:
+            previous = previous.replace(tzinfo=timezone.utc)
+        return max(0, int(ttl_seconds - (current - previous.astimezone(timezone.utc)).total_seconds()))
+
+    def claim_idempotency(self, user_id: int, operation: str, request_id: str) -> dict | None:
+        row = self._conn.execute(
+            "select response_json from miniapp_idempotency where user_id=? and operation=? and request_id=?",
+            (int(user_id), str(operation), str(request_id)),
+        ).fetchone()
+        if not row:
+            return None
+        return json.loads(row["response_json"]) if row["response_json"] else {"pending": True}
+
+    def save_idempotency(
+        self, user_id: int, operation: str, request_id: str, response: dict
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into miniapp_idempotency(user_id, operation, request_id, response_json, created_at)
+            values (?, ?, ?, ?, ?)
+            on conflict(user_id, operation, request_id) do update set response_json=excluded.response_json
+            """,
+            (int(user_id), str(operation), str(request_id), json.dumps(response, ensure_ascii=False), utc_now()),
+        )
+        self._conn.commit()
+
     def inline_usage_statistics(self, moment: datetime | None = None) -> dict:
         now = moment or datetime.now(timezone.utc)
         if now.tzinfo is None:
@@ -3918,10 +4119,11 @@ class Database:
                 select id, user_id, text, remind_at, status, last_error, created_at, updated_at
                 from personal_reminders
                 where status = 'pending' and remind_at <= ?
+                  and (next_attempt_at is null or next_attempt_at <= ?)
                 order by remind_at, id
                 limit ?
                 """,
-                (due_at, max(1, min(100, int(limit)))),
+                (due_at, due_at, max(1, min(100, int(limit)))),
             ).fetchall()
             ids = [int(row["id"]) for row in rows]
             if ids:
@@ -3936,11 +4138,37 @@ class Database:
             self._conn.rollback()
             raise
 
-    def finish_personal_reminder(self, reminder_id: int, *, error: str | None = None) -> None:
+    def finish_personal_reminder(
+        self,
+        reminder_id: int,
+        *,
+        error: str | None = None,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        if error and retry_after_seconds is not None:
+            row = self._conn.execute(
+                "select attempts from personal_reminders where id = ?",
+                (int(reminder_id),),
+            ).fetchone()
+            attempts = int(row["attempts"] if row else 0) + 1
+            if attempts < 5:
+                next_attempt = (
+                    datetime.now(timezone.utc) + timedelta(seconds=max(5, int(retry_after_seconds)))
+                ).isoformat(timespec="seconds")
+                self._conn.execute(
+                    """
+                    update personal_reminders
+                    set status='pending', last_error=?, attempts=?, next_attempt_at=?, updated_at=?
+                    where id=? and status='sending'
+                    """,
+                    ((error or "")[:500], attempts, next_attempt, utc_now(), int(reminder_id)),
+                )
+                self._conn.commit()
+                return
         self._conn.execute(
             """
             update personal_reminders
-            set status = ?, last_error = ?, updated_at = ?
+            set status = ?, last_error = ?, next_attempt_at = null, updated_at = ?
             where id = ? and status = 'sending'
             """,
             ("failed" if error else "sent", (error or "")[:500] or None, utc_now(), int(reminder_id)),
@@ -3950,7 +4178,7 @@ class Database:
     def get_personal_weather_settings(self, user_id: int) -> PersonalWeatherSettings:
         row = self._conn.execute(
             """
-            select user_id, city, timezone_offset_minutes, daily_enabled, daily_hour, daily_minute,
+            select user_id, city, timezone_offset_minutes, timezone_name, daily_enabled, daily_hour, daily_minute,
                    tomorrow_enabled, tomorrow_hour, tomorrow_minute, last_daily_key,
                    last_tomorrow_key, updated_at
             from personal_weather_settings where user_id = ?
@@ -3960,7 +4188,7 @@ class Database:
         if row:
             return PersonalWeatherSettings(**dict(row))
         return PersonalWeatherSettings(
-            user_id=int(user_id), city="Кривой Рог", timezone_offset_minutes=-180,
+            user_id=int(user_id), city="Кривой Рог", timezone_offset_minutes=-180, timezone_name="Europe/Kyiv",
             daily_enabled=0, daily_hour=8, daily_minute=0,
             tomorrow_enabled=0, tomorrow_hour=21, tomorrow_minute=0,
             last_daily_key=None, last_tomorrow_key=None, updated_at=utc_now(),
@@ -3977,16 +4205,18 @@ class Database:
         tomorrow_enabled: bool,
         tomorrow_hour: int,
         tomorrow_minute: int,
+        timezone_name: str = "Europe/Kyiv",
     ) -> None:
         self._conn.execute(
             """
             insert into personal_weather_settings (
-                user_id, city, timezone_offset_minutes, daily_enabled, daily_hour, daily_minute,
+                user_id, city, timezone_offset_minutes, timezone_name, daily_enabled, daily_hour, daily_minute,
                 tomorrow_enabled, tomorrow_hour, tomorrow_minute, updated_at
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(user_id) do update set
                 city = excluded.city,
                 timezone_offset_minutes = excluded.timezone_offset_minutes,
+                timezone_name = excluded.timezone_name,
                 daily_enabled = excluded.daily_enabled,
                 daily_hour = excluded.daily_hour,
                 daily_minute = excluded.daily_minute,
@@ -3997,7 +4227,7 @@ class Database:
             """,
             (
                 int(user_id), city.strip()[:120] or "Кривой Рог",
-                max(-840, min(840, int(timezone_offset_minutes))), int(daily_enabled),
+                max(-840, min(840, int(timezone_offset_minutes))), str(timezone_name)[:64] or "Europe/Kyiv", int(daily_enabled),
                 max(0, min(23, int(daily_hour))), max(0, min(59, int(daily_minute))),
                 int(tomorrow_enabled), max(0, min(23, int(tomorrow_hour))),
                 max(0, min(59, int(tomorrow_minute))), utc_now(),
@@ -4008,7 +4238,7 @@ class Database:
     def list_enabled_personal_weather(self) -> list[PersonalWeatherSettings]:
         rows = self._conn.execute(
             """
-            select user_id, city, timezone_offset_minutes, daily_enabled, daily_hour, daily_minute,
+            select user_id, city, timezone_offset_minutes, timezone_name, daily_enabled, daily_hour, daily_minute,
                    tomorrow_enabled, tomorrow_hour, tomorrow_minute, last_daily_key,
                    last_tomorrow_key, updated_at
             from personal_weather_settings
@@ -5768,6 +5998,74 @@ class Database:
                     updated_at = excluded.updated_at
                 """,
                 (chat_id, user_id, item_key, max(1, int(quantity)), now),
+            )
+            self._conn.commit()
+            return "ok"
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def purchase_dig_item_idempotent(
+        self,
+        chat_id: int,
+        user_id: int,
+        item_key: str,
+        price: int,
+        request_id: str,
+        *,
+        quantity: int = 1,
+        unique: bool = False,
+    ) -> str:
+        """Purchase once even when the HTTP request is delivered repeatedly."""
+        chat_id = DIG_GLOBAL_CHAT_ID
+        token = str(request_id).strip()
+        if not token:
+            return self.purchase_dig_item(
+                chat_id, user_id, item_key, price, quantity=quantity, unique=unique
+            )
+        now = utc_now()
+        try:
+            self._conn.execute("begin immediate")
+            prior = self._conn.execute(
+                "select 1 from miniapp_idempotency where user_id=? and operation='shop_buy' and request_id=?",
+                (int(user_id), token),
+            ).fetchone()
+            if prior:
+                self._conn.rollback()
+                return "replayed"
+            if unique:
+                row = self._conn.execute(
+                    "select quantity from dig_items where chat_id=? and user_id=? and item_key=?",
+                    (chat_id, int(user_id), item_key),
+                ).fetchone()
+                if row and int(row["quantity"]) > 0:
+                    self._conn.rollback()
+                    return "owned"
+            changed = self._conn.execute(
+                """
+                update dig_players set coins=coins-?, updated_at=?
+                where chat_id=? and user_id=? and coins>=?
+                """,
+                (max(0, int(price)), now, chat_id, int(user_id), max(0, int(price))),
+            )
+            if changed.rowcount == 0:
+                self._conn.rollback()
+                return "no_coins"
+            self._conn.execute(
+                """
+                insert into dig_items(chat_id,user_id,item_key,quantity,updated_at)
+                values(?,?,?,?,?)
+                on conflict(chat_id,user_id,item_key) do update set
+                    quantity=quantity+excluded.quantity, updated_at=excluded.updated_at
+                """,
+                (chat_id, int(user_id), item_key, max(1, int(quantity)), now),
+            )
+            self._conn.execute(
+                """
+                insert into miniapp_idempotency(user_id,operation,request_id,response_json,created_at)
+                values(?,'shop_buy',?,'{}',?)
+                """,
+                (int(user_id), token, now),
             )
             self._conn.commit()
             return "ok"

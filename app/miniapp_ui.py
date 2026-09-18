@@ -1537,6 +1537,7 @@ MINI_APP_HTML = r"""<!doctype html>
       .panel { padding: 20px; }
       .profile-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
       .mine-admin-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+      .inline-stats-screen .mine-admin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .role-manager-form { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
       .role-manager-form .btn { width: auto; min-width: 150px; margin: 0; }
       .personal-weather-toggle { grid-template-columns: auto minmax(0, 1fr) 140px; }
@@ -1580,6 +1581,14 @@ MINI_APP_HTML = r"""<!doctype html>
       body[data-view="adminPanel"] #content > .panel > .role-list {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
+      .inline-stats-screen {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .inline-stats-screen > .panel:last-child,
+      .inline-stats-screen > .panel:nth-last-child(2) { grid-column: 1 / -1; }
       .admin-list-row,
       .mine-admin-row {
         grid-template-columns: minmax(0, 1fr) auto;
@@ -1651,6 +1660,16 @@ MINI_APP_HTML = r"""<!doctype html>
   let activeView = "mine";
   let profileReturnView = "mine";
   let currentProfile = null;
+  let screenRequestId = 0;
+
+  function beginScreenRequest(view) {
+    setScreenHeader(view);
+    return screenRequestId;
+  }
+
+  function isCurrentScreenRequest(requestId) {
+    return requestId === screenRequestId;
+  }
 
   radioPlayer.addEventListener("play", () => {
     radioPlayer.classList.add("active");
@@ -1665,6 +1684,7 @@ MINI_APP_HTML = r"""<!doctype html>
   });
 
   function setScreenHeader(view) {
+    screenRequestId += 1;
     activeView = view;
     document.body.dataset.view = view;
     if (view === "shop") {
@@ -1748,24 +1768,48 @@ MINI_APP_HTML = r"""<!doctype html>
   });
 
   async function api(path, options = {}) {
-    const response = await fetch(path, {
-      ...options,
-      headers: { ...headers(), ...(options.headers || {}) }
-    });
-    const data = await response.json().catch(() => ({ detail: "Сервер вернул неверный ответ." }));
-    if (!response.ok) throw new Error(data.detail || "Ошибка запроса.");
-    return data;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Number(options.timeoutMs || 15000));
+    try {
+      const response = await fetch(path, {
+        ...options,
+        signal: controller.signal,
+        headers: { ...headers(), ...(options.headers || {}) }
+      });
+      let data;
+      try { data = await response.json(); }
+      catch (_) { throw new Error("Сервер вернул повреждённый ответ. Повторите запрос."); }
+      if (!response.ok) throw new Error(data.detail || "Ошибка запроса.");
+      return data;
+    } catch (error) {
+      if (error && error.name === "AbortError") throw new Error("Сервер не ответил вовремя. Повторите запрос.");
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async function apiForm(path, formData) {
-    const response = await fetch(path, {
-      method: "POST",
-      headers: { "X-Telegram-Init-Data": telegram ? telegram.initData : "" },
-      body: formData
-    });
-    const data = await response.json().catch(() => ({ detail: "Сервер вернул неверный ответ." }));
-    if (!response.ok) throw new Error(data.detail || "Ошибка запроса.");
-    return data;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    try {
+      const response = await fetch(path, {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "X-Telegram-Init-Data": telegram ? telegram.initData : "" },
+        body: formData
+      });
+      let data;
+      try { data = await response.json(); }
+      catch (_) { throw new Error("Сервер вернул повреждённый ответ. Повторите загрузку."); }
+      if (!response.ok) throw new Error(data.detail || "Ошибка запроса.");
+      return data;
+    } catch (error) {
+      if (error && error.name === "AbortError") throw new Error("Загрузка не завершилась вовремя. Повторите её.");
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   function escapeHtml(value) {
@@ -2150,12 +2194,14 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   async function showReminders() {
-    setScreenHeader("reminders");
+    const requestId = beginScreenRequest("reminders");
     content.innerHTML = `<section class="panel muted">Загружаю напоминания...</section>`;
     try {
-      renderReminders(await api("/miniapp/reminders"));
+      const data = await api("/miniapp/reminders");
+      if (!isCurrentScreenRequest(requestId)) return;
+      renderReminders(data);
     } catch (error) {
-      showError(error);
+      if (isCurrentScreenRequest(requestId)) showError(error);
     }
   }
 
@@ -2168,7 +2214,12 @@ MINI_APP_HTML = r"""<!doctype html>
     try {
       const result = await api("/miniapp/reminders/create", {
         method: "POST",
-        body: JSON.stringify({ text: textValue, remindAt, timezoneOffsetMinutes: new Date().getTimezoneOffset() })
+        body: JSON.stringify({
+          text: textValue,
+          remindAt: new Date(remindAt).toISOString(),
+          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+          timezoneName: Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Kyiv"
+        })
       });
       renderReminders(result, result.message);
     } catch (error) {
@@ -2202,6 +2253,7 @@ MINI_APP_HTML = r"""<!doctype html>
         body: JSON.stringify({
           city: document.getElementById("personalWeatherCity").value.trim(),
           timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+          timezoneName: Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Kyiv",
           dailyEnabled: document.getElementById("personalWeatherDailyEnabled").checked,
           dailyTime: document.getElementById("personalWeatherDailyTime").value,
           tomorrowEnabled: document.getElementById("personalWeatherTomorrowEnabled").checked,
@@ -2484,7 +2536,7 @@ MINI_APP_HTML = r"""<!doctype html>
             ? `<button class="btn secondary" onclick="showTriggerManager()">Открыть триггеры</button>`
           : section.key === "inline-stats" && section.enabled
             ? `<button class="btn secondary" onclick="showInlineStatistics()">Открыть статистику</button>`
-            : `<span class="muted">Скоро</span>`;
+            : `<span class="muted">Нет доступа</span>`;
     return `<div class="admin-list-row">
       <span>
         <b>${escapeHtml(section.title || section.key)}</b><br>
@@ -2495,10 +2547,11 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   async function showAdminPanel() {
-    setScreenHeader("adminPanel");
+    const requestId = beginScreenRequest("adminPanel");
     content.innerHTML = `<section class="panel muted">Загружаю админ-панель...</section>`;
     try {
       const data = await api("/miniapp/profile/admin");
+      if (!isCurrentScreenRequest(requestId)) return;
       const summary = data.summary || {};
       const sections = data.sections || [];
       const build = data.build || {};
@@ -2526,7 +2579,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <section class="panel"><button class="btn secondary" style="margin:0" onclick="showProfile()">Назад к профилю</button></section>`;
       scrollToTop();
     } catch (error) {
-      showError(error);
+      if (isCurrentScreenRequest(requestId)) showError(error);
     }
   }
 
@@ -2552,14 +2605,14 @@ MINI_APP_HTML = r"""<!doctype html>
         <span><b>${escapeHtml(item.region || "Без региона")}</b><br><span class="muted">24 ч: ${Number(item.day || 0)} · 7 дней: ${Number(item.week || 0)} · 30 дней: ${Number(item.month || 0)}</span></span>
         <b>${Number(item.all || 0)}</b>
       </div>`).join("");
-      content.innerHTML = `${inlineStatsCards("🌤 Погода", data.weather)}
+      content.innerHTML = `<div class="inline-stats-screen">${inlineStatsCards("🌤 Погода", data.weather)}
         ${inlineStatsCards("🗺 Карта тревог", data.alertMap)}
         <section class="panel">
           <h2>Карты по областям</h2>
           <p class="muted">Количество успешных inline-вызовов. Список отсортирован по общему числу запросов.</p>
           <div class="role-list">${regions || `<p class="muted">Запросов карт пока нет.</p>`}</div>
         </section>
-        <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
+        <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section></div>`;
       scrollToTop();
     } catch (error) {
       showError(error);
@@ -2567,11 +2620,12 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   async function showModerationManager(chatId = null) {
-    setScreenHeader("adminPanel");
+    const requestId = beginScreenRequest("adminPanel");
     content.innerHTML = `<section class="panel muted">Загружаю модерацию...</section>`;
     try {
       const path = chatId ? `/miniapp/profile/moderation?chat_id=${encodeURIComponent(chatId)}` : "/miniapp/profile/moderation";
       const data = await api(path);
+      if (!isCurrentScreenRequest(requestId)) return;
       const chats = data.chats || [];
       const selectedChatId = Number(data.selectedChatId || 0);
       const selectedChat = data.selectedChat || {};
@@ -2647,7 +2701,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
       scrollToTop();
     } catch (error) {
-      showError(error);
+      if (isCurrentScreenRequest(requestId)) showError(error);
     }
   }
 
@@ -2934,7 +2988,10 @@ MINI_APP_HTML = r"""<!doctype html>
     return `<section class="panel">
       <h2>${editor.trigger ? "Редактировать триггер" : "Добавить триггер"}</h2>
       <div class="mine-admin-form">
+        <input id="triggerOriginalWord" type="hidden" value="${escapeHtml(editor.trigger || "")}">
+        <label class="wide" for="triggerWord">Слово или фраза</label>
         <input id="triggerWord" class="wide" placeholder="Слово или фраза" value="${escapeHtml(editor.trigger || "")}">
+        <label class="wide" for="triggerAliases">Формы и синонимы</label>
         <textarea id="triggerAliases" class="wide" placeholder="Формы и синонимы через запятую: спать, спал, сплю">${escapeHtml((editor.aliases || []).join(", "))}</textarea>
         <div class="wide">
           <p class="muted">Добавить ответ. Максимум 10 текстовых вариантов, бот выберет случайный.</p>
@@ -3007,6 +3064,7 @@ MINI_APP_HTML = r"""<!doctype html>
 
   async function saveMiniAppTrigger(chatId) {
     const trigger = document.getElementById("triggerWord")?.value || "";
+    const originalTrigger = document.getElementById("triggerOriginalWord")?.value || "";
     const aliases = (document.getElementById("triggerAliases")?.value || "")
       .split(/[,\n;]/)
       .map(item => item.trim())
@@ -3053,7 +3111,7 @@ MINI_APP_HTML = r"""<!doctype html>
       }
       await api("/miniapp/profile/triggers", {
         method: "POST",
-        body: JSON.stringify({ chatId: Number(chatId), trigger, aliases, variants })
+        body: JSON.stringify({ chatId: Number(chatId), trigger, originalTrigger, aliases, variants })
       });
       showNotice("Триггер сохранён.");
       showTriggerManager(chatId);
@@ -3176,23 +3234,25 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   async function showMineAdmin(page = 1) {
+    // Legacy compatibility: /miniapp/profile/mine-admin?per_page=0 was replaced by paginated loading.
     setScreenHeader("mineAdmin");
     content.innerHTML = `<section class="panel muted">Загружаю панель шахты...</section>`;
     try {
-      const data = await api("/miniapp/profile/mine-admin?per_page=0");
+      const data = await api(`/miniapp/profile/mine-admin?page=${Number(page) || 1}&per_page=20`);
       const summary = data.summary || {};
       const blocked = data.blocked || [];
+      const playerItems = ((data.players || {})["items"]) || [];
       const canManage = Boolean(data.canManage);
       const grantForm = canManage ? `<section class="panel">
         <h2>Управление игроком</h2>
         <p class="muted">Как в Abstergo: укажи ID игрока, заполни только нужные поля. Отрицательные значения снимают ресурс.</p>
         <div class="mine-admin-form">
-          <input id="mineGrantUserId" class="wide" placeholder="User ID">
-          <input id="mineGrantCoins" type="number" placeholder="Котоины +/-">
-          <input id="mineGrantLuck" type="number" min="0" max="100" placeholder="Удача 0-100">
-          <input id="mineGrantExtra" type="number" placeholder="Раскопки +/-">
-          <input id="mineGrantTickets" type="number" placeholder="Билеты +/-">
-          <input id="mineGrantSuper" type="number" placeholder="Супер-игры +/-">
+          <label class="wide" for="mineGrantUserId">User ID игрока</label><input id="mineGrantUserId" class="wide" placeholder="Например, 123456789">
+          <label for="mineGrantCoins">Котоины ±</label><input id="mineGrantCoins" type="number" placeholder="0">
+          <label for="mineGrantLuck">Удача, 0–100</label><input id="mineGrantLuck" type="number" min="0" max="100" placeholder="100">
+          <label for="mineGrantExtra">Раскопки ±</label><input id="mineGrantExtra" type="number" placeholder="0">
+          <label for="mineGrantTickets">Билеты ±</label><input id="mineGrantTickets" type="number" placeholder="0">
+          <label for="mineGrantSuper">Супер-игры ±</label><input id="mineGrantSuper" type="number" placeholder="0">
           <label class="muted wide"><input id="mineGrantCooldown" type="checkbox"> сбросить ожидание копки</label>
           <button class="btn wide" onclick="submitMineGrant()">Сохранить</button>
         </div>
@@ -3201,8 +3261,8 @@ MINI_APP_HTML = r"""<!doctype html>
         <h2>Опасная зона</h2>
         <p class="muted">Удаление стирает прогресс шахты. Блокировка запрещает Mini App шахты и команду копай.</p>
         <div class="mine-admin-form">
-          <input id="mineDangerUserId" class="wide" placeholder="User ID">
-          <input id="mineDangerReason" class="wide" placeholder="Причина блокировки, необязательно">
+          <label class="wide" for="mineDangerUserId">User ID игрока</label><input id="mineDangerUserId" class="wide" placeholder="Например, 123456789">
+          <label class="wide" for="mineDangerReason">Причина блокировки</label><input id="mineDangerReason" class="wide" placeholder="Необязательно">
           <button class="btn danger" onclick="deleteMinePlayer()">Удалить из шахты</button>
           <button class="btn danger" onclick="blockMinePlayer(null, false)">Заблокировать</button>
           <button class="btn danger wide" onclick="blockMinePlayer(null, true)">Заблокировать и удалить прогресс</button>
@@ -3220,6 +3280,15 @@ MINI_APP_HTML = r"""<!doctype html>
       ${mineAdminTopHtml("Топ глубины", data.top && data.top.depth, "total_depth", " м")}
       ${mineAdminTopHtml("Топ котоинов", data.top && data.top.coins, "coins", " кот.")}
       <section class="panel">
+        <h2>Все игроки</h2>
+        <input id="minePlayerSearch" class="wide" aria-label="Поиск игрока" placeholder="Поиск по ID, имени или username" oninput="filterMinePlayers(this.value)">
+        <div id="minePlayerList" class="role-list">${playerItems.map(player => `<button class="admin-list-row mine-player-search-row" data-search="${escapeHtml(`${player.user_id} ${player.full_name || ''} ${player.username || ''}`.toLowerCase())}" onclick="prefillMineGrant(${Number(player.user_id)})"><span><b>${escapeHtml(player.full_name || 'Игрок')}</b><br><span class="muted">${player.username ? '@' + escapeHtml(player.username) + ' · ' : ''}ID ${Number(player.user_id)}</span></span><b>${Number(player.coins || 0)} 🪙</b></button>`).join("") || `<p class="muted">Игроков нет.</p>`}</div>
+        <div class="mini-row">
+          <button class="btn secondary" ${Number(data.players && data.players.page || 1) <= 1 ? "disabled" : ""} onclick="showMineAdmin(${Math.max(1, Number(data.players && data.players.page || 1) - 1)})">Назад</button>
+          <button class="btn secondary" ${(Number(data.players && data.players.page || 1) * Number(data.players && data.players.perPage || 20)) >= Number(data.players && data.players.total || 0) ? "disabled" : ""} onclick="showMineAdmin(${Number(data.players && data.players.page || 1) + 1})">Далее</button>
+        </div>
+      </section>
+      <section class="panel">
         <h2>Заблокированы в копай</h2>
         <div class="role-list">${blocked.map(item => mineAdminBlockRowHtml(item, canManage)).join("") || `<p class="muted">Блокировок пока нет.</p>`}</div>
       </section>
@@ -3229,6 +3298,13 @@ MINI_APP_HTML = r"""<!doctype html>
     } catch (error) {
       showError(error);
     }
+  }
+
+  function filterMinePlayers(value) {
+    const query = String(value || "").trim().toLowerCase();
+    document.querySelectorAll(".mine-player-search-row").forEach(row => {
+      row.hidden = Boolean(query) && !String(row.dataset.search || "").includes(query);
+    });
   }
 
   async function submitMineGrant() {
@@ -3410,13 +3486,15 @@ MINI_APP_HTML = r"""<!doctype html>
     if (activeView !== "profile") {
       profileReturnView = activeView || "mine";
     }
-    setScreenHeader("profile");
+    const requestId = beginScreenRequest("profile");
     content.innerHTML = `<section class="panel muted">Загружаю профиль...</section>`;
     try {
       const path = userId ? `/miniapp/profile?user_id=${encodeURIComponent(userId)}` : "/miniapp/profile";
-      renderProfile(await api(path));
+      const profile = await api(path);
+      if (!isCurrentScreenRequest(requestId)) return;
+      renderProfile(profile);
     } catch (error) {
-      showError(error);
+      if (isCurrentScreenRequest(requestId)) showError(error);
     }
   }
 
@@ -4160,9 +4238,10 @@ MINI_APP_HTML = r"""<!doctype html>
   async function buyShop(itemKey) {
     if (busy || !confirm("Купить этот предмет за котоины?")) return;
     busy = true;
+    const requestId = (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.random()}`;
     try {
       const result = await api("/miniapp/shop/buy", {
-        method: "POST", body: JSON.stringify({ item_key: itemKey })
+        method: "POST", body: JSON.stringify({ item_key: itemKey, request_id: requestId })
       });
       state = result.state;
       renderShop(result.shop, shopCategory);

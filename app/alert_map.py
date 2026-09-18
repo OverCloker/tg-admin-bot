@@ -49,6 +49,22 @@ def _geo_name(value: str) -> str:
                     .replace("обл.", "").split())
 
 
+def canonical_map_cache_key(query: str) -> str:
+    """Normalize common Russian/Ukrainian aliases before outer caching."""
+    name = _geo_name(query)
+    aliases = {
+        "днепр": "днипропетровська", "днипро": "днипропетровська",
+        "днепропетровск": "днипропетровська", "кривой рог": "днипропетровська",
+        "киев": "киивська", "киив": "киивська", "харьков": "харкивська",
+        "одесса": "одеська", "львов": "львивська", "запорожье": "запоризька",
+        "николаев": "миколаивська", "ровно": "ривненська", "крым": "автономна республика крим",
+    }
+    for location in NEPTUN_LOCATIONS.values():
+        if name in {_geo_name(location.city), _geo_name(location.key)}:
+            return _geo_name(location.oblast)
+    return aliases.get(name, name).replace("ская", "ська")
+
+
 def resolve_map_region(query: str, oblasts: object) -> dict[str, Any]:
     name = _geo_name(query)
     aliases = {

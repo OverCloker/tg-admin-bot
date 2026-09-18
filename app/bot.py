@@ -30,7 +30,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, FSInputFile, Gift, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery, InlineQueryResultArticle, InlineQueryResultPhoto, InputMediaPhoto, InputMediaVideo, InputRichBlockDetails, InputRichBlockParagraph, InputRichBlockTable, InputRichMessage, InputTextMessageContent, LabeledPrice, MenuButtonWebApp, Message, MessageReactionUpdated, PreCheckoutQuery, RichBlockTableCell, StarAmount, SuccessfulPayment, User, WebAppInfo
+from aiogram.types import BufferedInputFile, CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, ChosenInlineResult, FSInputFile, Gift, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery, InlineQueryResultArticle, InlineQueryResultPhoto, InputMediaPhoto, InputMediaVideo, InputRichBlockDetails, InputRichBlockParagraph, InputRichBlockTable, InputRichMessage, InputTextMessageContent, LabeledPrice, MenuButtonWebApp, Message, MessageReactionUpdated, PreCheckoutQuery, RichBlockTableCell, StarAmount, SuccessfulPayment, User, WebAppInfo
 
 from .config import load_config
 from .alert_providers import (
@@ -46,7 +46,7 @@ from .alert_providers import (
     UkraineAlarmProvider,
 )
 from .alerts_diagnostics import save_alerts_response
-from .alert_map import AlertMapResult, UnknownMapRegion, fetch_alert_map
+from .alert_map import AlertMapResult, UnknownMapRegion, canonical_map_cache_key, fetch_alert_map
 from .inline_media import inline_photo_url, save_inline_photo
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
 from .dig_game import (
@@ -240,11 +240,13 @@ ALERT_MAP_RE = re.compile(
 )
 INLINE_CACHE_SECONDS = 15 * 60
 INLINE_ANSWER_CACHE_SECONDS = 20
-INLINE_WEATHER_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
+INLINE_WEATHER_CACHE: dict[tuple[str, str], tuple[float, str, datetime]] = {}
 INLINE_WEATHER_TASKS: dict[tuple[str, str], asyncio.Task[str]] = {}
 INLINE_MAP_CACHE: dict[str, tuple[float, AlertMapResult]] = {}
 INLINE_MAP_TASKS: dict[str, asyncio.Task[AlertMapResult]] = {}
 INLINE_USER_LIMITS: dict[tuple[int, str], float] = {}
+INLINE_QUERY_THROTTLE_SECONDS = 1.0
+INLINE_RESULT_META: dict[str, tuple[str, str, str]] = {}
 DEVELOPER_URL = "https://t.me/YourLittleCat"
 PRIVATE_UTILITY_HINT = (
     "В личке доступны:\n"
@@ -1663,7 +1665,7 @@ async def fetch_inline_weather(city: str, period: str) -> str:
                 value = completed.result()
             except Exception:
                 return
-            INLINE_WEATHER_CACHE[key] = (time.monotonic(), value)
+            INLINE_WEATHER_CACHE[key] = (time.monotonic(), value, datetime.now(timezone.utc))
             if len(INLINE_WEATHER_CACHE) > 64:
                 oldest = min(INLINE_WEATHER_CACHE, key=lambda item: INLINE_WEATHER_CACHE[item][0])
                 INLINE_WEATHER_CACHE.pop(oldest, None)
@@ -1674,7 +1676,7 @@ async def fetch_inline_weather(city: str, period: str) -> str:
 
 async def fetch_inline_alert_map(region: str) -> AlertMapResult:
     """Coalesce identical map requests and reuse one rendered map for 15 minutes."""
-    key = " ".join(region.casefold().split())
+    key = canonical_map_cache_key(region)
     now = time.monotonic()
     cached = INLINE_MAP_CACHE.get(key)
     if cached and now - cached[0] < INLINE_CACHE_SECONDS:
@@ -1733,10 +1735,23 @@ def reserve_inline_request(
         return 0, None
     key = (int(user_id), command_type)
     last = INLINE_USER_LIMITS.get(key)
-    if last is not None and current - last < INLINE_CACHE_SECONDS:
-        return max(1, math.ceil(INLINE_CACHE_SECONDS - (current - last))), None
+    if last is not None and current - last < INLINE_QUERY_THROTTLE_SECONDS:
+        return max(1, math.ceil(INLINE_QUERY_THROTTLE_SECONDS - (current - last))), None
     INLINE_USER_LIMITS[key] = current
-    return 0, current
+    try:
+        config = load_config()
+        database = globals().get("db")
+        owns_database = False
+        if database is None or not hasattr(database, "inline_cooldown_remaining"):
+            database = Database(config.db_path)
+            owns_database = True
+        remaining = database.inline_cooldown_remaining(user_id, command_type)
+        if owns_database:
+            database.close()
+    except Exception as exc:
+        logging.warning("Could not read inline cooldown: %s", exc)
+        remaining = 0
+    return remaining, None
 
 
 def release_inline_request(user_id: int, command_type: str, reservation: float | None) -> None:
@@ -5130,9 +5145,9 @@ def access_permissions_menu(chat_id: int, user_id: int, page: int = 0) -> Inline
     if max_page > 0:
         rows.append(
             [
-                InlineKeyboardButton(text="в†ђ", callback_data=f"access:page:{chat_id}:{user_id}:{max(0, page - 1)}"),
+                InlineKeyboardButton(text="←", callback_data=f"access:page:{chat_id}:{user_id}:{max(0, page - 1)}"),
                 InlineKeyboardButton(text=f"{page + 1}/{max_page + 1}", callback_data=f"access:noop:{chat_id}:{user_id}"),
-                InlineKeyboardButton(text="в†’", callback_data=f"access:page:{chat_id}:{user_id}:{min(max_page, page + 1)}"),
+                InlineKeyboardButton(text="→", callback_data=f"access:page:{chat_id}:{user_id}:{min(max_page, page + 1)}"),
             ]
         )
     rows.append([InlineKeyboardButton(text="Админы группы", callback_data=f"act:access:{chat_id}")])
@@ -5514,8 +5529,31 @@ async def bot_membership_changed(event: ChatMemberUpdated) -> None:
         actor_id=event.from_user.id,
         actor_username=event.from_user.username,
         actor_name=event.from_user.full_name,
-        details=f"{old_status} в†’ {new_status}",
+        details=f"{old_status} → {new_status}",
     )
+
+
+@router.chat_member()
+async def participant_membership_changed(event: ChatMemberUpdated) -> None:
+    if event.chat.type not in SUPPORTED_CHAT_TYPES:
+        return
+    member = event.new_chat_member
+    status = member_status_text(member.status)
+    telegram_user = member.user
+    if status in ADMIN_STATUS_TEXTS:
+        db.update_chat_telegram_admin(
+            event.chat.id,
+            {
+                "username": telegram_user.username or "",
+                "full_name": telegram_user.full_name or str(telegram_user.id),
+                "status": status,
+                "custom_title": getattr(member, "custom_title", None),
+                "is_bot": bool(telegram_user.is_bot),
+            },
+            telegram_user.id,
+        )
+    else:
+        db.update_chat_telegram_admin(event.chat.id, None, telegram_user.id)
 
 
 def replies_text(chat_id: int) -> str:
@@ -11274,6 +11312,7 @@ async def alerts_monitor_loop(bot: Bot) -> None:
     notified_states: dict[int, AlertsLocationState] = {}
     pending_escalations: dict[int, AlertsEscalationCandidate] = {}
     while True:
+        cycle_started = time.monotonic()
         try:
             chat_ids = db.list_alarm_api_chats()
             active_chat_ids: list[int] = []
@@ -11419,7 +11458,8 @@ async def alerts_monitor_loop(bot: Bot) -> None:
             raise
         except Exception as exc:
             logging.warning("Alert monitor error: %s", exc)
-        await asyncio.sleep(ALERTS_POLL_INTERVAL_SECONDS)
+        elapsed = time.monotonic() - cycle_started
+        await asyncio.sleep(max(1.0, ALERTS_POLL_INTERVAL_SECONDS - elapsed))
 
 
 def alarm_status_text(chat_id: int) -> str:
@@ -12040,6 +12080,9 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
     if weather_request:
         city, period = weather_request
         weather_key = (city.casefold(), period)
+        owner_id = load_config().owner_id
+        if owner_id is not None and user_id == int(owner_id):
+            INLINE_WEATHER_CACHE.pop(weather_key, None)
         remaining, reservation = reserve_inline_request(
             user_id,
             "weather",
@@ -12053,8 +12096,15 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
         cache_time = INLINE_ANSWER_CACHE_SECONDS
         try:
             forecast = await fetch_inline_weather(city, period)
+            cached_at = INLINE_WEATHER_CACHE.get(weather_key)
+            observed_at = (cached_at[2] if cached_at and len(cached_at) > 2 else datetime.now(timezone.utc))
+            observed_text = observed_at.astimezone(LOCAL_TIMEZONE).strftime("%d.%m.%Y %H:%M")
+            forecast_with_age = f"{forecast}\n\n<i>Данные получены: {observed_text}</i>"
+            result_id = hashlib.sha256(
+                f"weather:{city.casefold()}:{period}:{forecast}".encode()
+            ).hexdigest()[:32]
             result = InlineQueryResultArticle(
-                id=hashlib.sha256(f"weather:{city.casefold()}:{period}:{forecast}".encode()).hexdigest()[:32],
+                id=result_id,
                 title="🌤 Погода выбранного города",
                 description=(
                     f"{city} · "
@@ -12062,12 +12112,12 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
                     + " · нажмите, чтобы отправить"
                 ),
                 input_message_content=InputTextMessageContent(
-                    message_text=forecast,
+                    message_text=forecast_with_age,
                     parse_mode=ParseMode.HTML,
                     link_preview_options={"is_disabled": True},
                 ),
             )
-            record_inline_usage(user_id, "weather", target=city)
+            INLINE_RESULT_META[result_id] = ("weather", city, "")
         except (TimeoutError, asyncio.TimeoutError):
             release_inline_request(user_id, "weather", reservation)
             cache_time = 5
@@ -12090,7 +12140,10 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
 
     if map_match:
         region = (map_match.group("region") or "").strip()
-        map_key = " ".join(region.casefold().split())
+        map_key = canonical_map_cache_key(region)
+        owner_id = load_config().owner_id
+        if owner_id is not None and user_id == int(owner_id):
+            INLINE_MAP_CACHE.pop(map_key, None)
         remaining, reservation = reserve_inline_request(
             user_id,
             "alert_map",
@@ -12108,8 +12161,9 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
             if not photo_url:
                 raise RuntimeError("ADMIN_PUBLIC_URL must be an HTTPS URL for inline map photos")
             updated = result.updated_at.astimezone(LOCAL_TIMEZONE).strftime("%d.%m.%Y %H:%M")
+            result_id = hashlib.sha256(f"map:{filename}:{map_key}".encode()).hexdigest()[:32]
             photo = InlineQueryResultPhoto(
-                id=hashlib.sha256(f"map:{filename}:{region.casefold()}".encode()).hexdigest()[:32],
+                id=result_id,
                 photo_url=photo_url,
                 thumbnail_url=photo_url,
                 photo_width=1200,
@@ -12122,12 +12176,12 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
                 caption=alert_map_caption(result),
                 parse_mode=ParseMode.HTML,
             )
-            record_inline_usage(
-                user_id,
-                "alert_map",
-                target=region or "Вся Украина",
-                region=result.region_title or "Вся Украина",
+            INLINE_RESULT_META[result_id] = (
+                "alert_map", region or "Вся Украина", result.region_title or "Вся Украина"
             )
+            if len(INLINE_RESULT_META) > 5000:
+                for stale_id in list(INLINE_RESULT_META)[:1000]:
+                    INLINE_RESULT_META.pop(stale_id, None)
             await inline_query.answer(
                 [photo], cache_time=INLINE_ANSWER_CACHE_SECONDS, is_personal=True
             )
@@ -12166,6 +12220,26 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
     await inline_query.answer(
         inline_usage_results(), cache_time=INLINE_ANSWER_CACHE_SECONDS, is_personal=True
     )
+
+
+@router.chosen_inline_result()
+async def inline_result_chosen(chosen: ChosenInlineResult) -> None:
+    meta = INLINE_RESULT_META.get(chosen.result_id)
+    if not meta:
+        return
+    command_type, target, region = meta
+    user_id = int(chosen.from_user.id)
+    owner_id = load_config().owner_id
+    try:
+        if owner_id is None or user_id != int(owner_id):
+            database = Database(load_config().db_path)
+            try:
+                database.reserve_inline_cooldown(user_id, command_type)
+            finally:
+                database.close()
+        record_inline_usage(user_id, command_type, target=target, region=region)
+    except Exception as exc:
+        logging.warning("Could not record chosen inline result: %s", exc)
 
 
 @router.message(F.text.regexp(re.compile(r"^/?напоминани[ея][?!.]?$", re.IGNORECASE)))
@@ -12256,6 +12330,7 @@ async def personal_weather_command(message: Message) -> None:
         True if not is_daily else bool(current.tomorrow_enabled),
         hour if not is_daily else current.tomorrow_hour,
         minute if not is_daily else current.tomorrow_minute,
+        timezone_name=getattr(current, "timezone_name", "Europe/Kyiv"),
     )
     await safe_reply(
         message,
@@ -13996,13 +14071,26 @@ async def personal_notifications_loop(bot: Bot) -> None:
             except (TelegramForbiddenError, TelegramBadRequest) as exc:
                 db.finish_personal_reminder(reminder.id, error="Бот не может написать в личный чат. Открой бота и нажми /start.")
                 logging.info("Personal reminder delivery unavailable for user %s: %s", reminder.user_id, exc)
+            except TelegramRetryAfter as exc:
+                db.finish_personal_reminder(
+                    reminder.id,
+                    error="Telegram временно ограничил отправку.",
+                    retry_after_seconds=max(5, int(exc.retry_after)),
+                )
             except Exception as exc:
-                db.finish_personal_reminder(reminder.id, error="Не удалось доставить напоминание.")
+                db.finish_personal_reminder(
+                    reminder.id,
+                    error="Не удалось доставить напоминание.",
+                    retry_after_seconds=60,
+                )
                 logging.warning("Personal reminder %s failed: %s", reminder.id, exc)
 
         for settings in db.list_enabled_personal_weather():
             try:
-                local_now = now_utc - timedelta(minutes=int(settings.timezone_offset_minutes))
+                try:
+                    local_now = now_utc.astimezone(ZoneInfo(settings.timezone_name))
+                except (ZoneInfoNotFoundError, ValueError):
+                    local_now = now_utc - timedelta(minutes=int(settings.timezone_offset_minutes))
                 slots = []
                 if (
                     settings.daily_enabled
@@ -14035,6 +14123,32 @@ async def personal_notifications_loop(bot: Bot) -> None:
             except Exception as exc:
                 logging.warning("Personal weather failed for user %s: %s", settings.user_id, exc)
         await asyncio.sleep(30)
+
+
+async def telegram_admin_sync_loop(bot: Bot) -> None:
+    """Keep Mini App group permissions fresh even when Telegram emits no change update."""
+    while True:
+        started = time.monotonic()
+        for chat in db.list_chats():
+            try:
+                members = await bot.get_chat_administrators(chat.chat_id)
+                db.replace_chat_telegram_admins(
+                    chat.chat_id,
+                    [
+                        {
+                            "user_id": int(item.user.id),
+                            "username": item.user.username or "",
+                            "full_name": item.user.full_name or str(item.user.id),
+                            "status": member_status_text(item.status),
+                            "custom_title": getattr(item, "custom_title", None),
+                            "is_bot": bool(item.user.is_bot),
+                        }
+                        for item in members
+                    ],
+                )
+            except Exception as exc:
+                logging.warning("Could not refresh Telegram admins for chat %s: %s", chat.chat_id, exc)
+        await asyncio.sleep(max(5.0, 300.0 - (time.monotonic() - started)))
 
 
 @router.message(F.chat.type == "private")
@@ -14103,6 +14217,7 @@ async def main() -> None:
         alerts_task = asyncio.create_task(alerts_monitor_loop(bot))
         scheduled_weather_task = asyncio.create_task(scheduled_weather_loop(bot))
         personal_notifications_task = asyncio.create_task(personal_notifications_loop(bot))
+        telegram_admin_sync_task = asyncio.create_task(telegram_admin_sync_loop(bot))
         await dispatcher.start_polling(
             bot,
             allowed_updates=[
@@ -14112,9 +14227,11 @@ async def main() -> None:
                 "edited_channel_post",
                 "callback_query",
                 "inline_query",
+                "chosen_inline_result",
                 "message_reaction",
                 "pre_checkout_query",
                 "my_chat_member",
+                "chat_member",
             ],
         )
     except TelegramNotFound as exc:
@@ -14136,6 +14253,10 @@ async def main() -> None:
             personal_notifications_task.cancel()
             with suppress(asyncio.CancelledError):
                 await personal_notifications_task
+        if "telegram_admin_sync_task" in locals():
+            telegram_admin_sync_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await telegram_admin_sync_task
         if staff_service:
             await staff_service.send(bot, "status", "🔴 Бот остановлен")
         await bot.session.close()
