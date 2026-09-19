@@ -1908,8 +1908,7 @@ HELP_SECTIONS = {
     ),
     "social": (
         "<b>❤️ Отношения</b>\n\n"
-        "<code>пара @ник</code> — предложить отношения\n"
-        "Можно ответить на сообщение словом <code>пара</code>.\n"
+        "<code>пара @твой_ник @ник</code> — предложить отношения\n"
         "<code>отношения</code> — состояние пары\n"
         "<code>отношения внимание</code> — ежедневные +20 опыта\n"
         "<code>расстаться</code> — завершить отношения\n\n"
@@ -5775,8 +5774,25 @@ def telegram_user_profile_text(
     return profile_chat_text(profile, short=short)
 
 
-@router.message(Command("pair", "relationship", "breakup"))
-@router.message(F.text.regexp(re.compile(r"^/?(?:пара|отношения|расстаться)(?:\s|$)", re.IGNORECASE)))
+PAIR_COMMAND_RE = re.compile(
+    r"^/?(?:пара|pair)(?:@[A-Za-z0-9_]{5,32})?\s+@[A-Za-z0-9_]{5,32}\s+@[A-Za-z0-9_]{5,32}\s*$",
+    re.IGNORECASE,
+)
+
+
+def pair_command_usernames(text: str) -> tuple[str, str] | None:
+    """Return the two explicit usernames from an exact pair command."""
+    if not PAIR_COMMAND_RE.fullmatch(text.strip()):
+        return None
+    parts = text.strip().split()
+    return parts[-2][1:], parts[-1][1:]
+
+
+@router.message(Command("relationship", "breakup"))
+@router.message(
+    F.text.regexp(PAIR_COMMAND_RE)
+    | F.text.regexp(re.compile(r"^/?(?:отношения|расстаться)(?:\s|$)", re.IGNORECASE))
+)
 async def relationship_command(message: Message) -> None:
     if not message.from_user or message.chat.type not in SUPPORTED_CHAT_TYPES:
         await message.answer("Команды отношений работают в группе: пара @ник, отношения, расстаться.")
@@ -5786,6 +5802,27 @@ async def relationship_command(message: Message) -> None:
     parts = (message.text or "").split(maxsplit=1)
     action = parts[0].lstrip("/").split("@")[0].casefold()
     target_text = parts[1].strip() if len(parts) > 1 else ""
+    pair_target_id: int | None = None
+    if action in {"пара", "pair"}:
+        usernames = pair_command_usernames(message.text or "")
+        if usernames is None:
+            return
+        participants = [db.get_seen_user_by_username(chat_id, username) for username in usernames]
+        missing = next((username for username, user in zip(usernames, participants) if user is None), None)
+        if missing:
+            await message.answer(
+                f"Я еще не видел @{escape(missing)} в этой группе. "
+                "Пользователь должен сначала написать сообщение в чат."
+            )
+            return
+        participant_ids = [user.user_id for user in participants if user is not None]
+        if len(set(participant_ids)) != 2:
+            await message.answer("Укажи двух разных пользователей.")
+            return
+        if actor not in participant_ids:
+            await message.answer("Один из двух указанных ников должен быть твоим.")
+            return
+        pair_target_id = next(user_id for user_id in participant_ids if user_id != actor)
     if action in {"отношения", "relationship"} and target_text.casefold() in {"внимание", "care"}:
         try:
             added = db.care_for_partner(chat_id, actor)
@@ -5814,13 +5851,15 @@ async def relationship_command(message: Message) -> None:
             text += "\n<code>отношения внимание</code> — +20 опыта от каждого раз в день. Подарки паре: цветок +10, кристалл +30, свидание +25 (до 100 опыта в день). Пропуски без штрафов.\n"
         else:
             text += "Пока без пары.\n"
-        text += "\nПредложение: <code>пара @ник</code>, <code>пара user_id</code> или ответом <code>пара</code>.\nПросмотр: <code>отношения</code> · завершение: <code>расстаться</code>.\nОдна пара на группу. Предложение действует 24 часа."
+        text += "\nПредложение: <code>пара @твой_ник @ник</code>.\nПросмотр: <code>отношения</code> · завершение: <code>расстаться</code>.\nОдна пара на группу. Предложение действует 24 часа."
         await message.answer(text, disable_web_page_preview=True)
         for request in db.list_couple_requests(chat_id, actor):
             sender, target = request["requester_id"], request["target_id"]
             await message.answer(f"Предложение пары: {profile_link(sender, None, str(sender))} → {profile_link(target, None, str(target))}", reply_markup=social_request_menu("couple", chat_id, sender, target))
         return
-    if target_text.isdecimal():
+    if pair_target_id is not None:
+        target_id, error = pair_target_id, None
+    elif target_text.isdecimal():
         target_id, error = int(target_text), None
     else:
         target_id, _, error = await resolve_command_target(message, target_text.lstrip("@") if target_text else None)

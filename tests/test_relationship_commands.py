@@ -33,9 +33,9 @@ def callback(action, uid):
     return SimpleNamespace(data=f'soc:{action}:-100:1:2', from_user=SimpleNamespace(id=uid), message=message(''), bot=object(), answer=AsyncMock())
 
 
-@pytest.mark.parametrize('text,reply', [('пара @user2', None), ('/pair 2', None), ('пара', SimpleNamespace(from_user=User(id=2, first_name='Second', is_bot=False)))])
-def test_proposal_commands_require_consent(social, text, reply):
-    msg = message(text, reply=reply)
+@pytest.mark.parametrize('text', ['пара @user1 @user2', '/pair @user2 @user1'])
+def test_proposal_commands_require_consent(social, text):
+    msg = message(text)
     asyncio.run(bot.relationship_command(msg))
     assert social.couple_state(-100, 1, 2) == 'outgoing'
     assert social.get_chat_couple(-100, 1) is None
@@ -87,12 +87,35 @@ def test_breakup_requires_confirmation_and_works_after_partner_leaves(social, mo
 
 
 def test_self_and_bot_proposals_rejected(social, monkeypatch):
-    asyncio.run(bot.relationship_command(message('пара 1')))
+    asyncio.run(bot.relationship_command(message('пара @user1 @user1')))
     monkeypatch.setattr(bot, 'active_social_user', AsyncMock(return_value=User(id=2, first_name='Bot', is_bot=True)))
-    asyncio.run(bot.relationship_command(message('пара 2')))
+    asyncio.run(bot.relationship_command(message('пара @user1 @user2')))
+    assert social.list_couple_requests(-100, 1) == []
+
+
+@pytest.mark.parametrize(
+    'text',
+    [
+        'Пара таки вирішила летіти у напрямку Зеленодольськ',
+        'пара',
+        'пара @user2',
+        'пара @user1 @user2 лишний текст',
+    ],
+)
+def test_pair_ignores_plain_and_forwarded_text(social, text):
+    msg = message(text)
+    asyncio.run(bot.relationship_command(msg))
+    msg.answer.assert_not_awaited()
+    assert social.list_couple_requests(-100, 1) == []
+
+
+def test_pair_command_requires_actor_among_two_usernames(social):
+    msg = message('пара @user2 @user3')
+    asyncio.run(bot.relationship_command(msg))
+    assert 'должен быть твоим' in msg.answer.await_args.args[0]
     assert social.list_couple_requests(-100, 1) == []
 
 
 def test_relationship_commands_are_in_help():
-    assert 'пара @ник' in bot.chat_help_text()
+    assert 'пара @твой_ник @ник' in bot.chat_help_text()
     assert 'расстаться' in bot.chat_help_text()
