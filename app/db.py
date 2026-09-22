@@ -355,6 +355,7 @@ class ChatRulesSettings:
     rules_text: str
     enabled: int
     interval_minutes: int
+    require_agreement: int
     last_sent_at: str | None
     updated_by: int | None
     updated_at: str
@@ -1040,9 +1041,31 @@ class Database:
                 rules_text text not null default '',
                 enabled integer not null default 0,
                 interval_minutes integer not null default 60,
+                require_agreement integer not null default 1,
                 last_sent_at text,
                 updated_by integer,
                 updated_at text not null,
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists chat_rule_agreements (
+                chat_id integer not null,
+                user_id integer not null,
+                prompt_message_id integer,
+                restricted integer not null default 0,
+                agreed_at text,
+                created_at text not null,
+                updated_at text not null,
+                primary key (chat_id, user_id),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists chat_rules_acceptances (
+                chat_id integer not null,
+                user_id integer not null,
+                rules_updated_at text not null,
+                accepted_at text not null,
+                primary key (chat_id, user_id),
                 foreign key (chat_id) references chats(chat_id) on delete cascade
             );
 
@@ -1383,6 +1406,7 @@ class Database:
         self._migrate_personal_reminders()
         self._migrate_personal_weather()
         self._migrate_chat_lock_settings()
+        self._migrate_chat_rules_settings()
         self._conn.execute(
             "delete from star_payments where charge_id <> '' and id not in "
             "(select min(id) from star_payments where charge_id <> '' group by charge_id)"
@@ -1644,6 +1668,17 @@ class Database:
             """,
             (chat_id, title, chat_type, username, utc_now()),
         )
+        self._conn.commit()
+
+    def _migrate_chat_rules_settings(self) -> None:
+        columns = {
+            row["name"]
+            for row in self._conn.execute("pragma table_info(chat_rules_settings)").fetchall()
+        }
+        if "require_agreement" not in columns:
+            self._conn.execute(
+                "alter table chat_rules_settings add column require_agreement integer not null default 1"
+            )
         self._conn.commit()
 
     def get_dig_session(self, user_id: int) -> dict | None:
@@ -5028,7 +5063,8 @@ class Database:
     def get_chat_rules_settings(self, chat_id: int) -> ChatRulesSettings:
         row = self._conn.execute(
             """
-            select chat_id, rules_text, enabled, interval_minutes, last_sent_at, updated_by, updated_at
+            select chat_id, rules_text, enabled, interval_minutes, require_agreement,
+                   last_sent_at, updated_by, updated_at
             from chat_rules_settings
             where chat_id = ?
             """,
@@ -5036,7 +5072,7 @@ class Database:
         ).fetchone()
         if row:
             return ChatRulesSettings(**dict(row))
-        return ChatRulesSettings(int(chat_id), "", 0, 60, None, None, utc_now())
+        return ChatRulesSettings(int(chat_id), "", 0, 60, 1, None, None, utc_now())
 
     def set_chat_rules_settings(
         self,
@@ -5044,18 +5080,21 @@ class Database:
         rules_text: str,
         enabled: bool,
         interval_minutes: int,
+        require_agreement: bool,
         updated_by: int | None,
     ) -> ChatRulesSettings:
         now = utc_now()
         self._conn.execute(
             """
             insert into chat_rules_settings
-                (chat_id, rules_text, enabled, interval_minutes, last_sent_at, updated_by, updated_at)
-            values (?, ?, ?, ?, null, ?, ?)
+                (chat_id, rules_text, enabled, interval_minutes, require_agreement,
+                 last_sent_at, updated_by, updated_at)
+            values (?, ?, ?, ?, ?, null, ?, ?)
             on conflict(chat_id) do update set
                 rules_text = excluded.rules_text,
                 enabled = excluded.enabled,
                 interval_minutes = excluded.interval_minutes,
+                require_agreement = excluded.require_agreement,
                 last_sent_at = case
                     when chat_rules_settings.enabled = excluded.enabled
                      and chat_rules_settings.interval_minutes = excluded.interval_minutes
@@ -5067,7 +5106,7 @@ class Database:
             """,
             (
                 int(chat_id), rules_text.strip(), int(bool(enabled)),
-                max(5, min(10080, int(interval_minutes))), updated_by, now,
+                max(5, min(10080, int(interval_minutes))), int(bool(require_agreement)), updated_by, now,
             ),
         )
         self._conn.commit()
@@ -5076,7 +5115,8 @@ class Database:
     def list_enabled_chat_rules(self) -> list[ChatRulesSettings]:
         rows = self._conn.execute(
             """
-            select chat_id, rules_text, enabled, interval_minutes, last_sent_at, updated_by, updated_at
+            select chat_id, rules_text, enabled, interval_minutes, require_agreement,
+                   last_sent_at, updated_by, updated_at
             from chat_rules_settings
             where enabled = 1 and trim(rules_text) <> ''
             order by chat_id
@@ -5088,7 +5128,7 @@ class Database:
         rows = self._conn.execute(
             """
             select c.chat_id, c.title, c.type, c.username, c.updated_at,
-                   r.rules_text, r.enabled, r.interval_minutes, r.last_sent_at,
+                   r.rules_text, r.enabled, r.interval_minutes, r.require_agreement, r.last_sent_at,
                    r.updated_by, r.updated_at as rules_updated_at
             from seen_users u
             join chats c on c.chat_id = u.chat_id
@@ -5115,6 +5155,7 @@ class Database:
                         rules_text=str(values["rules_text"]),
                         enabled=int(values["enabled"]),
                         interval_minutes=int(values["interval_minutes"]),
+                        require_agreement=int(values["require_agreement"]),
                         last_sent_at=values["last_sent_at"],
                         updated_by=values["updated_by"],
                         updated_at=str(values["rules_updated_at"]),
@@ -5129,6 +5170,92 @@ class Database:
             (sent_at, int(chat_id)),
         )
         self._conn.commit()
+
+    def begin_chat_rule_agreement(
+        self,
+        chat_id: int,
+        user_id: int,
+        *,
+        restricted: bool,
+        prompt_message_id: int | None = None,
+    ) -> None:
+        now = utc_now()
+        self._conn.execute(
+            """
+            insert into chat_rule_agreements
+                (chat_id, user_id, prompt_message_id, restricted, agreed_at, created_at, updated_at)
+            values (?, ?, ?, ?, null, ?, ?)
+            on conflict(chat_id, user_id) do update set
+                prompt_message_id = excluded.prompt_message_id,
+                restricted = excluded.restricted,
+                agreed_at = null,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at
+            """,
+            (int(chat_id), int(user_id), prompt_message_id, int(bool(restricted)), now, now),
+        )
+        self._conn.commit()
+
+    def set_chat_rule_prompt_message(self, chat_id: int, user_id: int, message_id: int) -> None:
+        self._conn.execute(
+            """
+            update chat_rule_agreements
+            set prompt_message_id = ?, updated_at = ?
+            where chat_id = ? and user_id = ? and agreed_at is null
+            """,
+            (int(message_id), utc_now(), int(chat_id), int(user_id)),
+        )
+        self._conn.commit()
+
+    def get_chat_rule_agreement(self, chat_id: int, user_id: int) -> dict | None:
+        row = self._conn.execute(
+            """
+            select chat_id, user_id, prompt_message_id, restricted, agreed_at, created_at, updated_at
+            from chat_rule_agreements
+            where chat_id = ? and user_id = ?
+            """,
+            (int(chat_id), int(user_id)),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def complete_chat_rule_agreement(self, chat_id: int, user_id: int) -> bool:
+        now = utc_now()
+        cursor = self._conn.execute(
+            """
+            update chat_rule_agreements
+            set agreed_at = ?, restricted = 0, updated_at = ?
+            where chat_id = ? and user_id = ? and agreed_at is null
+            """,
+            (now, now, int(chat_id), int(user_id)),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def accept_chat_rules(self, chat_id: int, user_id: int, rules_updated_at: str) -> str:
+        accepted_at = utc_now()
+        self._conn.execute(
+            """
+            insert into chat_rules_acceptances (chat_id, user_id, rules_updated_at, accepted_at)
+            values (?, ?, ?, ?)
+            on conflict(chat_id, user_id) do update set
+                rules_updated_at = excluded.rules_updated_at,
+                accepted_at = excluded.accepted_at
+            """,
+            (int(chat_id), int(user_id), rules_updated_at, accepted_at),
+        )
+        self._conn.commit()
+        return accepted_at
+
+    def get_chat_rules_acceptance(self, chat_id: int, user_id: int) -> dict | None:
+        row = self._conn.execute(
+            """
+            select chat_id, user_id, rules_updated_at, accepted_at
+            from chat_rules_acceptances
+            where chat_id = ? and user_id = ?
+            """,
+            (int(chat_id), int(user_id)),
+        ).fetchone()
+        return dict(row) if row else None
 
     def birthdays_for_date(self, chat_id: int, day: int, month: int, sent_date: str) -> list[Birthday]:
         rows = self._conn.execute(

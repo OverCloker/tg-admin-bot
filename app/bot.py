@@ -4314,6 +4314,30 @@ def media_locked_permissions() -> ChatPermissions:
     )
 
 
+def rules_pending_permissions() -> ChatPermissions:
+    return ChatPermissions(
+        can_send_messages=False,
+        can_send_audios=False,
+        can_send_documents=False,
+        can_send_photos=False,
+        can_send_videos=False,
+        can_send_video_notes=False,
+        can_send_voice_notes=False,
+        can_send_polls=False,
+        can_send_other_messages=False,
+        can_add_web_page_previews=False,
+        can_react_to_messages=False,
+    )
+
+
+async def current_default_chat_permissions(bot: Bot, chat_id: int) -> ChatPermissions:
+    try:
+        chat = await bot.get_chat(chat_id)
+        return chat.permissions or default_open_permissions()
+    except (TelegramBadRequest, TelegramForbiddenError):
+        return default_open_permissions()
+
+
 def default_open_permissions() -> ChatPermissions:
     return ChatPermissions(
         can_send_messages=True,
@@ -5502,6 +5526,65 @@ async def participant_membership_changed(event: ChatMemberUpdated) -> None:
         )
     else:
         db.update_chat_telegram_admin(event.chat.id, None, telegram_user.id)
+
+    old_status = member_status_text(event.old_chat_member.status)
+    old_active = old_status in ACTIVE_MEMBER_STATUS_TEXTS and not (
+        old_status == "restricted" and not bool(getattr(event.old_chat_member, "is_member", True))
+    )
+    new_active = status in ACTIVE_MEMBER_STATUS_TEXTS and not (
+        status == "restricted" and not bool(getattr(member, "is_member", True))
+    )
+    if old_active or not new_active or telegram_user.is_bot or status in ADMIN_STATUS_TEXTS:
+        return
+
+    settings = db.get_chat_rules_settings(event.chat.id)
+    if not settings.require_agreement or not settings.rules_text.strip():
+        return
+    previous_acceptance = db.get_chat_rules_acceptance(event.chat.id, telegram_user.id)
+    if previous_acceptance and previous_acceptance.get("rules_updated_at") == settings.updated_at:
+        return
+
+    db.upsert_chat(event.chat.id, event.chat.title or "Без названия", event.chat.type, event.chat.username)
+    db.upsert_seen_user(
+        event.chat.id,
+        telegram_user.id,
+        telegram_user.username,
+        telegram_user.full_name,
+        telegram_user.is_bot,
+    )
+    restricted = False
+    try:
+        await event.bot.restrict_chat_member(
+            chat_id=event.chat.id,
+            user_id=telegram_user.id,
+            permissions=rules_pending_permissions(),
+            use_independent_chat_permissions=True,
+        )
+        restricted = True
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        logging.warning("Could not restrict new member %s in chat %s: %s", telegram_user.id, event.chat.id, exc)
+
+    db.begin_chat_rule_agreement(event.chat.id, telegram_user.id, restricted=restricted)
+    mention = f'<a href="tg://user?id={telegram_user.id}">{escape(telegram_user.full_name)}</a>'
+    try:
+        prompt = await event.bot.send_message(
+            event.chat.id,
+            f"{mention}, прочитай правила чата и подтверди согласие.",
+            reply_markup=rules_agreement_keyboard(event.chat.id, telegram_user.id),
+            disable_web_page_preview=True,
+        )
+        db.set_chat_rule_prompt_message(event.chat.id, telegram_user.id, prompt.message_id)
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        logging.warning("Could not send rules prompt for member %s in chat %s: %s", telegram_user.id, event.chat.id, exc)
+        if restricted:
+            with suppress(TelegramBadRequest, TelegramForbiddenError):
+                await event.bot.restrict_chat_member(
+                    chat_id=event.chat.id,
+                    user_id=telegram_user.id,
+                    permissions=await current_default_chat_permissions(event.bot, event.chat.id),
+                    use_independent_chat_permissions=True,
+                )
+        db.complete_chat_rule_agreement(event.chat.id, telegram_user.id)
 
 
 def replies_text(chat_id: int) -> str:
@@ -12045,6 +12128,22 @@ def rules_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def rules_agreement_keyboard(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    link = miniapp_deep_link(rules_start_param(chat_id))
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📜 Правила чата", url=link)],
+            [
+                InlineKeyboardButton(
+                    text="✅ Прочитал и согласен",
+                    callback_data=f"rules:agree:{int(chat_id)}:{int(user_id)}",
+                    style="success",
+                )
+            ],
+        ]
+    )
+
+
 async def send_chat_rules_prompt(
     bot: Bot,
     chat_id: int,
@@ -12074,6 +12173,53 @@ async def important_rules_command(message: Message) -> None:
         message_thread_id=message.message_thread_id,
     )
     db.mark_chat_rules_sent(message.chat.id, datetime.now(timezone.utc).isoformat(timespec="seconds"))
+
+
+@router.callback_query(F.data.startswith("rules:agree:"))
+async def accept_rules_callback(callback: CallbackQuery) -> None:
+    try:
+        _, _, raw_chat_id, raw_user_id = (callback.data or "").split(":", 3)
+        chat_id = int(raw_chat_id)
+        user_id = int(raw_user_id)
+    except (TypeError, ValueError):
+        await callback.answer("Некорректная кнопка.", show_alert=True)
+        return
+    if callback.from_user.id != user_id:
+        await callback.answer("Эта кнопка предназначена другому участнику.", show_alert=True)
+        return
+    agreement = db.get_chat_rule_agreement(chat_id, user_id)
+    if not agreement or agreement.get("agreed_at"):
+        await callback.answer("Правила уже подтверждены.")
+        return
+    try:
+        if agreement.get("restricted"):
+            await callback.bot.restrict_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                permissions=await current_default_chat_permissions(callback.bot, chat_id),
+                use_independent_chat_permissions=True,
+            )
+        if not db.complete_chat_rule_agreement(chat_id, user_id):
+            await callback.answer("Правила уже подтверждены.")
+            return
+        settings = db.get_chat_rules_settings(chat_id)
+        db.accept_chat_rules(chat_id, user_id, settings.updated_at)
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        logging.warning("Could not restore member %s permissions in chat %s: %s", user_id, chat_id, exc)
+        await callback.answer(
+            "Не удалось открыть доступ. Администратор должен проверить права бота.",
+            show_alert=True,
+        )
+        return
+    if callback.message:
+        mention = f'<a href="tg://user?id={user_id}">{escape(callback.from_user.full_name)}</a>'
+        with suppress(TelegramBadRequest, TelegramForbiddenError):
+            await callback.message.edit_text(
+                f"✅ {mention} прочитал правила и подтвердил согласие.",
+                reply_markup=rules_keyboard(chat_id),
+                disable_web_page_preview=True,
+            )
+    await callback.answer("Готово. Теперь можно писать в чат.")
 
 
 @router.message(F.text.regexp(ALERT_MAP_RE))

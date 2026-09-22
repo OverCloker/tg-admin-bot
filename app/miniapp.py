@@ -149,6 +149,7 @@ class MiniAppRulesSave(BaseModel):
     rulesText: str = Field(default="", max_length=12000)
     automaticEnabled: bool = False
     intervalMinutes: int = Field(default=60, ge=5, le=10080)
+    requireAgreement: bool = True
 
 
 class MiniAppAlarmSettingsSet(BaseModel):
@@ -2937,6 +2938,7 @@ def miniapp_profile_rules(
                 "rulesText": settings.rules_text,
                 "automaticEnabled": bool(settings.enabled),
                 "intervalMinutes": int(settings.interval_minutes),
+                "requireAgreement": bool(settings.require_agreement),
                 "lastSentAt": settings.last_sent_at or "",
                 "updatedAt": settings.updated_at,
             } if settings else None),
@@ -2965,6 +2967,7 @@ def miniapp_profile_rules_save(
             rules_text,
             payload.automaticEnabled,
             payload.intervalMinutes,
+            payload.requireAgreement,
             user["id"],
         )
         return {
@@ -2974,6 +2977,7 @@ def miniapp_profile_rules_save(
                 "rulesText": settings.rules_text,
                 "automaticEnabled": bool(settings.enabled),
                 "intervalMinutes": int(settings.interval_minutes),
+                "requireAgreement": bool(settings.require_agreement),
                 "lastSentAt": settings.last_sent_at or "",
                 "updatedAt": settings.updated_at,
             },

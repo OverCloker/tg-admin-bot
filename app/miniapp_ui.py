@@ -2702,6 +2702,7 @@ MINI_APP_HTML = r"""<!doctype html>
         <div class="mine-admin-form wide">
           <label class="wide" for="rulesText"><b>Текст правил</b></label>
           <textarea id="rulesText" class="wide" rows="14" maxlength="12000" placeholder="Напишите правила этой группы...">${escapeHtml(rules.rulesText || "")}</textarea>
+          <label class="wide"><input id="rulesAgreement" type="checkbox" ${rules.requireAgreement !== false ? "checked" : ""}> Новые участники должны подтвердить правила перед отправкой сообщений и медиа</label>
           <label class="wide"><input id="rulesAutomatic" type="checkbox" ${rules.automaticEnabled ? "checked" : ""}> Публиковать кнопку с правилами автоматически</label>
           <label class="wide" for="rulesInterval"><b>Интервал, минут</b></label>
           <input id="rulesInterval" class="wide" type="number" min="5" max="10080" value="${Number(rules.intervalMinutes || 60)}">
@@ -2723,6 +2724,7 @@ MINI_APP_HTML = r"""<!doctype html>
         body: JSON.stringify({
           chatId: Number(chatId),
           rulesText: document.getElementById("rulesText")?.value || "",
+          requireAgreement: Boolean(document.getElementById("rulesAgreement")?.checked),
           automaticEnabled: Boolean(document.getElementById("rulesAutomatic")?.checked),
           intervalMinutes: Number(document.getElementById("rulesInterval")?.value || 60)
         })
