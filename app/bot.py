@@ -14289,6 +14289,27 @@ def chat_rules_due(settings, now: datetime) -> bool:
     return (now - reference).total_seconds() >= max(5, int(settings.interval_minutes)) * 60
 
 
+async def publish_scheduled_chat_rules(bot: Bot, settings, now: datetime) -> Message:
+    sent = await send_chat_rules_prompt(bot, settings.chat_id)
+    previous_message_id = getattr(settings, "last_message_id", None)
+    if previous_message_id and int(previous_message_id) != int(sent.message_id):
+        try:
+            await bot.delete_message(settings.chat_id, int(previous_message_id))
+        except (TelegramBadRequest, TelegramForbiddenError) as exc:
+            logging.info(
+                "Could not remove previous chat rules message %s in %s: %s",
+                previous_message_id,
+                settings.chat_id,
+                exc,
+            )
+    db.mark_chat_rules_sent(
+        settings.chat_id,
+        now.isoformat(timespec="seconds"),
+        int(sent.message_id),
+    )
+    return sent
+
+
 async def chat_rules_loop(bot: Bot) -> None:
     while True:
         now = datetime.now(timezone.utc)
@@ -14296,8 +14317,7 @@ async def chat_rules_loop(bot: Bot) -> None:
             if not chat_rules_due(settings, now):
                 continue
             try:
-                await send_chat_rules_prompt(bot, settings.chat_id)
-                db.mark_chat_rules_sent(settings.chat_id, now.isoformat(timespec="seconds"))
+                await publish_scheduled_chat_rules(bot, settings, now)
             except asyncio.CancelledError:
                 raise
             except (TelegramBadRequest, TelegramForbiddenError) as exc:

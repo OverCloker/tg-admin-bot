@@ -31,8 +31,10 @@ def test_chat_rules_storage_and_due_timer(tmp_path) -> None:
         assert bot.chat_rules_due(saved, datetime.now(timezone.utc)) is False
 
         old = (datetime.now(timezone.utc) - timedelta(minutes=61)).isoformat(timespec="seconds")
-        db.mark_chat_rules_sent(-100, old)
-        assert bot.chat_rules_due(db.get_chat_rules_settings(-100), datetime.now(timezone.utc)) is True
+        db.mark_chat_rules_sent(-100, old, 321)
+        stored = db.get_chat_rules_settings(-100)
+        assert stored.last_message_id == 321
+        assert bot.chat_rules_due(stored, datetime.now(timezone.utc)) is True
         assert [item.chat_id for item in db.list_enabled_chat_rules()] == [-100]
     finally:
         db.close()
@@ -103,6 +105,24 @@ def test_rules_prompt_has_text_and_one_button() -> None:
     args, kwargs = telegram_bot.send_message.await_args
     assert args[:2] == (-100, "<b>Обязательно к прочтению</b>")
     assert len(kwargs["reply_markup"].inline_keyboard) == 1
+
+
+def test_scheduled_rules_replace_previous_message(tmp_path, monkeypatch) -> None:
+    _, database = prepared_db(tmp_path)
+    settings = database.set_chat_rules_settings(-100, "Правила", True, 60, True, 42)
+    database.mark_chat_rules_sent(-100, datetime.now(timezone.utc).isoformat(), 111)
+    settings = database.get_chat_rules_settings(-100)
+    telegram_bot = SimpleNamespace(
+        send_message=AsyncMock(return_value=SimpleNamespace(message_id=222)),
+        delete_message=AsyncMock(),
+    )
+    monkeypatch.setattr(bot, "db", database, raising=False)
+
+    asyncio.run(bot.publish_scheduled_chat_rules(telegram_bot, settings, datetime.now(timezone.utc)))
+
+    telegram_bot.delete_message.assert_awaited_once_with(-100, 111)
+    assert database.get_chat_rules_settings(-100).last_message_id == 222
+    database.close()
 
 
 def test_rules_agreement_storage(tmp_path) -> None:

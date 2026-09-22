@@ -357,6 +357,7 @@ class ChatRulesSettings:
     interval_minutes: int
     require_agreement: int
     last_sent_at: str | None
+    last_message_id: int | None
     updated_by: int | None
     updated_at: str
 
@@ -1043,6 +1044,7 @@ class Database:
                 interval_minutes integer not null default 60,
                 require_agreement integer not null default 1,
                 last_sent_at text,
+                last_message_id integer,
                 updated_by integer,
                 updated_at text not null,
                 foreign key (chat_id) references chats(chat_id) on delete cascade
@@ -1678,6 +1680,10 @@ class Database:
         if "require_agreement" not in columns:
             self._conn.execute(
                 "alter table chat_rules_settings add column require_agreement integer not null default 1"
+            )
+        if "last_message_id" not in columns:
+            self._conn.execute(
+                "alter table chat_rules_settings add column last_message_id integer"
             )
         self._conn.commit()
 
@@ -5064,7 +5070,7 @@ class Database:
         row = self._conn.execute(
             """
             select chat_id, rules_text, enabled, interval_minutes, require_agreement,
-                   last_sent_at, updated_by, updated_at
+                   last_sent_at, last_message_id, updated_by, updated_at
             from chat_rules_settings
             where chat_id = ?
             """,
@@ -5072,7 +5078,7 @@ class Database:
         ).fetchone()
         if row:
             return ChatRulesSettings(**dict(row))
-        return ChatRulesSettings(int(chat_id), "", 0, 60, 1, None, None, utc_now())
+        return ChatRulesSettings(int(chat_id), "", 0, 60, 1, None, None, None, utc_now())
 
     def set_chat_rules_settings(
         self,
@@ -5088,8 +5094,8 @@ class Database:
             """
             insert into chat_rules_settings
                 (chat_id, rules_text, enabled, interval_minutes, require_agreement,
-                 last_sent_at, updated_by, updated_at)
-            values (?, ?, ?, ?, ?, null, ?, ?)
+                 last_sent_at, last_message_id, updated_by, updated_at)
+            values (?, ?, ?, ?, ?, null, null, ?, ?)
             on conflict(chat_id) do update set
                 rules_text = excluded.rules_text,
                 enabled = excluded.enabled,
@@ -5116,7 +5122,7 @@ class Database:
         rows = self._conn.execute(
             """
             select chat_id, rules_text, enabled, interval_minutes, require_agreement,
-                   last_sent_at, updated_by, updated_at
+                   last_sent_at, last_message_id, updated_by, updated_at
             from chat_rules_settings
             where enabled = 1 and trim(rules_text) <> ''
             order by chat_id
@@ -5129,6 +5135,7 @@ class Database:
             """
             select c.chat_id, c.title, c.type, c.username, c.updated_at,
                    r.rules_text, r.enabled, r.interval_minutes, r.require_agreement, r.last_sent_at,
+                   r.last_message_id,
                    r.updated_by, r.updated_at as rules_updated_at
             from seen_users u
             join chats c on c.chat_id = u.chat_id
@@ -5157,6 +5164,7 @@ class Database:
                         interval_minutes=int(values["interval_minutes"]),
                         require_agreement=int(values["require_agreement"]),
                         last_sent_at=values["last_sent_at"],
+                        last_message_id=values["last_message_id"],
                         updated_by=values["updated_by"],
                         updated_at=str(values["rules_updated_at"]),
                     ),
@@ -5164,10 +5172,20 @@ class Database:
             )
         return result
 
-    def mark_chat_rules_sent(self, chat_id: int, sent_at: str) -> None:
+    def mark_chat_rules_sent(
+        self,
+        chat_id: int,
+        sent_at: str,
+        message_id: int | None = None,
+    ) -> None:
         self._conn.execute(
-            "update chat_rules_settings set last_sent_at = ? where chat_id = ?",
-            (sent_at, int(chat_id)),
+            """
+            update chat_rules_settings
+            set last_sent_at = ?,
+                last_message_id = coalesce(?, last_message_id)
+            where chat_id = ?
+            """,
+            (sent_at, message_id, int(chat_id)),
         )
         self._conn.commit()
 

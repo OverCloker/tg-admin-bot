@@ -582,11 +582,20 @@ MINI_APP_HTML = r"""<!doctype html>
       line-height: 1.15;
     }
     .rules-chat-picker select {
+      width: 100% !important;
       min-width: 0;
       min-height: 46px;
       padding: 9px 38px 9px 12px;
-      font-size: clamp(16px, 3.8vw, 19px);
-      font-weight: 750;
+      appearance: none;
+      border: 1px solid color-mix(in srgb, var(--accent) 62%, var(--line)) !important;
+      border-radius: var(--button-radius) !important;
+      background:
+        linear-gradient(45deg, transparent 50%, var(--text) 50%) calc(100% - 17px) 52% / 7px 7px no-repeat,
+        linear-gradient(135deg, var(--text) 50%, transparent 50%) calc(100% - 10px) 52% / 7px 7px no-repeat,
+        var(--input-bg) !important;
+      color: var(--text) !important;
+      font-size: clamp(18px, 4.2vw, 21px) !important;
+      font-weight: 850 !important;
       line-height: 1.2;
     }
     .setting-switch-row {
