@@ -82,6 +82,14 @@ def test_rules_ui_and_chat_keyboard() -> None:
     assert rules_button < weather_button < radio_button
     assert 'api("/miniapp/profile/rules"' in MINI_APP_HTML
     assert 'normalized.startsWith("rules_")' in MINI_APP_HTML
+    assert "place-items: center" in MINI_APP_HTML
+    assert "text-align: center" in MINI_APP_HTML
+    assert 'class="rules-chat-picker"' in MINI_APP_HTML
+    assert MINI_APP_HTML.count('class="setting-switch-row wide"') == 2
+    assert MINI_APP_HTML.count('class="slider round"') == 2
+    assert ".switch input:checked + .slider" in MINI_APP_HTML
+    assert 'body[data-theme="glass"] .rules-chat-picker' in MINI_APP_HTML
+    assert 'body[data-theme="classic"] .rules-chat-picker' in MINI_APP_HTML
     keyboard = bot.rules_keyboard(-100)
     assert keyboard.inline_keyboard[0][0].text == "📜 Правила чата"
     assert len(keyboard.inline_keyboard) == 1

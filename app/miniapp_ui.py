@@ -348,10 +348,12 @@ MINI_APP_HTML = r"""<!doctype html>
     .rules-entry {
       grid-column: 1 / -1;
       display: grid;
+      place-items: center;
+      align-content: center;
       gap: 3px;
       min-height: 78px !important;
       padding: 14px 18px;
-      text-align: left;
+      text-align: center;
       border: 1px solid color-mix(in srgb, var(--accent) 62%, var(--line));
       background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 24%, var(--panel-2)), var(--panel-2)) !important;
     }
@@ -562,6 +564,111 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     .mine-admin-form textarea { min-height:110px; resize:vertical; }
     .mine-admin-form .wide { grid-column: 1 / -1; }
+    .rules-chat-picker {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+      min-width: 0;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--panel-2);
+    }
+    .rules-chat-picker > span {
+      font-size: clamp(17px, 4vw, 20px);
+      font-weight: 900;
+      line-height: 1.15;
+    }
+    .rules-chat-picker select {
+      min-width: 0;
+      min-height: 46px;
+      padding: 9px 38px 9px 12px;
+      font-size: clamp(16px, 3.8vw, 19px);
+      font-weight: 750;
+      line-height: 1.2;
+    }
+    .setting-switch-row {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 58px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--panel-2);
+    }
+    .setting-switch-row > label:first-child {
+      min-width: 0;
+      font-weight: 750;
+      line-height: 1.35;
+      cursor: pointer;
+    }
+    .switch {
+      position: relative;
+      display: inline-block;
+      flex: 0 0 54px;
+      width: 54px;
+      height: 32px;
+      cursor: pointer;
+    }
+    .switch input {
+      position: absolute;
+      width: 1px !important;
+      height: 1px !important;
+      min-height: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      border: 0 !important;
+      background: transparent !important;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .slider {
+      position: absolute;
+      inset: 0;
+      border: 1px solid color-mix(in srgb, var(--line) 76%, #fff);
+      background: color-mix(in srgb, var(--input-bg) 84%, #7b8490);
+      box-shadow: inset 0 2px 5px #0005;
+      transition: background .18s ease, border-color .18s ease;
+    }
+    .slider::before {
+      content: "";
+      position: absolute;
+      left: 3px;
+      bottom: 3px;
+      width: 24px;
+      height: 24px;
+      background: #f8fbff;
+      box-shadow: 0 2px 6px #0007;
+      transition: transform .18s ease;
+    }
+    .switch input:checked + .slider {
+      border-color: color-mix(in srgb, var(--ok) 70%, #fff);
+      background: var(--ok);
+    }
+    .switch input:checked + .slider::before { transform: translateX(22px); }
+    .switch input:focus-visible + .slider {
+      outline: 3px solid color-mix(in srgb, var(--accent) 72%, transparent);
+      outline-offset: 3px;
+    }
+    .slider.round,
+    .slider.round::before { border-radius: 999px; }
+    body[data-theme="glass"] .rules-chat-picker,
+    body[data-theme="glass"] .setting-switch-row {
+      border-color: #ffffff4a;
+      box-shadow: inset 0 1px 0 #ffffff36, 0 12px 32px #0003;
+      backdrop-filter: var(--surface-blur);
+    }
+    body[data-theme="classic"] .rules-chat-picker,
+    body[data-theme="classic"] .setting-switch-row {
+      border-color: #fff #404040 #404040 #fff;
+      background: #c0c0c0;
+      box-shadow: 1px 1px 0 #000;
+    }
     .mine-admin-screen { display:grid; gap:14px; }
     .mine-admin-row {
       display:grid;
@@ -2693,17 +2800,32 @@ MINI_APP_HTML = r"""<!doctype html>
         <h2>Правила группы</h2>
         <p class="muted">Текст откроется в Mini App по кнопке «Правила чата». Автопубликация регулярно напоминает участникам открыть правила.</p>
         <div class="mine-admin-form">
-          <select id="rulesAdminChatSelect" class="wide" onchange="showRulesManager(this.value)">
-            ${triggerChatOptionsHtml(chats, selectedChatId)}
-          </select>
+          <label class="rules-chat-picker" for="rulesAdminChatSelect">
+            <span>Группа</span>
+            <select id="rulesAdminChatSelect" onchange="showRulesManager(this.value)">
+              ${triggerChatOptionsHtml(chats, selectedChatId)}
+            </select>
+          </label>
         </div>
       </section>
       ${selectedChatId ? `<section class="panel">
         <div class="mine-admin-form wide">
           <label class="wide" for="rulesText"><b>Текст правил</b></label>
           <textarea id="rulesText" class="wide" rows="14" maxlength="12000" placeholder="Напишите правила этой группы...">${escapeHtml(rules.rulesText || "")}</textarea>
-          <label class="wide"><input id="rulesAgreement" type="checkbox" ${rules.requireAgreement !== false ? "checked" : ""}> Новые участники должны подтвердить правила перед отправкой сообщений и медиа</label>
-          <label class="wide"><input id="rulesAutomatic" type="checkbox" ${rules.automaticEnabled ? "checked" : ""}> Публиковать кнопку с правилами автоматически</label>
+          <div class="setting-switch-row wide">
+            <label for="rulesAgreement">Новые участники должны подтвердить правила перед отправкой сообщений и медиа</label>
+            <label class="switch" aria-label="Требовать подтверждение правил">
+              <input id="rulesAgreement" type="checkbox" ${rules.requireAgreement !== false ? "checked" : ""}>
+              <span class="slider round"></span>
+            </label>
+          </div>
+          <div class="setting-switch-row wide">
+            <label for="rulesAutomatic">Публиковать кнопку с правилами автоматически</label>
+            <label class="switch" aria-label="Автоматическая публикация правил">
+              <input id="rulesAutomatic" type="checkbox" ${rules.automaticEnabled ? "checked" : ""}>
+              <span class="slider round"></span>
+            </label>
+          </div>
           <label class="wide" for="rulesInterval"><b>Интервал, минут</b></label>
           <input id="rulesInterval" class="wide" type="number" min="5" max="10080" value="${Number(rules.intervalMinutes || 60)}">
           <p class="muted wide">Например, 60 — один раз в час. Первая автоматическая публикация будет после указанного интервала.</p>
