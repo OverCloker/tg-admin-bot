@@ -12041,10 +12041,7 @@ def rules_start_param(chat_id: int) -> str:
 def rules_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     link = miniapp_deep_link(rules_start_param(chat_id))
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📜 Правила чата", url=link)],
-            [InlineKeyboardButton(text="Обязательно к прочтению", url=link)],
-        ]
+        inline_keyboard=[[InlineKeyboardButton(text="📜 Правила чата", url=link)]]
     )
 
 
@@ -12057,7 +12054,7 @@ async def send_chat_rules_prompt(
     kwargs = {"message_thread_id": message_thread_id} if message_thread_id else {}
     return await bot.send_message(
         chat_id,
-        "📜 <b>Правила чата</b>\nОбязательно к прочтению",
+        "<b>Обязательно к прочтению</b>",
         reply_markup=rules_keyboard(chat_id),
         disable_web_page_preview=True,
         **kwargs,

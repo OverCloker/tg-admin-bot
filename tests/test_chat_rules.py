@@ -1,4 +1,6 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -79,5 +81,14 @@ def test_rules_ui_and_chat_keyboard() -> None:
     assert 'normalized.startsWith("rules_")' in MINI_APP_HTML
     keyboard = bot.rules_keyboard(-100)
     assert keyboard.inline_keyboard[0][0].text == "📜 Правила чата"
-    assert keyboard.inline_keyboard[1][0].text == "Обязательно к прочтению"
+    assert len(keyboard.inline_keyboard) == 1
     assert "startapp=rules_n100" in keyboard.inline_keyboard[0][0].url
+
+
+def test_rules_prompt_has_text_and_one_button() -> None:
+    telegram_bot = AsyncMock()
+    asyncio.run(bot.send_chat_rules_prompt(telegram_bot, -100))
+    telegram_bot.send_message.assert_awaited_once()
+    args, kwargs = telegram_bot.send_message.await_args
+    assert args[:2] == (-100, "<b>Обязательно к прочтению</b>")
+    assert len(kwargs["reply_markup"].inline_keyboard) == 1
