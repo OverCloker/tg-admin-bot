@@ -145,12 +145,6 @@ class MiniAppBlacklistDelete(BaseModel):
     word: str = Field(min_length=1, max_length=120)
 
 
-class MiniAppChatLockSet(BaseModel):
-    chatId: int
-    seconds: int | None = Field(default=None, ge=1, le=7 * 24 * 60 * 60)
-    reason: str = Field(default="", max_length=500)
-
-
 class MiniAppAlarmSettingsSet(BaseModel):
     chatId: int
     automaticEnabled: bool
@@ -961,8 +955,8 @@ def _miniapp_role_tabs(db: Database) -> list[dict[str, Any]]:
         "assistant": "Помощники модера",
     }
     moderator_limit_by_role = {
-        "senior": "мут до 1 часа, снятие всех мутов, чат стоп до 30 минут",
-        "moderator": "мут до 30 минут, удаление сообщений, чат стоп до 10 минут",
+        "senior": "мут до 1 часа, снятие всех мутов",
+        "moderator": "мут до 30 минут, удаление сообщений",
         "assistant": "варны и мут до 10 минут, снятие только своих мутов",
     }
     for chat in db.list_chats():
@@ -1080,25 +1074,6 @@ def _miniapp_moderation_role_title(role: str | None) -> str:
     if role == "admin":
         return "Админ"
     return MINIAPP_MODERATOR_ROLE_TITLES.get(role or "", "Нет роли")
-
-
-def _miniapp_chat_lock_limit_seconds(role: str | None) -> int | None:
-    if role == "admin":
-        return None
-    if role == "senior":
-        return 30 * 60
-    if role == "moderator":
-        return 10 * 60
-    return 0
-
-
-def _miniapp_can_stop_chat(role: str | None, seconds: int | None) -> bool:
-    limit = _miniapp_chat_lock_limit_seconds(role)
-    if limit is None:
-        return True
-    if limit <= 0:
-        return False
-    return seconds is not None and 1 <= seconds <= limit
 
 
 def _miniapp_moderator_public(row: dict[str, Any]) -> dict[str, Any]:
@@ -2885,7 +2860,7 @@ def miniapp_profile_admin_panel(
             "sections": [
                 {"key": "roles", "title": "Роли", "enabled": is_owner, "description": "Выдача ролей приложения."},
                 {"key": "mine", "title": "Шахта", "enabled": _miniapp_can_view_mine_admin(db, user["id"]), "description": "Управление для владельца, просмотр для модераторов."},
-                {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Режимы чата и управление тревогой по группам."},
+                {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Управление тревогой по группам."},
                 {"key": "blacklist", "title": "Чёрный список", "enabled": _miniapp_can_manage_blacklist(db, user["id"]), "description": "Запрещённые слова, формы и синонимы."},
                 {"key": "triggers", "title": "Триггеры", "enabled": _miniapp_can_manage_triggers(db, user["id"]), "description": "Слова и фразы, на которые бот отвечает в чатах."},
                 {"key": "inline-stats", "title": "Inline-статистика", "enabled": _miniapp_has_global_admin_access(db, user["id"]), "description": "Глобальные вызовы погоды и карт тревог за день, неделю и месяц."},
@@ -2925,17 +2900,13 @@ def miniapp_profile_moderation(
         selected_chat_id = int(chat_id) if chat_id is not None else (int(chats[0].chat_id) if chats else 0)
         selected_chat = next((chat for chat in chats if int(chat.chat_id) == selected_chat_id), None)
         viewer_role = _miniapp_moderation_role_for_chat(db, selected_chat_id, user["id"]) if selected_chat else None
-        lock = db.get_chat_lock(selected_chat_id, datetime.now(timezone.utc).isoformat(timespec="seconds")) if selected_chat else None
         return {
             "ok": True,
             "viewerRole": viewer_role or "",
             "viewerRoleTitle": _miniapp_moderation_role_title(viewer_role),
-            "canStopChat": _miniapp_can_stop_chat(viewer_role, None) or _miniapp_chat_lock_limit_seconds(viewer_role) not in (0, None),
-            "chatLockLimitSeconds": _miniapp_chat_lock_limit_seconds(viewer_role),
             "selectedChatId": selected_chat_id if selected_chat else 0,
             "selectedChat": _miniapp_chat_public(selected_chat) if selected_chat else None,
             "chats": [_miniapp_chat_public(chat) for chat in chats],
-            "lock": lock or None,
             "alarm": (
                 _miniapp_alarm_public(db, selected_chat_id, viewer_role == "admin")
                 if selected_chat else None
@@ -3045,50 +3016,6 @@ def miniapp_profile_moderation_role_clear(
             "removed": removed,
             "target": {"id": target_id, "fullName": full_name, "username": username or ""},
         }
-    finally:
-        db.close()
-
-
-@router.post("/miniapp/profile/moderation/chat-lock")
-def miniapp_profile_moderation_chat_lock(
-    payload: MiniAppChatLockSet,
-    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
-) -> dict[str, Any]:
-    user = _telegram_user(x_telegram_init_data)
-    db = _db()
-    try:
-        role = _miniapp_moderation_role_for_chat(db, payload.chatId, user["id"])
-        if not _miniapp_can_stop_chat(role, payload.seconds):
-            limit = _miniapp_chat_lock_limit_seconds(role)
-            if limit == 0:
-                raise HTTPException(403, "Эта роль не может останавливать чат.")
-            raise HTTPException(403, f"Лимит роли на остановку чата: {int(limit / 60)} минут.")
-        if db.get_chat(payload.chatId) is None:
-            raise HTTPException(404, "Чат не найден.")
-        until_at = None
-        if payload.seconds is not None:
-            until_at = (datetime.now(timezone.utc) + timedelta(seconds=payload.seconds)).isoformat(timespec="seconds")
-        db.set_chat_lock(payload.chatId, True, user["id"], payload.reason, until_at)
-        return {"ok": True, "lock": db.get_chat_lock(payload.chatId)}
-    finally:
-        db.close()
-
-
-@router.post("/miniapp/profile/moderation/chat-unlock")
-def miniapp_profile_moderation_chat_unlock(
-    payload: MiniAppChatLockSet,
-    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
-) -> dict[str, Any]:
-    user = _telegram_user(x_telegram_init_data)
-    db = _db()
-    try:
-        role = _miniapp_moderation_role_for_chat(db, payload.chatId, user["id"])
-        if not _miniapp_can_stop_chat(role, 1):
-            raise HTTPException(403, "Эта роль не может запускать остановленный чат.")
-        if db.get_chat(payload.chatId) is None:
-            raise HTTPException(404, "Чат не найден.")
-        db.set_chat_lock(payload.chatId, False, user["id"])
-        return {"ok": True, "lock": None}
     finally:
         db.close()
 

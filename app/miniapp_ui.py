@@ -2628,31 +2628,7 @@ MINI_APP_HTML = r"""<!doctype html>
       if (!isCurrentScreenRequest(requestId)) return;
       const chats = data.chats || [];
       const selectedChatId = Number(data.selectedChatId || 0);
-      const selectedChat = data.selectedChat || {};
-      const lock = data.lock || null;
       const alarm = data.alarm || null;
-      const lockText = lock
-        ? `чат остановлен${lock.until_at ? ` до ${lock.until_at}` : " до ручного старта"}${lock.reason ? ` · ${lock.reason}` : ""}`
-        : "чат открыт";
-      const lockLimit = data.chatLockLimitSeconds === null
-        ? "без лимита"
-        : Number(data.chatLockLimitSeconds || 0) > 0
-          ? `до ${Math.floor(Number(data.chatLockLimitSeconds) / 60)} мин`
-          : "нельзя";
-      const chatTools = selectedChatId ? `<section class="panel">
-        <h2>Режимы чата</h2>
-        <p class="muted">Твоя роль: ${escapeHtml(data.viewerRoleTitle || "нет роли")}. Лимит чат-стопа: ${escapeHtml(lockLimit)}.</p>
-        <div class="mine-admin-grid">
-          <div class="mine-admin-card">Чат<b>${escapeHtml(lockText)}</b></div>
-        </div>
-        ${data.canStopChat ? `<div class="mine-admin-form wide">
-          <p class="muted wide">Закрывает чат для обычных участников. Пустой срок — до команды “Чат старт”.</p>
-          <input id="modLockMinutes" placeholder="На сколько минут">
-          <input id="modLockReason" placeholder="Причина, можно пусто">
-          <button class="btn" onclick="setModerationChatLock(${selectedChatId})">Чат стоп</button>
-          <button class="btn secondary" onclick="unlockModerationChat(${selectedChatId})">Чат старт</button>
-        </div>` : `<p class="muted">Эта роль не может останавливать чат.</p>`}
-      </section>` : "";
       const alarmTools = selectedChatId && alarm ? `<section class="panel">
         <h2>Тревога</h2>
         <p class="muted">Настройки действуют только для выбранной группы. Изменения применяются ботом в течение 30 секунд.</p>
@@ -2695,7 +2671,6 @@ MINI_APP_HTML = r"""<!doctype html>
           </select>
         </div>
       </section>
-      ${chatTools}
       ${alarmTools}
       ${selectedChatId ? "" : `<section class="panel muted">Нет доступных чатов для модерации.</section>`}
       <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
@@ -2765,39 +2740,6 @@ MINI_APP_HTML = r"""<!doctype html>
       });
       showNotice("Роль модерации снята.");
       showRoleManager(window.currentRoleTabKey);
-    } catch (error) {
-      alert(error.message);
-    }
-  }
-
-  async function setModerationChatLock(chatId) {
-    const minutesRaw = (document.getElementById("modLockMinutes")?.value || "").trim();
-    const reason = document.getElementById("modLockReason")?.value || "";
-    const seconds = minutesRaw ? Math.max(1, Math.round(Number(minutesRaw) * 60)) : null;
-    if (minutesRaw && !Number.isFinite(seconds)) {
-      alert("Минуты должны быть числом.");
-      return;
-    }
-    try {
-      await api("/miniapp/profile/moderation/chat-lock", {
-        method: "POST",
-        body: JSON.stringify({ chatId: Number(chatId), seconds, reason })
-      });
-      showNotice("Чат остановлен.");
-      showModerationManager(chatId);
-    } catch (error) {
-      alert(error.message);
-    }
-  }
-
-  async function unlockModerationChat(chatId) {
-    try {
-      await api("/miniapp/profile/moderation/chat-unlock", {
-        method: "POST",
-        body: JSON.stringify({ chatId: Number(chatId), seconds: 1, reason: "" })
-      });
-      showNotice("Чат открыт.");
-      showModerationManager(chatId);
     } catch (error) {
       alert(error.message);
     }

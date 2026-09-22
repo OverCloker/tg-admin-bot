@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from aiogram.types import ChatPermissions
 
 from app import bot as bot_module
 from app.bot import (
@@ -15,13 +16,10 @@ from app.bot import (
     handle_blacklist,
     is_miniapp_admin_user,
     moderator_can_delete_messages,
-    moderator_can_stop_chat,
     moderator_can_unmute,
     moderator_max_mute_minutes,
     moderator_role_rank,
-    parse_chat_stop_payload,
     parse_dictionary_hit_payload,
-    parse_duration_seconds_token,
     parse_quiet_admin_payload,
     parse_quiet_duration,
     parse_quiet_payload,
@@ -151,14 +149,6 @@ def test_moderator_payloads_and_limits() -> None:
     assert moderator_can_delete_messages("moderator") is True
     assert moderator_can_delete_messages("senior") is True
     assert moderator_can_delete_messages("admin") is True
-    assert moderator_can_stop_chat("assistant", 60) is False
-    assert moderator_can_stop_chat("moderator", 600) is True
-    assert moderator_can_stop_chat("moderator", 601) is False
-    assert moderator_can_stop_chat("moderator", None) is False
-    assert moderator_can_stop_chat("senior", 1800) is True
-    assert moderator_can_stop_chat("senior", 1801) is False
-    assert moderator_can_stop_chat("admin", None) is True
-    assert moderator_can_stop_chat("admin", 24 * 60 * 60) is True
     assert moderator_role_rank("admin") > moderator_role_rank("senior")
     assert moderator_can_unmute("admin", 99, {"moderator_id": 2}) is True
 
@@ -174,8 +164,10 @@ def test_chat_lock_storage_and_expiration(tmp_path) -> None:
     db.set_chat_lock(-100, True, 1, "expired", past)
     assert db.get_chat_lock(-100) is None
 
-    db.set_chat_lock(-100, True, 1, "manual", None)
-    assert db.get_chat_lock(-100)["reason"] == "manual"
+    db.set_chat_lock(-100, True, 1, "manual", None, {"can_send_messages": True})
+    lock = db.get_chat_lock(-100)
+    assert lock["reason"] == "manual"
+    assert '"can_send_messages": true' in lock["permissions_json"]
     db.set_chat_lock(-100, False, 1)
     assert db.get_chat_lock(-100) is None
 
@@ -234,12 +226,109 @@ async def test_blacklist_matches_word_variants(tmp_path, monkeypatch) -> None:
     assert message.answers == ["Данные выражения запрещены в чате."]
 
 
-def test_chat_control_payloads() -> None:
-    assert parse_duration_seconds_token("30с") == 30
-    assert parse_duration_seconds_token("5м") == 300
-    assert parse_duration_seconds_token("1ч") == 3600
-    assert parse_chat_stop_payload("чат стоп 5м зачистка") == (300, "зачистка")
-    assert parse_chat_stop_payload("чат стоп без флуда") == (None, "без флуда")
+def test_chat_stop_and_start_change_default_text_permission(tmp_path, monkeypatch) -> None:
+    db = _db(tmp_path)
+    permission_calls = []
+    replies = []
+
+    class FakeBot:
+        async def get_chat(self, _chat_id):
+            return SimpleNamespace(
+                permissions=ChatPermissions(
+                    can_send_messages=True,
+                    can_send_photos=False,
+                    can_send_voice_notes=True,
+                )
+            )
+
+        async def set_chat_permissions(self, **kwargs):
+            permission_calls.append(kwargs)
+
+    message = SimpleNamespace(
+        text="чат стоп",
+        chat=SimpleNamespace(id=-100, type="supergroup", title="Test chat"),
+        from_user=SimpleNamespace(id=1, username="admin", full_name="Admin"),
+        bot=FakeBot(),
+    )
+
+    async def yes_admin(*_args):
+        return True
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    async def reply(_message, text, *_args, **_kwargs):
+        replies.append(text)
+
+    monkeypatch.setattr(bot_module, "db", db, raising=False)
+    monkeypatch.setattr(bot_module, "is_chat_admin", yes_admin)
+    monkeypatch.setattr(bot_module, "remember_sender", no_op)
+    monkeypatch.setattr(bot_module, "safe_reply", reply)
+    monkeypatch.setattr(bot_module, "notify_staff_moderation", no_op)
+
+    asyncio.run(bot_module.stop_chat_messages(message))
+    assert permission_calls[0]["permissions"].can_send_messages is False
+    assert permission_calls[0]["permissions"].can_send_photos is False
+    assert permission_calls[0]["permissions"].can_send_voice_notes is True
+    assert db.get_chat_lock(-100) is not None
+
+    message.text = "чат старт"
+    asyncio.run(bot_module.start_chat_messages(message))
+    assert permission_calls[1]["permissions"].can_send_messages is True
+    assert permission_calls[1]["permissions"].can_send_photos is False
+    assert permission_calls[1]["permissions"].can_send_voice_notes is True
+    assert db.get_chat_lock(-100) is None
+    assert "Чат остановлен" in replies[0]
+    assert "Чат снова открыт" in replies[1]
+    db.close()
+
+
+def test_chat_start_does_not_remove_active_alarm_media_limits(tmp_path, monkeypatch) -> None:
+    db = _db(tmp_path)
+    original = ChatPermissions(
+        can_send_messages=True,
+        can_send_photos=True,
+        can_send_voice_notes=True,
+    )
+    db.save_alarm_permissions(-100, original.model_dump(exclude_none=True))
+    calls = []
+
+    class FakeBot:
+        async def get_chat(self, _chat_id):
+            return SimpleNamespace(permissions=bot_module.media_locked_permissions())
+
+        async def set_chat_permissions(self, **kwargs):
+            calls.append(kwargs["permissions"])
+
+    message = SimpleNamespace(
+        text="чат стоп",
+        chat=SimpleNamespace(id=-100, type="supergroup", title="Test chat"),
+        from_user=SimpleNamespace(id=1, username="admin", full_name="Admin"),
+        bot=FakeBot(),
+    )
+
+    async def yes_admin(*_args):
+        return True
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(bot_module, "db", db, raising=False)
+    monkeypatch.setattr(bot_module, "is_chat_admin", yes_admin)
+    monkeypatch.setattr(bot_module, "remember_sender", no_op)
+    monkeypatch.setattr(bot_module, "safe_reply", no_op)
+    monkeypatch.setattr(bot_module, "notify_staff_moderation", no_op)
+
+    asyncio.run(bot_module.stop_chat_messages(message))
+    lock = db.get_chat_lock(-100)
+    assert bot_module.saved_chat_lock_permissions(lock).can_send_photos is True
+
+    message.text = "чат старт"
+    asyncio.run(bot_module.start_chat_messages(message))
+    assert calls[-1].can_send_messages is True
+    assert calls[-1].can_send_photos is False
+    assert bot_module.stored_permissions(db.get_alarm_settings(-100).permissions_json).can_send_photos is True
+    db.close()
 
 
 def test_quiet_payload_defaults_to_one_hour() -> None:

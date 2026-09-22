@@ -304,8 +304,9 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert '"/miniapp/profile/roles"' in MINI_APP_HTML
     assert 'function showModerationManager(chatId = null)' in MINI_APP_HTML
     assert '"/miniapp/profile/moderation/roles"' in MINI_APP_HTML
-    assert '"/miniapp/profile/moderation/chat-lock"' in MINI_APP_HTML
-    assert '"/miniapp/profile/moderation/chat-unlock"' in MINI_APP_HTML
+    assert "Режимы чата" not in MINI_APP_HTML
+    assert '"/miniapp/profile/moderation/chat-lock"' not in MINI_APP_HTML
+    assert '"/miniapp/profile/moderation/chat-unlock"' not in MINI_APP_HTML
     assert '"/miniapp/profile/moderation/slow-mode"' not in MINI_APP_HTML
     assert '"/miniapp/profile/blacklist"' in MINI_APP_HTML
     assert 'showBlacklistManager()' in MINI_APP_HTML

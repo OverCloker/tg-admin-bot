@@ -1160,6 +1160,7 @@ class Database:
                 enabled integer not null default 0,
                 reason text not null default '',
                 until_at text,
+                permissions_json text,
                 updated_by integer,
                 updated_at text not null,
                 foreign key (chat_id) references chats(chat_id) on delete cascade
@@ -1349,6 +1350,7 @@ class Database:
         self._migrate_global_dig_game()
         self._migrate_personal_reminders()
         self._migrate_personal_weather()
+        self._migrate_chat_lock_settings()
         self._conn.execute(
             "delete from star_payments where charge_id <> '' and id not in "
             "(select min(id) from star_payments where charge_id <> '' group by charge_id)"
@@ -1378,6 +1380,14 @@ class Database:
             self._conn.execute(
                 "alter table personal_weather_settings add column timezone_name text not null default 'Europe/Kyiv'"
             )
+
+    def _migrate_chat_lock_settings(self) -> None:
+        columns = {
+            row["name"]
+            for row in self._conn.execute("pragma table_info(chat_lock_settings)").fetchall()
+        }
+        if "permissions_json" not in columns:
+            self._conn.execute("alter table chat_lock_settings add column permissions_json text")
 
     def _migrate_reply_media(self) -> None:
         for table in ("auto_replies", "trigger_replies"):
@@ -2711,19 +2721,31 @@ class Database:
         updated_by: int | None,
         reason: str = "",
         until_at: str | None = None,
+        permissions: dict | None = None,
     ) -> None:
         self._conn.execute(
             """
-            insert into chat_lock_settings (chat_id, enabled, reason, until_at, updated_by, updated_at)
-            values (?, ?, ?, ?, ?, ?)
+            insert into chat_lock_settings (
+                chat_id, enabled, reason, until_at, permissions_json, updated_by, updated_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?)
             on conflict(chat_id) do update set
                 enabled = excluded.enabled,
                 reason = excluded.reason,
                 until_at = excluded.until_at,
+                permissions_json = excluded.permissions_json,
                 updated_by = excluded.updated_by,
                 updated_at = excluded.updated_at
             """,
-            (chat_id, int(enabled), reason.strip()[:500], until_at, updated_by, utc_now()),
+            (
+                chat_id,
+                int(enabled),
+                reason.strip()[:500],
+                until_at,
+                json.dumps(permissions, ensure_ascii=False) if permissions is not None else None,
+                updated_by,
+                utc_now(),
+            ),
         )
         self._conn.commit()
 
@@ -2731,7 +2753,7 @@ class Database:
         check_at = now or utc_now()
         row = self._conn.execute(
             """
-            select chat_id, enabled, reason, until_at, updated_by, updated_at
+            select chat_id, enabled, reason, until_at, permissions_json, updated_by, updated_at
             from chat_lock_settings
             where chat_id = ? and enabled = 1
               and (until_at is null or until_at > ?)

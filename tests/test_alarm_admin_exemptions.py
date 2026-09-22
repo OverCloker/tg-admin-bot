@@ -148,6 +148,9 @@ def test_alarm_apply_does_not_disable_reactions_globally(monkeypatch) -> None:
         def get_alarm_settings(self, chat_id):
             return SimpleNamespace(permissions_json="{}", reactions_json=None)
 
+        def get_chat_lock(self, chat_id, now):
+            return None
+
     class FakeBot:
         async def set_chat_permissions(self, **kwargs) -> None:
             pass
@@ -159,3 +162,25 @@ def test_alarm_apply_does_not_disable_reactions_globally(monkeypatch) -> None:
     monkeypatch.setattr(bot_module, "set_chat_available_reactions", fail_set_reactions)
 
     asyncio.run(bot_module.apply_alarm_restrictions(FakeBot(), -100))
+
+
+def test_alarm_apply_keeps_text_disabled_for_stopped_chat(monkeypatch) -> None:
+    applied = {}
+
+    class FakeDb:
+        def get_alarm_settings(self, chat_id):
+            return SimpleNamespace(permissions_json="{}", reactions_json=None)
+
+        def get_chat_lock(self, chat_id, now):
+            return {"enabled": 1}
+
+    class FakeBot:
+        async def set_chat_permissions(self, **kwargs) -> None:
+            applied.update(kwargs)
+
+    monkeypatch.setattr(bot_module, "db", FakeDb(), raising=False)
+
+    asyncio.run(bot_module.apply_alarm_restrictions(FakeBot(), -100))
+
+    assert applied["permissions"].can_send_messages is False
+    assert applied["permissions"].can_send_photos is False

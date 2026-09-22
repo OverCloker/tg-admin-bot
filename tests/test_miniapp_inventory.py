@@ -13,7 +13,6 @@ from app.miniapp import (
     MINIAPP_OWNER_PROFILE_ROLE,
     MiniAppBlacklistDelete,
     MiniAppBlacklistSave,
-    MiniAppChatLockSet,
     MiniAppAlarmSettingsSet,
     MiniAppModeratorRoleClear,
     MiniAppModeratorRoleSet,
@@ -973,10 +972,6 @@ def test_miniapp_rejects_cross_chat_writes_for_chat_admin(tmp_path, monkeypatch)
             MiniAppBlacklistDelete(chatId=-300, word="чужой"),
             x_telegram_init_data="test",
         ),
-        lambda: miniapp.miniapp_profile_moderation_chat_lock(
-            MiniAppChatLockSet(chatId=-300, seconds=60, reason="нет доступа"),
-            x_telegram_init_data="test",
-        ),
     ]
 
     for call in forbidden_calls:
@@ -1042,39 +1037,6 @@ def test_miniapp_moderation_roles_are_owner_managed(tmp_path, monkeypatch) -> No
         x_telegram_init_data="test",
     )
     assert cleared["removed"] is True
-
-
-def test_miniapp_moderation_chat_lock_respects_role_limits(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("OWNER_ID", "42")
-    db_path = tmp_path / "bot.sqlite3"
-    db = Database(str(db_path))
-    db.init()
-    db.upsert_chat(-100, "Chat", "supergroup", None)
-    db.set_chat_moderator_role(-100, 7, "moderator", 42)
-    db.set_chat_moderator_role(-100, 9, "assistant", 42)
-    db.close()
-    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
-
-    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 7})
-    ok = miniapp.miniapp_profile_moderation_chat_lock(
-        MiniAppChatLockSet(chatId=-100, seconds=10 * 60, reason="test"),
-        x_telegram_init_data="test",
-    )
-    assert ok["lock"]["reason"] == "test"
-    with pytest.raises(Exception) as exc_info:
-        miniapp.miniapp_profile_moderation_chat_lock(
-            MiniAppChatLockSet(chatId=-100, seconds=11 * 60, reason="too long"),
-            x_telegram_init_data="test",
-        )
-    assert getattr(exc_info.value, "status_code", None) == 403
-
-    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 9})
-    with pytest.raises(Exception) as exc_info:
-        miniapp.miniapp_profile_moderation_chat_lock(
-            MiniAppChatLockSet(chatId=-100, seconds=60, reason="assistant"),
-            x_telegram_init_data="test",
-        )
-    assert getattr(exc_info.value, "status_code", None) == 403
 
 
 def test_miniapp_alarm_settings_are_scoped_to_chat_admin(tmp_path, monkeypatch) -> None:

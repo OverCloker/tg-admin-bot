@@ -732,7 +732,6 @@ def get_premium_service() -> PremiumService:
         premium_service = PremiumService(load_config().db_path)
     return premium_service
 ALARM_RUNTIME_CACHE: dict[int, tuple[float, object]] = {}
-CHAT_LOCK_CACHE: dict[int, tuple[float, dict | None]] = {}
 BIRTHDAY_CHECK_CACHE: dict[tuple[int, str], float] = {}
 
 
@@ -798,7 +797,6 @@ def invalidate_chat_runtime_cache(chat_id: int) -> None:
     REPLY_CACHE.pop(chat_id, None)
     BLACKLIST_CACHE.pop(chat_id, None)
     ALARM_RUNTIME_CACHE.pop(chat_id, None)
-    CHAT_LOCK_CACHE.pop(chat_id, None)
 
 
 def cached_triggers(chat_id: int):
@@ -891,20 +889,6 @@ def neptun_location_menu(chat_id: int, selected: str, page: int = 0) -> InlineKe
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def cached_chat_lock(chat_id: int) -> dict | None:
-    now = time.monotonic()
-    cached = CHAT_LOCK_CACHE.get(chat_id)
-    if cached and now - cached[0] < ALARM_RUNTIME_CACHE_SECONDS:
-        return cached[1]
-    lock = db.get_chat_lock(chat_id, datetime.now(timezone.utc).isoformat(timespec="seconds"))
-    CHAT_LOCK_CACHE[chat_id] = (now, lock)
-    return lock
-
-
-def invalidate_chat_lock_cache(chat_id: int) -> None:
-    CHAT_LOCK_CACHE.pop(chat_id, None)
-
-
 class DropStaleMessagesMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         if isinstance(event, Message) and event.date < BOT_STARTED_AT:
@@ -946,24 +930,6 @@ class QuietAdminMiddleware(BaseMiddleware):
             await delete_message_now_or_later(event)
             return None
         return await handler(event, data)
-
-
-class ChatLockMiddleware(BaseMiddleware):
-    async def __call__(self, handler, event, data):
-        if not (
-            isinstance(event, Message)
-            and event.chat.type in SUPPORTED_CHAT_TYPES
-            and event.from_user
-            and not event.from_user.is_bot
-            and cached_chat_lock(event.chat.id)
-        ):
-            return await handler(event, data)
-
-        if await actor_moderation_role(event.bot, event.chat.id, event.from_user.id) is not None:
-            return await handler(event, data)
-
-        await delete_message_now_or_later(event)
-        return None
 
 
 class AlarmRestrictedMessageMiddleware(BaseMiddleware):
@@ -1951,9 +1917,8 @@ HELP_SECTIONS = {
         "Лимиты: помощник — 10м, модератор — 30м, старший — 1ч.\n\n"
         "<b>Сообщения и чат</b>\n"
         "<code>-сооб</code> — удалить сообщение, отправлять ответом\n"
-        "<code>чат стоп 5м причина</code> — временно закрыть чат\n"
-        "<code>чат стоп</code> — закрыть до ручного запуска (только админ)\n"
-        "<code>чат старт</code> — снова открыть чат\n"
+        "<code>чат стоп</code> — запретить обычным участникам отправлять текст; только админ\n"
+        "<code>чат старт</code> — вернуть прежние права на текст; только админ\n"
         "<code>подтвердить комментарий</code> — подтвердить действие помощника; старший/админ\n"
         "<code>затихни админ @ник 2ч - причина</code> — тихий режим администратора; нужен доступ Telegram к удалению\n\n"
         "<b>Чёрный список</b> · только админы\n"
@@ -2205,25 +2170,6 @@ def moderator_can_delete_messages(role: str | None) -> bool:
     return moderator_role_rank(role) >= moderator_role_rank("moderator")
 
 
-def moderator_chat_lock_limit_seconds(role: str | None) -> int | None:
-    if role == "admin":
-        return None
-    if role == "moderator":
-        return 10 * 60
-    if role == "senior":
-        return 30 * 60
-    return 0
-
-
-def moderator_can_stop_chat(role: str | None, seconds: int | None) -> bool:
-    limit = moderator_chat_lock_limit_seconds(role)
-    if limit is None:
-        return True
-    if limit <= 0:
-        return False
-    return seconds is not None and 1 <= seconds <= limit
-
-
 def moderator_can_unmute(actor_role: str | None, actor_id: int, active_mute: dict | None) -> bool:
     if actor_role == "admin" or moderator_role_rank(actor_role) >= moderator_role_rank("senior"):
         return True
@@ -2335,36 +2281,6 @@ def parse_moderator_vote_payload(text: str | None) -> str | None:
     if command != "голос" or not payload.startswith("@"):
         return None
     return normalize_username(payload.split(maxsplit=1)[0])
-
-
-def parse_duration_seconds_token(token: str) -> int | None:
-    value = token.strip().casefold().rstrip(".")
-    match = re.fullmatch(r"(\d+)\s*(с|s|сек|секунд|м|m|мин|минут|ч|h|час|часов)", value)
-    if not match:
-        return None
-    amount = int(match.group(1))
-    unit = match.group(2)
-    if amount < 0:
-        return None
-    if unit in {"с", "s", "сек", "секунд"}:
-        return amount
-    if unit in {"м", "m", "мин", "минут"}:
-        return amount * 60
-    return amount * 3600
-
-
-def parse_chat_stop_payload(text: str | None) -> tuple[int | None, str] | None:
-    command, payload = split_text_command(text)
-    if command != "чат" or not payload.casefold().startswith("стоп"):
-        return None
-    rest = payload[4:].strip()
-    if not rest:
-        return None, ""
-    first, _, tail = rest.partition(" ")
-    seconds = parse_duration_seconds_token(first)
-    if seconds is None:
-        return None, rest
-    return max(1, seconds), tail.strip()
 
 
 def parse_quiet_manual_payload(text: str | None) -> tuple[str | None, int | None, str]:
@@ -4409,6 +4325,36 @@ def default_open_permissions() -> ChatPermissions:
         can_add_web_page_previews=True,
         can_react_to_messages=True,
     )
+
+
+def text_access_permissions(
+    permissions: ChatPermissions | None,
+    *,
+    allowed: bool,
+) -> ChatPermissions:
+    values = permissions_to_dict(permissions) or permissions_to_dict(default_open_permissions())
+    values["can_send_messages"] = allowed
+    return ChatPermissions(**values)
+
+
+def saved_chat_lock_permissions(lock: dict | None) -> ChatPermissions:
+    if not lock or not lock.get("permissions_json"):
+        return default_open_permissions()
+    try:
+        values = json.loads(str(lock["permissions_json"]))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return default_open_permissions()
+    return ChatPermissions(**values) if isinstance(values, dict) else default_open_permissions()
+
+
+def stored_permissions(raw: str | None) -> ChatPermissions | None:
+    if not raw:
+        return None
+    try:
+        values = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return ChatPermissions(**values) if isinstance(values, dict) else None
 
 
 def format_quiet_duration(minutes: int) -> str:
@@ -11127,9 +11073,12 @@ async def apply_alarm_restrictions(bot: Bot, chat_id: int) -> None:
         if not settings.permissions_json:
             chat = await bot.get_chat(chat_id)
             db.save_alarm_permissions(chat_id, permissions_to_dict(getattr(chat, "permissions", None)))
+        permissions = media_locked_permissions()
+        if db.get_chat_lock(chat_id, datetime.now(timezone.utc).isoformat(timespec="seconds")):
+            permissions = text_access_permissions(permissions, allowed=False)
         await bot.set_chat_permissions(
             chat_id=chat_id,
-            permissions=media_locked_permissions(),
+            permissions=permissions,
             use_independent_chat_permissions=True,
         )
     except (TelegramBadRequest, TelegramForbiddenError) as exc:
@@ -11285,9 +11234,12 @@ async def restore_alarm_restrictions(bot: Bot, chat_id: int) -> None:
     settings = db.get_alarm_settings(chat_id)
     try:
         saved = json.loads(settings.permissions_json) if settings.permissions_json else None
+        permissions = ChatPermissions(**saved) if saved else default_open_permissions()
+        if db.get_chat_lock(chat_id, datetime.now(timezone.utc).isoformat(timespec="seconds")):
+            permissions = text_access_permissions(permissions, allowed=False)
         await bot.set_chat_permissions(
             chat_id=chat_id,
-            permissions=ChatPermissions(**saved) if saved else default_open_permissions(),
+            permissions=permissions,
             use_independent_chat_permissions=True,
         )
         if settings.permissions_json:
@@ -13226,55 +13178,61 @@ async def confirm_helper_action(message: Message) -> None:
     )
 
 
-@router.message(F.text.regexp(re.compile(r"^чат\s+стоп(?:\s|$)", re.IGNORECASE)))
+@router.message(F.text.regexp(re.compile(r"^чат\s+стоп[?!.]?$", re.IGNORECASE)))
 async def stop_chat_messages(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
         return
-    actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
-    if actor_role is None:
+    if not await is_chat_admin(message.bot, message.chat.id, message.from_user.id):
         return
 
     await remember_sender(message)
-    parsed = parse_chat_stop_payload(message.text)
-    if parsed is None:
+    existing_lock = db.get_chat_lock(
+        message.chat.id,
+        datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
+    if existing_lock:
+        await safe_reply(message, "🔒 Отправка текстовых сообщений уже отключена.")
         return
-    seconds, reason = parsed
-    if not moderator_can_stop_chat(actor_role, seconds):
-        if actor_role == "assistant":
-            await safe_reply(message, "Помощник не может останавливать чат.")
-        else:
-            limit = moderator_chat_lock_limit_seconds(actor_role)
-            limit_text = f"{int(limit / 60)} мин" if limit else "0 мин"
-            await safe_reply(message, f"Лимит этой должности на остановку чата: <b>{limit_text}</b>. Укажи срок, например <code>чат стоп 10м причина</code>.")
-        return
-    until_at = None
-    until_line = "до команды <code>чат старт</code>"
-    if seconds is not None:
-        until_dt = datetime.now(timezone.utc) + timedelta(seconds=seconds)
-        until_at = until_dt.isoformat(timespec="seconds")
-        until_line = f"до <b>{escape(until_at)}</b>"
 
-    db.set_chat_lock(message.chat.id, True, message.from_user.id, reason, until_at)
-    invalidate_chat_lock_cache(message.chat.id)
-    reason_line = f"\nПричина: {escape(reason)}" if reason else ""
+    try:
+        chat = await message.bot.get_chat(message.chat.id)
+        current_permissions = getattr(chat, "permissions", None)
+        await message.bot.set_chat_permissions(
+            chat_id=message.chat.id,
+            permissions=text_access_permissions(current_permissions, allowed=False),
+            use_independent_chat_permissions=True,
+        )
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        await safe_reply(
+            message,
+            "Не получилось отключить текстовые сообщения. "
+            "Проверь право бота «Блокировка участников».\n"
+            f"<code>{escape(str(exc))}</code>",
+        )
+        return
+
+    alarm_permissions = stored_permissions(db.get_alarm_settings(message.chat.id).permissions_json)
+    permissions_to_restore = alarm_permissions or current_permissions
+    db.set_chat_lock(
+        message.chat.id,
+        True,
+        message.from_user.id,
+        permissions=permissions_to_dict(permissions_to_restore),
+    )
     await safe_reply(
         message,
         (
             "🔒 <b>Чат остановлен</b>\n"
-            f"Обычные участники временно не смогут писать: их сообщения будут удаляться.\n"
-            "Писать могут админы Telegram и назначенные модераторы бота.\n"
-            f"Срок: {until_line}"
-            f"{reason_line}"
+            "Обычным участникам отключена отправка текстовых сообщений.\n"
+            "Для возврата прежних прав: <code>чат старт</code>."
         ),
     )
     await notify_staff_moderation(
         message.bot,
         (
             "🔒 <b>Чат стоп</b>\n"
-            f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
-            f"Чат: {escape(chat_title(message.chat))}\n"
-            f"Срок: {until_line}"
-            f"{reason_line}"
+            f"Кто: {escape(render_moderation_actor(message, 'admin'))}\n"
+            f"Чат: {escape(chat_title(message.chat))}"
         ),
     )
 
@@ -13283,22 +13241,48 @@ async def stop_chat_messages(message: Message) -> None:
 async def start_chat_messages(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES or not message.from_user:
         return
-    actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
-    if actor_role is None:
-        return
-    if not moderator_can_stop_chat(actor_role, 1):
-        await safe_reply(message, "Помощник не может управлять остановкой чата.")
+    if not await is_chat_admin(message.bot, message.chat.id, message.from_user.id):
         return
 
     await remember_sender(message)
+    lock = db.get_chat_lock(
+        message.chat.id,
+        datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
+    if not lock:
+        await safe_reply(message, "🔓 Отправка текстовых сообщений уже включена.")
+        return
+    restored_permissions = saved_chat_lock_permissions(lock)
+    alarm_settings = db.get_alarm_settings(message.chat.id)
+    permissions_to_apply = restored_permissions
+    if alarm_settings.permissions_json:
+        permissions_to_apply = text_access_permissions(
+            media_locked_permissions(),
+            allowed=bool(restored_permissions.can_send_messages),
+        )
+    try:
+        await message.bot.set_chat_permissions(
+            chat_id=message.chat.id,
+            permissions=permissions_to_apply,
+            use_independent_chat_permissions=True,
+        )
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        await safe_reply(
+            message,
+            "Не получилось вернуть прежние права. "
+            "Проверь право бота «Блокировка участников».\n"
+            f"<code>{escape(str(exc))}</code>",
+        )
+        return
+    if alarm_settings.permissions_json:
+        db.save_alarm_permissions(message.chat.id, permissions_to_dict(restored_permissions))
     db.set_chat_lock(message.chat.id, False, message.from_user.id)
-    invalidate_chat_lock_cache(message.chat.id)
-    await safe_reply(message, "🔓 Чат снова открыт.")
+    await safe_reply(message, "🔓 Чат снова открыт: прежние права на текст восстановлены.")
     await notify_staff_moderation(
         message.bot,
         (
             "🔓 <b>Чат старт</b>\n"
-            f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
+            f"Кто: {escape(render_moderation_actor(message, 'admin'))}\n"
             f"Чат: {escape(chat_title(message.chat))}"
         ),
     )
@@ -14233,7 +14217,6 @@ async def main() -> None:
     router.message.middleware(StaffTopicMiddleware())
     router.message.middleware(AuditAdminStateMiddleware())
     router.message.middleware(QuietAdminMiddleware())
-    router.message.middleware(ChatLockMiddleware())
     router.message.middleware(AlarmRestrictedMessageMiddleware())
     router.callback_query.middleware(StaleCallbackQueryMiddleware())
     router.callback_query.middleware(AuditCallbackMiddleware())
