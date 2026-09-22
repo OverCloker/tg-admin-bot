@@ -1056,6 +1056,16 @@ class Database:
             create index if not exists idx_blacklist_reply_variants_word
                 on blacklist_reply_variants(chat_id, word, position);
 
+            create table if not exists blacklist_weekly_violations (
+                chat_id integer not null,
+                user_id integer not null,
+                week_start text not null,
+                violation_count integer not null default 0,
+                updated_at text not null,
+                primary key (chat_id, user_id),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
             create table if not exists roll_mute_settings (
                 chat_id integer primary key,
                 mute_minutes integer not null default 60,
@@ -5160,6 +5170,28 @@ class Database:
             )
             for item in words
         ]
+
+    def record_blacklist_violation(self, chat_id: int, user_id: int, week_start: str) -> int:
+        """Atomically increment and return a user's blacklist strikes for the given week."""
+        row = self._conn.execute(
+            """
+            insert into blacklist_weekly_violations (
+                chat_id, user_id, week_start, violation_count, updated_at
+            ) values (?, ?, ?, 1, ?)
+            on conflict(chat_id, user_id) do update set
+                violation_count = case
+                    when blacklist_weekly_violations.week_start = excluded.week_start
+                    then blacklist_weekly_violations.violation_count + 1
+                    else 1
+                end,
+                week_start = excluded.week_start,
+                updated_at = excluded.updated_at
+            returning violation_count
+            """,
+            (chat_id, user_id, week_start, utc_now()),
+        ).fetchone()
+        self._conn.commit()
+        return int(row["violation_count"])
 
     def get_roll_mute_settings(self, chat_id: int) -> RollMuteSettings:
         row = self._conn.execute(

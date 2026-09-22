@@ -2757,13 +2757,10 @@ MINI_APP_HTML = r"""<!doctype html>
     const variantText = Number(item.variantCount || 0) > 0
       ? `${Number(item.variantCount || 0)} вариантов слова`
       : "только основное слово";
-    const muteText = Number(item.muteMinutes || 0) > 0
-      ? `мут: ${Number(item.muteMinutes || 0)} мин`
-      : "мут выключен";
     return `<div class="admin-list-row">
       <span>
         <b>${escapeHtml(item.word)}</b><br>
-        <span class="muted">${escapeHtml(variantText)} · ${escapeHtml(muteText)}</span>
+        <span class="muted">${escapeHtml(variantText)}</span>
       </span>
       <span class="utility-actions" style="margin:0">
         <button class="btn secondary" style="margin:0" onclick="editMiniAppBlacklist(${Number(item.chatId)}, ${jsAttrString(item.word)})">Редактировать</button>
@@ -2783,7 +2780,7 @@ MINI_APP_HTML = r"""<!doctype html>
           <p class="muted">Варианты необязательны. До 20 форм или синонимов через запятую: например “спам, спамить, спамер”.</p>
           <textarea id="blacklistVariantsText" class="wide" placeholder="спам, спамить, спамер">${escapeHtml(variantsText)}</textarea>
         </div>
-        <input id="blacklistMuteMinutes" type="number" min="0" max="10080" step="1" placeholder="Мут в минутах, 0 = не мутить" value="${Number(editor.muteMinutes || 0)}">
+        <p class="muted wide">Наказание растёт за неделю: 5 минут → 10 минут → 30 минут → 1 час. Сброс — каждый понедельник в 00:00 по Киеву.</p>
         <button class="btn" onclick="saveMiniAppBlacklist(${Number(chatId)})">Сохранить</button>
         <button class="btn secondary" onclick="showBlacklistManager(${Number(chatId)})">Отмена</button>
       </div>
@@ -2807,11 +2804,11 @@ MINI_APP_HTML = r"""<!doctype html>
       window.currentMiniAppBlacklist = items;
       const selectedChat = data.selectedChat || {};
       const addButton = selectedChatId
-        ? `<button class="btn" style="margin:0" onclick="showBlacklistManager(${selectedChatId}, { word: '', variants: [], muteMinutes: 0 })">Добавить запрет</button>`
+        ? `<button class="btn" style="margin:0" onclick="showBlacklistManager(${selectedChatId}, { word: '', variants: [] })">Добавить запрет</button>`
         : "";
       content.innerHTML = `<section class="panel">
         <h2>Чёрный список</h2>
-        <p class="muted">Выбери чат, добавь запрет и до 20 его форм/синонимов. При совпадении бот удалит сообщение, а если указан срок — выдаст мут.</p>
+        <p class="muted">Выбери чат, добавь запрет и до 20 его форм/синонимов. При совпадении бот удалит сообщение и выдаст нарастающий недельный мут.</p>
         <div class="mine-admin-form">
           <select id="blacklistChatSelect" class="wide" onchange="showBlacklistManager(this.value)">
             ${triggerChatOptionsHtml(chats, selectedChatId)}
@@ -2835,7 +2832,6 @@ MINI_APP_HTML = r"""<!doctype html>
     const word = document.getElementById("blacklistWord")?.value || "";
     const variantsText = document.getElementById("blacklistVariantsText")?.value || "";
     const variants = variantsText.split(/[,\n]/).map(part => part.trim()).filter(Boolean);
-    const muteMinutes = Math.max(0, Math.min(10080, Number(document.getElementById("blacklistMuteMinutes")?.value || 0)));
     if (!word.trim()) {
       alert("Укажи слово или выражение.");
       return;
@@ -2847,7 +2843,7 @@ MINI_APP_HTML = r"""<!doctype html>
     try {
       await api("/miniapp/profile/blacklist", {
         method: "POST",
-        body: JSON.stringify({ chatId: Number(chatId), word, variants: variants.slice(0, 20), muteMinutes })
+        body: JSON.stringify({ chatId: Number(chatId), word, variants: variants.slice(0, 20) })
       });
       showNotice("Правило чёрного списка сохранено.");
       showBlacklistManager(chatId);

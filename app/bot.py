@@ -1924,7 +1924,9 @@ HELP_SECTIONS = {
         "<b>Чёрный список</b> · только админы\n"
         "<code>запрет слово</code> — добавить выражение\n"
         "<code>разрешить слово</code> — удалить выражение\n"
-        "<code>черный список</code> — показать все выражения\n\n"
+        "<code>черный список</code> — показать все выражения\n"
+        "Муты за нарушения за неделю: 5м → 10м → 30м → 1ч; затем по 1ч. "
+        "Сброс каждый понедельник в 00:00 по Киеву.\n\n"
         "<b>Персонал</b>\n"
         "<code>модеры</code> · <code>рейтинг модеров</code> · <code>модрейтинг</code>\n"
         "<code>голос @ник</code> — отдать голос за модератора\n"
@@ -11634,6 +11636,28 @@ def normalize_blacklist_text(text: str) -> str:
     return " ".join("".join(char for char in text if unicodedata.category(char) != "Cf").split())
 
 
+BLACKLIST_MUTE_LADDER = (5, 10, 30, 60)
+
+
+def blacklist_week_start(now: datetime | None = None) -> str:
+    local_now = (now or datetime.now(timezone.utc)).astimezone(LOCAL_TIMEZONE)
+    return (local_now.date() - timedelta(days=local_now.weekday())).isoformat()
+
+
+def blacklist_penalty(violation_count: int) -> tuple[int, str]:
+    count = max(1, int(violation_count))
+    minutes = BLACKLIST_MUTE_LADDER[min(count - 1, len(BLACKLIST_MUTE_LADDER) - 1)]
+    if count == 1:
+        warning = "При повторном нарушении мут составит 10 минут."
+    elif count == 2:
+        warning = "Следующее нарушение — мут на 30 минут."
+    elif count == 3:
+        warning = "Следующее и все последующие нарушения — мут на 1 час."
+    else:
+        warning = "Все последующие нарушения до недельного сброса — мут на 1 час."
+    return minutes, warning
+
+
 def install_blacklist_middleware(dispatcher: Dispatcher) -> None:
     # Outer middleware runs even when a different router handles the command,
     # or no text/caption handler matches the update.
@@ -11700,13 +11724,20 @@ async def handle_blacklist(message: Message) -> bool:
             except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound) as exc:
                 logging.warning("Blacklist deletion failed: chat=%s rules_chat=%s error=%s", message.chat.id, notice_chat_id, exc.message)
                 break
-        mute_minutes = int(getattr(matched_rule, "mute_minutes", 0) or 0)
+        mute_minutes = 0
+        violation_count = 0
+        penalty_warning = ""
         muted = False
         actor = getattr(message, "from_user", None)
-        if mute_minutes > 0 and actor and not getattr(actor, "is_bot", False) and getattr(message, "bot", None):
+        if actor and not getattr(actor, "is_bot", False) and getattr(message, "bot", None):
             try:
                 if not await is_chat_admin(message.bot, message.chat.id, actor.id):
-                    mute_minutes = max(1, min(10080, mute_minutes))
+                    violation_count = db.record_blacklist_violation(
+                        message.chat.id,
+                        actor.id,
+                        blacklist_week_start(),
+                    )
+                    mute_minutes, penalty_warning = blacklist_penalty(violation_count)
                     await message.bot.restrict_chat_member(
                         chat_id=message.chat.id,
                         user_id=actor.id,
@@ -11743,14 +11774,27 @@ async def handle_blacklist(message: Message) -> bool:
                     notice_chat_id,
                     exc.message,
                 )
-        # Limit notices, never deletion checks: spam must not exhaust the
-        # sendMessage rate limit and interrupt filtering subsequent updates.
+        # A muted user must receive every escalation warning. Generic notices
+        # without a user penalty remain throttled to protect sendMessage limits.
         now = time.monotonic()
-        if deleted and now - BLACKLIST_NOTICE_AT.get(notice_chat_id, float('-inf')) >= 30:
-            BLACKLIST_NOTICE_AT[notice_chat_id] = now
+        generic_notice_due = now - BLACKLIST_NOTICE_AT.get(notice_chat_id, float('-inf')) >= 30
+        if violation_count or (deleted and generic_notice_due):
+            if not violation_count:
+                BLACKLIST_NOTICE_AT[notice_chat_id] = now
             try:
-                suffix = f" Мут на {format_quiet_duration(mute_minutes)}." if muted else ""
-                await message.answer(f"Данные выражения запрещены в чате.{suffix}")
+                if violation_count:
+                    current = (
+                        f"Мут на {format_quiet_duration(mute_minutes)}."
+                        if muted
+                        else "Нарушение учтено, но бот не смог применить мут."
+                    )
+                    await message.answer(
+                        "Данные выражения запрещены в чате. "
+                        f"{current}\n{penalty_warning}\n"
+                        "Счётчик нарушений сбрасывается каждый понедельник в 00:00 по Киеву."
+                    )
+                else:
+                    await message.answer("Данные выражения запрещены в чате.")
             except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound, TelegramRetryAfter):
                 logging.warning("Blacklist notice could not be delivered: chat=%s", message.chat.id)
         return True

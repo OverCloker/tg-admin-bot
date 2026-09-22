@@ -48,7 +48,7 @@ def test_every_variant_and_normalized_spelling_matches(rules, content):
     msg.delete.assert_awaited_once()
 
 
-def test_blacklist_rule_can_mute_user(rules):
+def test_blacklist_rule_starts_progressive_mute(rules):
     db, _path = rules
     db.replace_blacklist_variants(-100, 'мутслово', [], 1, 90)
     bot = SimpleNamespace(
@@ -72,8 +72,56 @@ def test_blacklist_rule_can_mute_user(rules):
     assert kwargs['chat_id'] == -100
     assert kwargs['user_id'] == 7
     assert kwargs['permissions'].can_send_messages is False
-    assert '90 минут' in msg.answer.await_args.args[0]
+    notice = msg.answer.await_args.args[0]
+    assert '5 минут' in notice
+    assert '10 минут' in notice
+    assert 'понедельник в 00:00 по Киеву' in notice
     assert db.latest_active_moderator_mute(-100, 7) is not None
+
+
+def test_blacklist_mute_escalates_and_resets_each_monday(rules, monkeypatch):
+    db, _path = rules
+    bot = SimpleNamespace(
+        get_chat_member=AsyncMock(return_value=SimpleNamespace(status='member')),
+        restrict_chat_member=AsyncMock(),
+    )
+    weeks = iter(['2026-09-14'] * 4 + ['2026-09-21'])
+    monkeypatch.setattr(app_bot, 'blacklist_week_start', lambda: next(weeks))
+    notices = []
+
+    for _ in range(5):
+        msg = SimpleNamespace(
+            text='банан',
+            caption=None,
+            chat=SimpleNamespace(id=-100),
+            from_user=SimpleNamespace(id=7, is_bot=False),
+            bot=bot,
+            delete=AsyncMock(),
+            answer=AsyncMock(),
+        )
+        assert asyncio.run(app_bot.handle_blacklist(msg))
+        notices.append(msg.answer.await_args.args[0])
+
+    durations = [
+        int(row['duration_minutes'])
+        for row in db._conn.execute(
+            "select duration_minutes from chat_moderator_actions where action='mute' order by id"
+        ).fetchall()
+    ]
+    assert durations == [5, 10, 30, 60, 5]
+    assert 'повторном нарушении' in notices[0]
+    assert '30 минут' in notices[1]
+    assert 'все последующие нарушения — мут на 1 час' in notices[2]
+    assert 'до недельного сброса' in notices[3]
+    assert 'повторном нарушении' in notices[4]
+
+
+def test_blacklist_week_changes_at_monday_midnight_kyiv():
+    sunday = datetime(2026, 9, 20, 23, 59, tzinfo=app_bot.LOCAL_TIMEZONE)
+    monday = datetime(2026, 9, 21, 0, 0, tzinfo=app_bot.LOCAL_TIMEZONE)
+
+    assert app_bot.blacklist_week_start(sunday) == '2026-09-14'
+    assert app_bot.blacklist_week_start(monday) == '2026-09-21'
 
 
 def test_word_boundaries_are_preserved(rules):
@@ -116,6 +164,8 @@ def test_all_messages_and_edits_are_checked_before_any_router(rules, monkeypatch
     delete, answer, handler = AsyncMock(), AsyncMock(), AsyncMock()
     monkeypatch.setattr(Message, 'delete', delete)
     monkeypatch.setattr(Message, 'answer', answer)
+    monkeypatch.setattr(app_bot, 'is_chat_admin', AsyncMock(return_value=False))
+    monkeypatch.setattr(Bot, 'restrict_chat_member', AsyncMock())
     async def run():
         client = Bot('123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi')
         dispatcher = Dispatcher()
@@ -133,7 +183,7 @@ def test_all_messages_and_edits_are_checked_before_any_router(rules, monkeypatch
                 kind = 'edited_message' if index % 3 == 0 else 'message'
                 await dispatcher.feed_update(client, Update.model_validate({'update_id': index, kind: payload}))
             assert delete.await_count == 12
-            assert answer.await_count == 1
+            assert answer.await_count == 12
             handler.assert_not_awaited()
         finally:
             await client.session.close()
