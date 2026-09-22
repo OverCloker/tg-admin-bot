@@ -144,6 +144,13 @@ class MiniAppBlacklistDelete(BaseModel):
     word: str = Field(min_length=1, max_length=120)
 
 
+class MiniAppRulesSave(BaseModel):
+    chatId: int
+    rulesText: str = Field(default="", max_length=12000)
+    automaticEnabled: bool = False
+    intervalMinutes: int = Field(default=60, ge=5, le=10080)
+
+
 class MiniAppAlarmSettingsSet(BaseModel):
     chatId: int
     automaticEnabled: bool
@@ -1046,6 +1053,10 @@ def _miniapp_can_manage_triggers(db: Database, user_id: int) -> bool:
 
 def _miniapp_can_manage_blacklist(db: Database, user_id: int) -> bool:
     return _miniapp_is_app_admin(db, user_id)
+
+
+def _miniapp_can_manage_rules(db: Database, user_id: int) -> bool:
+    return bool(_miniapp_admin_chat_ids(db, user_id))
 
 
 def _miniapp_can_view_moderation(db: Database, user_id: int) -> bool:
@@ -2056,6 +2067,37 @@ def miniapp_page() -> HTMLResponse:
     )
 
 
+@router.get("/miniapp/rules")
+def miniapp_rules(
+    chat_id: int | None = Query(default=None),
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        available = db.list_user_chat_rules(user["id"])
+        if chat_id is not None:
+            chat = db.get_chat(int(chat_id))
+            settings = db.get_chat_rules_settings(int(chat_id))
+            if chat is None or not settings.rules_text.strip():
+                raise HTTPException(404, "Правила для этой группы пока не опубликованы.")
+            selected_chat = chat
+        elif available:
+            selected_chat, settings = available[0]
+        else:
+            return {"ok": True, "selectedChatId": 0, "selectedChat": None, "rulesText": "", "chats": []}
+        return {
+            "ok": True,
+            "selectedChatId": int(selected_chat.chat_id),
+            "selectedChat": _miniapp_chat_public(selected_chat),
+            "rulesText": settings.rules_text,
+            "updatedAt": settings.updated_at,
+            "chats": [_miniapp_chat_public(item[0]) for item in available],
+        }
+    finally:
+        db.close()
+
+
 @router.get("/miniapp/shop-bg.png")
 def miniapp_shop_background() -> FileResponse:
     return FileResponse(Path(__file__).with_name("shop-bg.png"), media_type="image/png")
@@ -2859,10 +2901,82 @@ def miniapp_profile_admin_panel(
                 {"key": "roles", "title": "Роли", "enabled": is_owner, "description": "Выдача ролей приложения."},
                 {"key": "mine", "title": "Шахта", "enabled": _miniapp_can_view_mine_admin(db, user["id"]), "description": "Управление для владельца, просмотр для модераторов."},
                 {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Управление тревогой по группам."},
+                {"key": "rules", "title": "Правила", "enabled": _miniapp_can_manage_rules(db, user["id"]), "description": "Текст правил и периодическое напоминание в группах."},
                 {"key": "blacklist", "title": "Чёрный список", "enabled": _miniapp_can_manage_blacklist(db, user["id"]), "description": "Запрещённые слова, формы и синонимы."},
                 {"key": "triggers", "title": "Триггеры", "enabled": _miniapp_can_manage_triggers(db, user["id"]), "description": "Слова и фразы, на которые бот отвечает в чатах."},
                 {"key": "inline-stats", "title": "Inline-статистика", "enabled": _miniapp_has_global_admin_access(db, user["id"]), "description": "Глобальные вызовы погоды и карт тревог за день, неделю и месяц."},
             ],
+        }
+    finally:
+        db.close()
+
+
+@router.get("/miniapp/profile/rules")
+def miniapp_profile_rules(
+    chat_id: int | None = Query(default=None),
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not _miniapp_can_manage_rules(db, user["id"]):
+            raise HTTPException(403, "Правила доступны администраторам групп.")
+        admin_chat_ids = _miniapp_admin_chat_ids(db, user["id"])
+        chats = _miniapp_chats_for_ids(db, admin_chat_ids)
+        if chat_id is not None and int(chat_id) not in admin_chat_ids:
+            raise HTTPException(403, "Вы не являетесь администратором этой группы.")
+        selected_chat_id = int(chat_id) if chat_id is not None else (int(chats[0].chat_id) if chats else 0)
+        selected_chat = next((chat for chat in chats if int(chat.chat_id) == selected_chat_id), None)
+        settings = db.get_chat_rules_settings(selected_chat_id) if selected_chat else None
+        return {
+            "ok": True,
+            "selectedChatId": selected_chat_id if selected_chat else 0,
+            "selectedChat": _miniapp_chat_public(selected_chat) if selected_chat else None,
+            "chats": [_miniapp_chat_public(chat) for chat in chats],
+            "rules": ({
+                "rulesText": settings.rules_text,
+                "automaticEnabled": bool(settings.enabled),
+                "intervalMinutes": int(settings.interval_minutes),
+                "lastSentAt": settings.last_sent_at or "",
+                "updatedAt": settings.updated_at,
+            } if settings else None),
+        }
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/rules")
+def miniapp_profile_rules_save(
+    payload: MiniAppRulesSave,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not _miniapp_can_admin_chat(db, payload.chatId, user["id"]):
+            raise HTTPException(403, "Управлять правилами может только администратор этой группы.")
+        if db.get_chat(payload.chatId) is None:
+            raise HTTPException(404, "Чат не найден.")
+        rules_text = payload.rulesText.strip()
+        if payload.automaticEnabled and not rules_text:
+            raise HTTPException(400, "Сначала напишите правила, затем включайте автопубликацию.")
+        settings = db.set_chat_rules_settings(
+            payload.chatId,
+            rules_text,
+            payload.automaticEnabled,
+            payload.intervalMinutes,
+            user["id"],
+        )
+        return {
+            "ok": True,
+            "message": "Правила сохранены.",
+            "rules": {
+                "rulesText": settings.rules_text,
+                "automaticEnabled": bool(settings.enabled),
+                "intervalMinutes": int(settings.interval_minutes),
+                "lastSentAt": settings.last_sent_at or "",
+                "updatedAt": settings.updated_at,
+            },
         }
     finally:
         db.close()

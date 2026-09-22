@@ -1855,6 +1855,7 @@ HELP_SECTIONS = {
         "<b>👤 Основное</b>\n\n"
         "<code>профиль</code> — твоя карточка\n"
         "<code>профиль @ник</code> — карточка участника\n"
+        "<code>важное</code> — открыть правила текущей группы\n"
         "<code>напоминание</code> — личный планировщик\n"
         "<code>напомни через 30м текст</code> — создать напоминание\n"
         "<code>др 25.12 Имя</code> — добавить день рождения\n"
@@ -12033,6 +12034,51 @@ async def help_ru(message: Message) -> None:
     await send_help_message(message)
 
 
+def rules_start_param(chat_id: int) -> str:
+    return f"rules_n{abs(int(chat_id))}" if int(chat_id) < 0 else f"rules_{int(chat_id)}"
+
+
+def rules_keyboard(chat_id: int) -> InlineKeyboardMarkup:
+    link = miniapp_deep_link(rules_start_param(chat_id))
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📜 Правила чата", url=link)],
+            [InlineKeyboardButton(text="Обязательно к прочтению", url=link)],
+        ]
+    )
+
+
+async def send_chat_rules_prompt(
+    bot: Bot,
+    chat_id: int,
+    *,
+    message_thread_id: int | None = None,
+) -> Message:
+    kwargs = {"message_thread_id": message_thread_id} if message_thread_id else {}
+    return await bot.send_message(
+        chat_id,
+        "📜 <b>Правила чата</b>\nОбязательно к прочтению",
+        reply_markup=rules_keyboard(chat_id),
+        disable_web_page_preview=True,
+        **kwargs,
+    )
+
+
+@router.message(F.chat.type.in_(SUPPORTED_CHAT_TYPES), F.text.regexp(re.compile(r"^/?важное[?!.]?$", re.IGNORECASE)))
+async def important_rules_command(message: Message) -> None:
+    await remember_sender(message)
+    settings = db.get_chat_rules_settings(message.chat.id)
+    if not settings.rules_text.strip():
+        await safe_reply(message, "Правила этой группы пока не опубликованы.")
+        return
+    await send_chat_rules_prompt(
+        message.bot,
+        message.chat.id,
+        message_thread_id=message.message_thread_id,
+    )
+    db.mark_chat_rules_sent(message.chat.id, datetime.now(timezone.utc).isoformat(timespec="seconds"))
+
+
 @router.message(F.text.regexp(ALERT_MAP_RE))
 async def alert_map_command(message: Message) -> None:
     if message.chat.type not in {*SUPPORTED_CHAT_TYPES, "private"}:
@@ -14086,6 +14132,38 @@ async def advertisement_loop(bot: Bot) -> None:
         await asyncio.sleep(30)
 
 
+def chat_rules_due(settings, now: datetime) -> bool:
+    if not settings.enabled or not settings.rules_text.strip():
+        return False
+    reference_text = settings.last_sent_at or settings.updated_at
+    try:
+        reference = datetime.fromisoformat(reference_text)
+        if reference.tzinfo is None:
+            reference = reference.replace(tzinfo=timezone.utc)
+        reference = reference.astimezone(now.tzinfo)
+    except (TypeError, ValueError):
+        return True
+    return (now - reference).total_seconds() >= max(5, int(settings.interval_minutes)) * 60
+
+
+async def chat_rules_loop(bot: Bot) -> None:
+    while True:
+        now = datetime.now(timezone.utc)
+        for settings in db.list_enabled_chat_rules():
+            if not chat_rules_due(settings, now):
+                continue
+            try:
+                await send_chat_rules_prompt(bot, settings.chat_id)
+                db.mark_chat_rules_sent(settings.chat_id, now.isoformat(timespec="seconds"))
+            except asyncio.CancelledError:
+                raise
+            except (TelegramBadRequest, TelegramForbiddenError) as exc:
+                logging.warning("Could not publish chat rules in %s: %s", settings.chat_id, exc)
+            except Exception as exc:
+                logging.exception("Chat rules publication failed for %s: %s", settings.chat_id, exc)
+        await asyncio.sleep(30)
+
+
 async def scheduled_weather_loop(bot: Bot) -> None:
     while True:
         now = datetime.now(LOCAL_TIMEZONE)
@@ -14280,6 +14358,7 @@ async def main() -> None:
         await staff_service.send(bot, "status", "🟢 Бот запущен")
         await send_restart_panel_if_needed(bot)
         advertisement_task = asyncio.create_task(advertisement_loop(bot))
+        chat_rules_task = asyncio.create_task(chat_rules_loop(bot))
         alerts_task = asyncio.create_task(alerts_monitor_loop(bot))
         scheduled_weather_task = asyncio.create_task(scheduled_weather_loop(bot))
         personal_notifications_task = asyncio.create_task(personal_notifications_loop(bot))
@@ -14307,6 +14386,10 @@ async def main() -> None:
             advertisement_task.cancel()
             with suppress(asyncio.CancelledError):
                 await advertisement_task
+        if "chat_rules_task" in locals():
+            chat_rules_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await chat_rules_task
         if "alerts_task" in locals():
             alerts_task.cancel()
             with suppress(asyncio.CancelledError):

@@ -350,6 +350,17 @@ class AdvertisementSettings:
 
 
 @dataclass(frozen=True)
+class ChatRulesSettings:
+    chat_id: int
+    rules_text: str
+    enabled: int
+    interval_minutes: int
+    last_sent_at: str | None
+    updated_by: int | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class BlacklistWord:
     chat_id: int
     word: str
@@ -1022,6 +1033,17 @@ class Database:
                 filename text not null default '',
                 position integer not null default 0,
                 foreign key (advertisement_id) references advertisements(id) on delete cascade
+            );
+
+            create table if not exists chat_rules_settings (
+                chat_id integer primary key,
+                rules_text text not null default '',
+                enabled integer not null default 0,
+                interval_minutes integer not null default 60,
+                last_sent_at text,
+                updated_by integer,
+                updated_at text not null,
+                foreign key (chat_id) references chats(chat_id) on delete cascade
             );
 
             create table if not exists birthday_sent (
@@ -5000,6 +5022,111 @@ class Database:
                 settings.updated_by,
                 utc_now(),
             ),
+        )
+        self._conn.commit()
+
+    def get_chat_rules_settings(self, chat_id: int) -> ChatRulesSettings:
+        row = self._conn.execute(
+            """
+            select chat_id, rules_text, enabled, interval_minutes, last_sent_at, updated_by, updated_at
+            from chat_rules_settings
+            where chat_id = ?
+            """,
+            (int(chat_id),),
+        ).fetchone()
+        if row:
+            return ChatRulesSettings(**dict(row))
+        return ChatRulesSettings(int(chat_id), "", 0, 60, None, None, utc_now())
+
+    def set_chat_rules_settings(
+        self,
+        chat_id: int,
+        rules_text: str,
+        enabled: bool,
+        interval_minutes: int,
+        updated_by: int | None,
+    ) -> ChatRulesSettings:
+        now = utc_now()
+        self._conn.execute(
+            """
+            insert into chat_rules_settings
+                (chat_id, rules_text, enabled, interval_minutes, last_sent_at, updated_by, updated_at)
+            values (?, ?, ?, ?, null, ?, ?)
+            on conflict(chat_id) do update set
+                rules_text = excluded.rules_text,
+                enabled = excluded.enabled,
+                interval_minutes = excluded.interval_minutes,
+                last_sent_at = case
+                    when chat_rules_settings.enabled = excluded.enabled
+                     and chat_rules_settings.interval_minutes = excluded.interval_minutes
+                    then chat_rules_settings.last_sent_at
+                    else null
+                end,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(chat_id), rules_text.strip(), int(bool(enabled)),
+                max(5, min(10080, int(interval_minutes))), updated_by, now,
+            ),
+        )
+        self._conn.commit()
+        return self.get_chat_rules_settings(chat_id)
+
+    def list_enabled_chat_rules(self) -> list[ChatRulesSettings]:
+        rows = self._conn.execute(
+            """
+            select chat_id, rules_text, enabled, interval_minutes, last_sent_at, updated_by, updated_at
+            from chat_rules_settings
+            where enabled = 1 and trim(rules_text) <> ''
+            order by chat_id
+            """
+        ).fetchall()
+        return [ChatRulesSettings(**dict(row)) for row in rows]
+
+    def list_user_chat_rules(self, user_id: int) -> list[tuple[RegisteredChat, ChatRulesSettings]]:
+        rows = self._conn.execute(
+            """
+            select c.chat_id, c.title, c.type, c.username, c.updated_at,
+                   r.rules_text, r.enabled, r.interval_minutes, r.last_sent_at,
+                   r.updated_by, r.updated_at as rules_updated_at
+            from seen_users u
+            join chats c on c.chat_id = u.chat_id
+            join chat_rules_settings r on r.chat_id = c.chat_id
+            where u.user_id = ? and trim(r.rules_text) <> ''
+            order by c.title collate nocase
+            """,
+            (int(user_id),),
+        ).fetchall()
+        result: list[tuple[RegisteredChat, ChatRulesSettings]] = []
+        for row in rows:
+            values = dict(row)
+            result.append(
+                (
+                    RegisteredChat(
+                        chat_id=int(values["chat_id"]),
+                        title=str(values["title"]),
+                        type=str(values["type"]),
+                        username=values["username"],
+                        updated_at=str(values["updated_at"]),
+                    ),
+                    ChatRulesSettings(
+                        chat_id=int(values["chat_id"]),
+                        rules_text=str(values["rules_text"]),
+                        enabled=int(values["enabled"]),
+                        interval_minutes=int(values["interval_minutes"]),
+                        last_sent_at=values["last_sent_at"],
+                        updated_by=values["updated_by"],
+                        updated_at=str(values["rules_updated_at"]),
+                    ),
+                )
+            )
+        return result
+
+    def mark_chat_rules_sent(self, chat_id: int, sent_at: str) -> None:
+        self._conn.execute(
+            "update chat_rules_settings set last_sent_at = ? where chat_id = ?",
+            (sent_at, int(chat_id)),
         )
         self._conn.commit()
 

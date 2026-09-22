@@ -345,6 +345,19 @@ MINI_APP_HTML = r"""<!doctype html>
     .rank-badge { display:inline-flex; align-items:center; gap:7px; margin-top:10px; padding:7px 10px; border:1px solid var(--line); border-radius:var(--radius-sm); background: color-mix(in srgb, var(--rank-color, #678fb2) 18%, var(--panel-color)); font-size:13px; font-weight:800; }
     .utility-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
     .utility-actions .btn { min-height: 46px; margin: 0; }
+    .rules-entry {
+      grid-column: 1 / -1;
+      display: grid;
+      gap: 3px;
+      min-height: 78px !important;
+      padding: 14px 18px;
+      text-align: left;
+      border: 1px solid color-mix(in srgb, var(--accent) 62%, var(--line));
+      background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 24%, var(--panel-2)), var(--panel-2)) !important;
+    }
+    .rules-entry strong { font-size: clamp(24px, 6vw, 34px); font-weight: 950; line-height: 1; }
+    .rules-entry span { color: var(--muted); font-size: 14px; font-weight: 800; }
+    .rules-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.58; }
     .mine-desktop-layout,
     .mine-dashboard-column,
     .mine-footer-grid { display: grid; gap: 14px; }
@@ -1711,6 +1724,9 @@ MINI_APP_HTML = r"""<!doctype html>
     } else if (view === "radio") {
       screenTitle.textContent = "📻 Радио";
       nameNode.textContent = "Поиск станций и избранное";
+    } else if (view === "rules") {
+      screenTitle.textContent = "📜 Правила";
+      nameNode.textContent = "Обязательно к прочтению";
     } else {
       screenTitle.textContent = "⛏️ Шахта";
       nameNode.textContent = state && state.registered ? state.name : "Новая вылазка";
@@ -1738,6 +1754,7 @@ MINI_APP_HTML = r"""<!doctype html>
     if (target === "weather") return showWeather();
     if (target === "reminders") return showReminders();
     if (target === "radio") return showRadio();
+    if (target === "rules") return showRules();
     if (target === "mineAdmin") return showMineAdmin();
     return renderMine();
   }
@@ -1908,6 +1925,7 @@ MINI_APP_HTML = r"""<!doctype html>
     if (normalized === "weather" || normalized.startsWith("weather_")) return "weather";
     if (normalized === "reminders" || normalized.startsWith("reminders_")) return "reminders";
     if (normalized === "radio" || normalized.startsWith("radio_")) return "radio";
+    if (normalized === "rules" || normalized.startsWith("rules_")) return "rules";
     if (normalized === "mine" || normalized.startsWith("mine_")) return "mine";
     if (normalized === "moderation" || normalized.startsWith("moderation_")) return "moderation";
     return normalized;
@@ -1952,6 +1970,14 @@ MINI_APP_HTML = r"""<!doctype html>
     return match ? Number(match[1]) : null;
   }
 
+  function readRulesChatId() {
+    const raw = readRawStartParam();
+    const negative = raw.match(/^rules_n(\d+)$/);
+    if (negative) return -Number(negative[1]);
+    const direct = raw.match(/^rules_(-?\d+)$/);
+    return direct ? Number(direct[1]) : null;
+  }
+
   function isCoolingDown() {
     return state && state.cooldownUntil &&
       new Date(state.cooldownUntil).getTime() > Date.now() &&
@@ -1977,10 +2003,42 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function utilityActionsHtml() {
     return `<div class="utility-actions">
+      <button class="btn secondary rules-entry" onclick="showRules()"><strong>Правила</strong><span>Обязательно к прочтению</span></button>
       <button class="btn secondary" onclick="showWeather()">Погода</button>
       <button class="btn secondary" onclick="showRadio()">Радио</button>
       <button class="btn secondary" style="grid-column:1/-1" onclick="showReminders()">🔔 Напоминания</button>
     </div>`;
+  }
+
+  async function showRules(chatId = null) {
+    const requestId = beginScreenRequest("rules");
+    content.innerHTML = `<section class="panel muted">Загружаю правила...</section>`;
+    try {
+      const requestedChatId = chatId === null ? readRulesChatId() : Number(chatId);
+      const path = requestedChatId ? `/miniapp/rules?chat_id=${encodeURIComponent(requestedChatId)}` : "/miniapp/rules";
+      const data = await api(path);
+      if (!isCurrentScreenRequest(requestId)) return;
+      const chats = data.chats || [];
+      const selectedChatId = Number(data.selectedChatId || 0);
+      const selector = chats.length > 1 ? `<section class="panel">
+        <label for="rulesChatSelect"><b>Группа</b></label>
+        <select id="rulesChatSelect" onchange="showRules(this.value)" style="margin-top:8px">
+          ${triggerChatOptionsHtml(chats, selectedChatId)}
+        </select>
+      </section>` : "";
+      if (!selectedChatId || !(data.rulesText || "").trim()) {
+        content.innerHTML = `<section class="panel"><h2>Правила</h2><p class="muted">Для ваших групп правила пока не опубликованы. В чате их также можно открыть командой «важное».</p></section>`;
+        return;
+      }
+      content.innerHTML = `${selector}<section class="panel">
+        <h2>Правила · ${escapeHtml(data.selectedChat?.title || "Группа")}</h2>
+        <p class="muted"><b>Обязательно к прочтению</b></p>
+        <div class="rules-body">${escapeHtml(data.rulesText || "")}</div>
+      </section>`;
+      scrollToTop();
+    } catch (error) {
+      if (isCurrentScreenRequest(requestId)) showError(error);
+    }
   }
 
   function loadMiniSettings() {
@@ -2532,6 +2590,8 @@ MINI_APP_HTML = r"""<!doctype html>
           ? `<button class="btn secondary" onclick="showModerationManager()">Открыть модерацию</button>`
           : section.key === "blacklist" && section.enabled
             ? `<button class="btn secondary" onclick="showBlacklistManager()">Открыть список</button>`
+          : section.key === "rules" && section.enabled
+            ? `<button class="btn secondary" onclick="showRulesManager()">Открыть правила</button>`
           : section.key === "triggers" && section.enabled
             ? `<button class="btn secondary" onclick="showTriggerManager()">Открыть триггеры</button>`
           : section.key === "inline-stats" && section.enabled
@@ -2616,6 +2676,61 @@ MINI_APP_HTML = r"""<!doctype html>
       scrollToTop();
     } catch (error) {
       showError(error);
+    }
+  }
+
+  async function showRulesManager(chatId = null) {
+    const requestId = beginScreenRequest("adminPanel");
+    content.innerHTML = `<section class="panel muted">Загружаю правила...</section>`;
+    try {
+      const path = chatId ? `/miniapp/profile/rules?chat_id=${encodeURIComponent(chatId)}` : "/miniapp/profile/rules";
+      const data = await api(path);
+      if (!isCurrentScreenRequest(requestId)) return;
+      const chats = data.chats || [];
+      const selectedChatId = Number(data.selectedChatId || 0);
+      const rules = data.rules || {};
+      content.innerHTML = `<section class="panel">
+        <h2>Правила группы</h2>
+        <p class="muted">Текст откроется в Mini App по кнопке «Правила чата». Автопубликация регулярно напоминает участникам открыть правила.</p>
+        <div class="mine-admin-form">
+          <select id="rulesAdminChatSelect" class="wide" onchange="showRulesManager(this.value)">
+            ${triggerChatOptionsHtml(chats, selectedChatId)}
+          </select>
+        </div>
+      </section>
+      ${selectedChatId ? `<section class="panel">
+        <div class="mine-admin-form wide">
+          <label class="wide" for="rulesText"><b>Текст правил</b></label>
+          <textarea id="rulesText" class="wide" rows="14" maxlength="12000" placeholder="Напишите правила этой группы...">${escapeHtml(rules.rulesText || "")}</textarea>
+          <label class="wide"><input id="rulesAutomatic" type="checkbox" ${rules.automaticEnabled ? "checked" : ""}> Публиковать кнопку с правилами автоматически</label>
+          <label class="wide" for="rulesInterval"><b>Интервал, минут</b></label>
+          <input id="rulesInterval" class="wide" type="number" min="5" max="10080" value="${Number(rules.intervalMinutes || 60)}">
+          <p class="muted wide">Например, 60 — один раз в час. Первая автоматическая публикация будет после указанного интервала.</p>
+          <button class="btn wide" onclick="saveRulesManager(${selectedChatId})">Сохранить правила</button>
+        </div>
+      </section>` : `<section class="panel muted">Нет групп, где вы являетесь администратором.</section>`}
+      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
+      scrollToTop();
+    } catch (error) {
+      if (isCurrentScreenRequest(requestId)) showError(error);
+    }
+  }
+
+  async function saveRulesManager(chatId) {
+    try {
+      await api("/miniapp/profile/rules", {
+        method: "POST",
+        body: JSON.stringify({
+          chatId: Number(chatId),
+          rulesText: document.getElementById("rulesText")?.value || "",
+          automaticEnabled: Boolean(document.getElementById("rulesAutomatic")?.checked),
+          intervalMinutes: Number(document.getElementById("rulesInterval")?.value || 60)
+        })
+      });
+      showNotice("Правила сохранены.");
+      showRulesManager(chatId);
+    } catch (error) {
+      alert(error.message);
     }
   }
 
@@ -3645,7 +3760,7 @@ MINI_APP_HTML = r"""<!doctype html>
   async function load() {
     const initialView = readStartParam();
     const intendedOwner = readStartOwner();
-    setScreenHeader(["shop", "bag", "profile", "weather", "radio", "reminders", "moderation"].includes(initialView) ? initialView : "mine");
+    setScreenHeader(["shop", "bag", "profile", "weather", "radio", "rules", "reminders", "moderation"].includes(initialView) ? initialView : "mine");
     try {
       state = await api("/miniapp/mine");
       if (intendedOwner && Number(state.userId) !== intendedOwner) {
@@ -3659,6 +3774,7 @@ MINI_APP_HTML = r"""<!doctype html>
       else if (initialView === "weather") await showWeather();
       else if (initialView === "reminders") await showReminders();
       else if (initialView === "radio") showRadio();
+      else if (initialView === "rules") await showRules(readRulesChatId());
       else if (initialView === "moderation") await showModerationManager();
       else renderMine();
     } catch (error) {
