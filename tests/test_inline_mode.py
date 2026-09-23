@@ -87,7 +87,7 @@ def test_inline_weather_routes_to_forecast(monkeypatch):
     results = answer.await_args.args[0]
     assert len(results) == 1
     assert isinstance(results[0], InlineQueryResultArticle)
-    assert results[0].title == "🌤 Погода выбранного города"
+    assert results[0].title == "🌤 Погода выбранного населённого пункта"
     assert "Киев · на завтра" in results[0].description
     assert results[0].input_message_content.message_text.startswith("<b>Погода")
     assert answer.await_args.kwargs["cache_time"] == bot.INLINE_ANSWER_CACHE_SECONDS
@@ -116,7 +116,7 @@ def test_inline_weather_reuses_same_query_but_limits_a_new_city(monkeypatch):
     _, repeated, limited = asyncio.run(run())
 
     fetch.assert_awaited_once_with("Киев", "now")
-    assert repeated.await_args.args[0][0].title == "🌤 Погода выбранного города"
+    assert repeated.await_args.args[0][0].title == "🌤 Погода выбранного населённого пункта"
     assert limited.await_args.args[0][0].title.startswith("⏳ Новый запрос через")
 
 

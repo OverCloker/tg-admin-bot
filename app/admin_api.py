@@ -38,6 +38,7 @@ from .premium import PLANS, PREMIUM_PERIOD_DAYS, PremiumError, PremiumLimitError
 from .staff import StaffService
 from .telegram_client import create_bot
 from .user_profile import build_user_profile
+from .weather_geo import resolve_weather_place
 from .youtube_media import DOWNLOAD_TYPES, YoutubeMediaError, cleanup_youtube_file, download_youtube, inspect_youtube
 from .miniapp import router as miniapp_router
 from .inline_media import resolve_inline_photo
@@ -4484,25 +4485,19 @@ async def weather_payload(q: str, user_agent: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Укажи город или населенный пункт.")
     timeout = aiohttp.ClientTimeout(total=12)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        geocode_url = (
-            "https://geocoding-api.open-meteo.com/v1/search"
-            f"?name={quote(query)}&count=5&language=ru&format=json"
-        )
-        async with session.get(geocode_url, headers={"User-Agent": user_agent}) as response:
-            if response.status != 200:
-                raise HTTPException(status_code=502, detail="Геокодер временно недоступен.")
-            data = await response.json(content_type=None)
-        results = data.get("results") or []
-        if not results:
-            raise HTTPException(status_code=404, detail="Место не найдено.")
-        place = results[0]
-        location_parts = [str(place.get("name") or query)]
-        for key in ("admin2", "admin1", "country"):
-            value = place.get(key)
-            if value and str(value) not in location_parts:
-                location_parts.append(str(value))
-        latitude = float(place["latitude"])
-        longitude = float(place["longitude"])
+        try:
+            place = await resolve_weather_place(session, query)
+        except RuntimeError as exc:
+            if str(exc) == "settlement required":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Укажите населённый пункт без улицы и номера дома.",
+                ) from exc
+            if str(exc) == "geocoding unavailable":
+                raise HTTPException(status_code=502, detail="Геокодер временно недоступен.") from exc
+            raise HTTPException(status_code=404, detail="Населённый пункт не найден.") from exc
+        latitude = place.latitude
+        longitude = place.longitude
         forecast_url = (
             "https://api.open-meteo.com/v1/forecast"
             f"?latitude={latitude}&longitude={longitude}"
@@ -4515,7 +4510,7 @@ async def weather_payload(q: str, user_agent: str) -> dict[str, Any]:
             forecast = await response.json(content_type=None)
     current = forecast.get("current") or {}
     return {
-        "location": ", ".join(location_parts),
+        "location": place.label,
         "temperature": current.get("temperature_2m"),
         "apparentTemperature": current.get("apparent_temperature"),
         "humidity": current.get("relative_humidity_2m"),

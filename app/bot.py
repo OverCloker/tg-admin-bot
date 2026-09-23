@@ -89,6 +89,7 @@ from .staff import StaffService
 from .staff_handlers import configure_staff, staff_error_handler, staff_router
 from .telegram_client import bot_api_method_url, create_bot
 from .user_profile import build_user_profile, profile_chat_text
+from .weather_geo import resolve_weather_place
 from .keyboards import (
     QUOTES_PAGE_SIZE,
     TOP_PAGE_SIZE,
@@ -4049,171 +4050,10 @@ WEATHER_CODES = {
 }
 
 
-@dataclass(frozen=True)
-class WeatherPlace:
-    latitude: float
-    longitude: float
-    label: str
-    source: str
-    score: int
-
-
-WEATHER_UA_HINT_RE = re.compile(
-    r"\b(укра[иї]на|украине|україні|область|обл\.?|район|р-н|крив|киев|київ|днепр|дніпр|одесс|одес|харьк|харків|льв[іо]в)\b",
-    re.IGNORECASE,
-)
-WEATHER_STOP_WORDS = {
-    "село",
-    "села",
-    "поселок",
-    "посёлок",
-    "смт",
-    "пгт",
-    "город",
-    "місто",
-    "район",
-    "область",
-    "обл",
-    "украина",
-    "україна",
-}
-WEATHER_KRYVYI_RIH_FALLBACKS = {
-    "авангард": WeatherPlace(
-        latitude=47.9105,
-        longitude=33.3918,
-        label="Авангард, Кривий Ріг, Дніпропетровська область, Україна",
-        source="local",
-        score=1000,
-    ),
-    "марьяновка": WeatherPlace(
-        latitude=47.9105,
-        longitude=33.3918,
-        label="Марьяновка, Криворожский район, Днепропетровская область, Украина",
-        source="local",
-        score=1000,
-    ),
-    "мар'янівка": WeatherPlace(
-        latitude=47.9105,
-        longitude=33.3918,
-        label="Мар'янівка, Криворізький район, Дніпропетровська область, Україна",
-        source="local",
-        score=1000,
-    ),
-    "марянівка": WeatherPlace(
-        latitude=47.9105,
-        longitude=33.3918,
-        label="Мар'янівка, Криворізький район, Дніпропетровська область, Україна",
-        source="local",
-        score=1000,
-    ),
-}
-
-
 def weather_description(code: int | None) -> str:
     if code is None:
         return "Нет данных"
     return WEATHER_CODES.get(code, f"Код погоды {code}")
-
-
-def weather_query_tokens(query: str) -> list[str]:
-    normalized = re.sub(r"[^\wа-яА-ЯіїєґІЇЄҐ]+", " ", query.casefold())
-    return [
-        token
-        for token in normalized.split()
-        if len(token) > 2 and token not in WEATHER_STOP_WORDS
-    ]
-
-
-def weather_place_score(query: str, label: str, country_code: str | None = None) -> int:
-    tokens = weather_query_tokens(query)
-    normalized_label = label.casefold()
-    score = 0
-    if country_code and country_code.casefold() == "ua":
-        score += 30 if WEATHER_UA_HINT_RE.search(query) else 12
-    for token in tokens:
-        if token in normalized_label:
-            score += 12
-        elif token.startswith("крив") and ("крив" in normalized_label or "kryv" in normalized_label):
-            score += 20
-        elif token.startswith("дніпр") and ("дніпр" in normalized_label or "днепр" in normalized_label or "dnipr" in normalized_label):
-            score += 16
-        else:
-            score -= 2
-    if tokens and normalized_label.startswith(tokens[0]):
-        score += 10
-    return score
-
-
-def format_open_meteo_place(place: dict, fallback: str) -> str:
-    parts = [str(place.get("name") or fallback)]
-    for key in ("admin3", "admin2", "admin1", "country"):
-        value = place.get(key)
-        if value and str(value) not in parts:
-            parts.append(str(value))
-    return ", ".join(parts)
-
-
-async def geocode_open_meteo(session: aiohttp.ClientSession, query: str) -> list[WeatherPlace]:
-    geocode_url = (
-        "https://geocoding-api.open-meteo.com/v1/search"
-        f"?name={quote(query)}&count=10&language=ru&format=json"
-    )
-    async with session.get(geocode_url, headers={"User-Agent": "telegram-autoreply-bot"}) as response:
-        if response.status != 200:
-            raise RuntimeError(f"geocoding service returned {response.status}")
-        data = await response.json(content_type=None)
-
-    places: list[WeatherPlace] = []
-    for item in data.get("results") or []:
-        label = format_open_meteo_place(item, query)
-        places.append(
-            WeatherPlace(
-                latitude=float(item["latitude"]),
-                longitude=float(item["longitude"]),
-                label=label,
-                source="open-meteo",
-                score=weather_place_score(query, label, item.get("country_code")),
-            )
-        )
-    return places
-
-
-async def geocode_nominatim(session: aiohttp.ClientSession, query: str) -> list[WeatherPlace]:
-    url = (
-        "https://nominatim.openstreetmap.org/search"
-        f"?q={quote(query)}&format=jsonv2&addressdetails=1&limit=8&accept-language=ru,uk,en"
-    )
-    async with session.get(url, headers={"User-Agent": "telegram-autoreply-bot/1.0"}) as response:
-        if response.status != 200:
-            return []
-        data = await response.json(content_type=None)
-
-    places: list[WeatherPlace] = []
-    for item in data if isinstance(data, list) else []:
-        display = str(item.get("display_name") or item.get("name") or query)
-        country_code = str(item.get("address", {}).get("country_code", ""))
-        places.append(
-            WeatherPlace(
-                latitude=float(item["lat"]),
-                longitude=float(item["lon"]),
-                label=display,
-                source="osm",
-                score=weather_place_score(query, display, country_code) + 8,
-            )
-        )
-    return places
-
-
-async def resolve_weather_place(session: aiohttp.ClientSession, query: str) -> WeatherPlace:
-    candidates: list[WeatherPlace] = []
-    candidates.extend(await geocode_nominatim(session, query))
-    candidates.extend(await geocode_open_meteo(session, query))
-
-    if not candidates:
-        raise RuntimeError("city not found")
-
-    candidates.sort(key=lambda item: item.score, reverse=True)
-    return candidates[0]
 
 
 async def fetch_weather(city: str, period: str) -> str:
@@ -12443,7 +12283,7 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
             ).hexdigest()[:32]
             result = InlineQueryResultArticle(
                 id=result_id,
-                title="🌤 Погода выбранного города",
+                title="🌤 Погода выбранного населённого пункта",
                 description=(
                     f"{city} · "
                     + {"now": "сейчас", "tomorrow": "на завтра", "week": "на 7 дней"}[period]
@@ -12470,7 +12310,7 @@ async def inline_weather_or_alert_map(inline_query: InlineQuery) -> None:
             logging.warning("Could not answer inline weather query %r: %s", query, exc)
             result = inline_error_result(
                 "Погода временно недоступна",
-                "Не получилось получить погоду. Проверьте название города, например: погода Киев завтра.",
+                "Не получилось получить погоду. Укажите город, посёлок или село без улицы, например: погода Киев завтра.",
                 "inline-weather-error",
             )
         await inline_query.answer([result], cache_time=cache_time, is_personal=True)
@@ -14263,7 +14103,10 @@ async def weather(message: Message) -> None:
     try:
         forecast = await fetch_weather(city, period)
     except Exception:
-        await safe_reply(message, "Не получилось получить погоду. Проверь название города и попробуй еще раз.")
+        await safe_reply(
+            message,
+            "Не получилось получить погоду. Укажи город, посёлок или село без улицы и попробуй ещё раз.",
+        )
         return
 
     await safe_reply(message, forecast, disable_web_page_preview=True)
