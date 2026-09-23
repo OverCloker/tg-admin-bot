@@ -804,6 +804,10 @@ class Database:
                 alert_source text not null default 'alerts_in_ua',
                 alert_location text not null default 'kryvyi-rih',
                 neptun_mode text not null default 'threats',
+                neptun_beta_reasons integer not null default 0,
+                neptun_beta_lifecycle integer not null default 0,
+                neptun_beta_confidence integer not null default 0,
+                neptun_beta_course integer not null default 0,
                 last_status text,
                 last_notified_status text,
                 last_alarm_message_id integer,
@@ -1494,6 +1498,16 @@ class Database:
             self._conn.execute("alter table alarm_api_settings add column alert_location text not null default 'kryvyi-rih'")
         if "neptun_mode" not in columns:
             self._conn.execute("alter table alarm_api_settings add column neptun_mode text not null default 'threats'")
+        for column in (
+            "neptun_beta_reasons",
+            "neptun_beta_lifecycle",
+            "neptun_beta_confidence",
+            "neptun_beta_course",
+        ):
+            if column not in columns:
+                self._conn.execute(
+                    f"alter table alarm_api_settings add column {column} integer not null default 0"
+                )
         if "disable_requested" not in columns:
             self._conn.execute("alter table alarm_api_settings add column disable_requested integer not null default 0")
         if "last_notified_status" not in columns:
@@ -3988,6 +4002,59 @@ class Database:
         ).fetchone()
         mode = row["neptun_mode"] if row else "threats"
         return mode if mode in {"alerts", "threats"} else "threats"
+
+    def alarm_api_neptun_beta(self, chat_id: int) -> dict[str, bool]:
+        row = self._conn.execute(
+            """
+            select neptun_beta_reasons, neptun_beta_lifecycle,
+                   neptun_beta_confidence, neptun_beta_course
+            from alarm_api_settings
+            where chat_id = ?
+            """,
+            (chat_id,),
+        ).fetchone()
+        return {
+            "reasons": bool(row["neptun_beta_reasons"]) if row else False,
+            "lifecycle": bool(row["neptun_beta_lifecycle"]) if row else False,
+            "confidence": bool(row["neptun_beta_confidence"]) if row else False,
+            "course": bool(row["neptun_beta_course"]) if row else False,
+        }
+
+    def set_alarm_api_neptun_beta(
+        self,
+        chat_id: int,
+        *,
+        reasons: bool,
+        lifecycle: bool,
+        confidence: bool,
+        course: bool,
+        updated_by: int | None,
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into alarm_api_settings (
+                chat_id, enabled, neptun_beta_reasons, neptun_beta_lifecycle,
+                neptun_beta_confidence, neptun_beta_course, updated_by, updated_at
+            ) values (?, 0, ?, ?, ?, ?, ?, ?)
+            on conflict(chat_id) do update set
+                neptun_beta_reasons = excluded.neptun_beta_reasons,
+                neptun_beta_lifecycle = excluded.neptun_beta_lifecycle,
+                neptun_beta_confidence = excluded.neptun_beta_confidence,
+                neptun_beta_course = excluded.neptun_beta_course,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (
+                chat_id,
+                int(bool(reasons)),
+                int(bool(lifecycle)),
+                int(bool(confidence)),
+                int(bool(course)),
+                updated_by,
+                utc_now(),
+            ),
+        )
+        self._conn.commit()
 
     def set_alarm_api_neptun_mode(self, chat_id: int, mode: str, updated_by: int | None) -> None:
         if mode not in {"alerts", "threats"}:

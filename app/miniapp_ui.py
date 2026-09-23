@@ -1092,6 +1092,32 @@ MINI_APP_HTML = r"""<!doctype html>
     .settings-checks { display: grid; gap: 10px; margin: 12px 0; }
     .settings-checks label { display: flex; align-items: center; gap: 10px; font-weight: 750; }
     .settings-checks input { width: 22px; height: 22px; accent-color: var(--accent); }
+    .neptun-beta-card {
+      display: grid;
+      gap: 8px;
+      margin: 12px 0;
+      padding: 14px;
+      border: 1px dashed color-mix(in srgb, var(--accent-2) 72%, var(--line));
+      border-radius: var(--radius-sm);
+      background: color-mix(in srgb, var(--accent-2) 8%, var(--panel-2));
+    }
+    .neptun-beta-title { display: flex; align-items: center; gap: 9px; }
+    .neptun-beta-title h3 { margin: 0; }
+    .beta-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border: 1px solid color-mix(in srgb, var(--accent-2) 72%, #fff);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--accent-2) 28%, var(--panel-color));
+      color: var(--text);
+      font-size: 11px;
+      font-weight: 950;
+      letter-spacing: .08em;
+    }
+    .neptun-beta-options { display: grid; gap: 8px; }
+    .neptun-beta-options .setting-switch-row { margin: 0; }
     .minesweeper-shell {
       --win-gray: #c0c0c0;
       --win-dark: #808080;
@@ -2899,6 +2925,28 @@ MINI_APP_HTML = r"""<!doctype html>
           </label>
           <p id="alarmLocationHint" class="muted wide">${alarm.source === "ukraine_alarm" ? "UkraineAlarm передаёт официальные тревоги, уровни Yellow/Red и причины угроз." : "NEPTUN объединяет официальный статус тревоги и конкретные активные угрозы."}</p>
         </div>
+        <div id="neptunBetaBlock" class="neptun-beta-card" style="${alarm.source === "neptun" ? "" : "display:none"}">
+          <div class="neptun-beta-title"><h3>Экспериментальные данные NEPTUN</h3><span class="beta-badge">БЕТА</span></div>
+          <p class="muted">Дополняют обычное сообщение. Можно включать независимо для тестирования; основная тревога продолжит работать как раньше.</p>
+          <div class="neptun-beta-options">
+            <div class="setting-switch-row">
+              <label for="neptunBetaReasons">Причины официальной тревоги <code>reasons</code></label>
+              <label class="switch" aria-label="Показывать причины NEPTUN"><input id="neptunBetaReasons" type="checkbox" ${alarm.neptunBeta?.reasons ? "checked" : ""}><span class="slider round"></span></label>
+            </div>
+            <div class="setting-switch-row">
+              <label for="neptunBetaLifecycle">Стадия подтверждения <code>lifecycle</code></label>
+              <label class="switch" aria-label="Показывать стадию NEPTUN"><input id="neptunBetaLifecycle" type="checkbox" ${alarm.neptunBeta?.lifecycle ? "checked" : ""}><span class="slider round"></span></label>
+            </div>
+            <div class="setting-switch-row">
+              <label for="neptunBetaConfidence">Уверенность источников <code>displayConfidence</code></label>
+              <label class="switch" aria-label="Показывать уверенность NEPTUN"><input id="neptunBetaConfidence" type="checkbox" ${alarm.neptunBeta?.confidence ? "checked" : ""}><span class="slider round"></span></label>
+            </div>
+            <div class="setting-switch-row">
+              <label for="neptunBetaCourse">Предполагаемый курс <code>presumptiveCourse</code></label>
+              <label class="switch" aria-label="Показывать предполагаемый курс NEPTUN"><input id="neptunBetaCourse" type="checkbox" ${alarm.neptunBeta?.course ? "checked" : ""}><span class="slider round"></span></label>
+            </div>
+          </div>
+        </div>
         <div class="settings-checks">
           <label><input id="alarmAutomatic" type="checkbox" ${alarm.automaticEnabled ? "checked" : ""}> Автоматические оповещения${alarm.turningOff ? " (идёт отключение…)" : ""}</label>
           <label><input id="alarmRestrictions" type="checkbox" ${alarm.restrictionsEnabled ? "checked" : ""}> Ограничивать медиа и реакции во время тревоги</label>
@@ -2932,6 +2980,8 @@ MINI_APP_HTML = r"""<!doctype html>
     const block = document.getElementById("alarmLocationBlock");
     const source = document.querySelector('input[name="alarmSource"]:checked')?.value || "alerts_in_ua";
     if (block) block.style.display = ["neptun", "ukraine_alarm"].includes(source) ? "" : "none";
+    const beta = document.getElementById("neptunBetaBlock");
+    if (beta) beta.style.display = source === "neptun" ? "" : "none";
     const hint = document.getElementById("alarmLocationHint");
     if (hint) hint.textContent = source === "ukraine_alarm"
       ? "UkraineAlarm передаёт официальные тревоги, уровни Yellow/Red и причины угроз."
@@ -2951,7 +3001,11 @@ MINI_APP_HTML = r"""<!doctype html>
           restrictionsEnabled: Boolean(document.getElementById("alarmRestrictions")?.checked),
           manualEnabled: Boolean(document.getElementById("alarmManual")?.checked),
           alarmText: document.getElementById("alarmText")?.value || "",
-          clearText: document.getElementById("alarmClearText")?.value || ""
+          clearText: document.getElementById("alarmClearText")?.value || "",
+          neptunBetaReasons: Boolean(document.getElementById("neptunBetaReasons")?.checked),
+          neptunBetaLifecycle: Boolean(document.getElementById("neptunBetaLifecycle")?.checked),
+          neptunBetaConfidence: Boolean(document.getElementById("neptunBetaConfidence")?.checked),
+          neptunBetaCourse: Boolean(document.getElementById("neptunBetaCourse")?.checked)
         })
       });
       showNotice("Настройки тревоги сохранены.");

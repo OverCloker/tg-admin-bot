@@ -161,6 +161,10 @@ class MiniAppAlarmSettingsSet(BaseModel):
     manualEnabled: bool = False
     alarmText: str = Field(default="", max_length=2000)
     clearText: str = Field(default="", max_length=2000)
+    neptunBetaReasons: bool = False
+    neptunBetaLifecycle: bool = False
+    neptunBetaConfidence: bool = False
+    neptunBetaCourse: bool = False
 
 
 class MiniAppTriggerVariant(BaseModel):
@@ -1114,6 +1118,7 @@ def _miniapp_alarm_public(db: Database, chat_id: int, can_manage: bool) -> dict[
     source = db.alarm_api_source(chat_id)
     location_key = db.alarm_api_location(chat_id)
     location = NEPTUN_LOCATIONS.get(location_key, NEPTUN_LOCATIONS[DEFAULT_NEPTUN_LOCATION])
+    neptun_beta = db.alarm_api_neptun_beta(chat_id)
     return {
         "canManage": can_manage,
         "automaticEnabled": db.alarm_api_enabled(chat_id),
@@ -1127,6 +1132,7 @@ def _miniapp_alarm_public(db: Database, chat_id: int, can_manage: bool) -> dict[
         "alarmText": settings.alarm_text or "",
         "clearText": settings.clear_text or "",
         "threadId": settings.alarm_thread_id,
+        "neptunBeta": neptun_beta,
         "locations": [
             {"key": item.key, "title": item.city, "area": item.official_area}
             for item in sorted(NEPTUN_LOCATIONS.values(), key=lambda item: item.city.casefold())
@@ -3058,6 +3064,14 @@ def miniapp_profile_moderation_alarm(
 
         db.set_alarm_api_source(payload.chatId, source, user["id"])
         db.set_alarm_api_location(payload.chatId, payload.location, user["id"])
+        db.set_alarm_api_neptun_beta(
+            payload.chatId,
+            reasons=payload.neptunBetaReasons,
+            lifecycle=payload.neptunBetaLifecycle,
+            confidence=payload.neptunBetaConfidence,
+            course=payload.neptunBetaCourse,
+            updated_by=user["id"],
+        )
         db.set_alarm_restrictions_enabled(payload.chatId, payload.restrictionsEnabled, user["id"])
         db.set_alarm_enabled(payload.chatId, payload.manualEnabled, user["id"])
         db.set_alarm_texts(

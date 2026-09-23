@@ -200,6 +200,13 @@ def test_moderation_contains_alarm_source_switch_and_settings_endpoint() -> None
     assert "font-size: clamp(11px, 3vw, 14px)" in MINI_APP_HTML
     assert "text-overflow: ellipsis" in MINI_APP_HTML
     assert "NEPTUN объединяет официальный статус тревоги" in MINI_APP_HTML
+    assert 'id="neptunBetaBlock"' in MINI_APP_HTML
+    assert 'class="beta-badge">БЕТА' in MINI_APP_HTML
+    assert 'id="neptunBetaReasons"' in MINI_APP_HTML
+    assert 'id="neptunBetaLifecycle"' in MINI_APP_HTML
+    assert 'id="neptunBetaConfidence"' in MINI_APP_HTML
+    assert 'id="neptunBetaCourse"' in MINI_APP_HTML
+    assert 'source === "neptun" ? "" : "display:none"' in MINI_APP_HTML
     assert 'id="neptunModeAlerts"' not in MINI_APP_HTML
     assert '"/miniapp/profile/moderation/alarm"' in MINI_APP_HTML
     assert 'else if (initialView === "moderation") await showModerationManager();' in MINI_APP_HTML

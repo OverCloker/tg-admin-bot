@@ -44,10 +44,17 @@ def threat(**overrides):
 
 
 def test_neptun_threat_scope_details_and_clear():
-    state = parse_neptun_alerts({"threats": [threat()]})
+    state = parse_neptun_alerts({"threats": [threat(
+        lifecycle="uncertain",
+        displayConfidence="medium",
+        presumptiveCourse=True,
+    )]})
     assert (state.status, state.alert_level) == ("A", "yellow")
     assert state.threats[0].threat_type == "drones"
     assert "БПЛА" in (state.threats[0].source_message or "")
+    assert state.threats[0].lifecycle == "uncertain"
+    assert state.threats[0].display_confidence == "medium"
+    assert state.threats[0].presumptive_course is True
     assert parse_neptun_alerts({"threats": [threat(region="Інша область", district="Інший район", locality="Інше місто", explanationShort="")]}).status == "N"
     state = parse_neptun_alerts({"threats": []})
     assert state.status == "N"
@@ -103,11 +110,13 @@ def test_neptun_official_alarm_uses_district_or_oblast_presence():
             "name": "Криворізький район",
             "oblast": "Дніпропетровська область",
             "level": "red",
+            "reasons": ["БПЛА", {"reason": "Ракетна небезпека"}],
         }],
         "oblasts": [],
     }
     state = parse_neptun_official_alerts(payload)
     assert (state.status, state.alert_level, state.provider_mode) == ("A", "red", "alerts")
+    assert state.official_reasons == ("БПЛА", "Ракетна небезпека")
     assert parse_neptun_official_alerts({"raions": [], "oblasts": []}).status == "N"
     oblast = parse_neptun_official_alerts({
         "raions": [],
@@ -177,6 +186,12 @@ def test_migration_from_existing_schema(tmp_path):
     assert db.alarm_api_source(-1) == "alerts_in_ua"
     assert db.alarm_api_location(-1) == DEFAULT_NEPTUN_LOCATION
     assert db.alarm_api_neptun_mode(-1) == "threats"
+    assert db.alarm_api_neptun_beta(-1) == {
+        "reasons": False,
+        "lifecycle": False,
+        "confidence": False,
+        "course": False,
+    }
     assert db.alarm_api_last_status(-1) == "A"
     db.close()
 
@@ -189,6 +204,14 @@ def test_source_persistence_and_group_isolation(database):
     db.set_alarm_api_source(-1, "neptun", 1)
     db.set_alarm_api_location(-1, "dnipro", 1)
     db.set_alarm_api_neptun_mode(-1, "alerts", 1)
+    db.set_alarm_api_neptun_beta(
+        -1,
+        reasons=True,
+        lifecycle=True,
+        confidence=False,
+        course=True,
+        updated_by=1,
+    )
     db.init()
     assert db.alarm_api_source(-1) == "neptun"
     assert db.alarm_api_source(-2) == "alerts_in_ua"
@@ -196,6 +219,13 @@ def test_source_persistence_and_group_isolation(database):
     assert db.alarm_api_location(-2) == DEFAULT_NEPTUN_LOCATION
     assert db.alarm_api_neptun_mode(-1) == "alerts"
     assert db.alarm_api_neptun_mode(-2) == "threats"
+    assert db.alarm_api_neptun_beta(-1) == {
+        "reasons": True,
+        "lifecycle": True,
+        "confidence": False,
+        "course": True,
+    }
+    assert not any(db.alarm_api_neptun_beta(-2).values())
     assert db.alarm_api_last_status(-1) == "A"
     assert db.alarm_api_last_notified_status(-1) == "A"
     assert db.alarm_api_status_message_id(-1, "A") == 123
@@ -412,3 +442,38 @@ def test_neptun_yellow_threat_shows_only_type_below_city_heading():
     assert "🟡 ударные БПЛА\n" in text
     assert "[по данным API: Кривий Ріг]" not in text
     assert "Підтверджень: 9" not in text
+
+
+def test_neptun_beta_details_are_optional_and_translated():
+    state = AlertsLocationState(
+        "A",
+        alert_level="yellow",
+        threats=(bot.AlertsThreat(
+            "drones",
+            "yellow",
+            None,
+            "БПЛА",
+            "Кривий Ріг",
+            lifecycle="uncertain",
+            display_confidence="medium",
+            presumptive_course=True,
+        ),),
+        source="neptun",
+        location_title="Кривий Ріг",
+        provider_mode="combined",
+        official_alert=True,
+        official_reasons=("Повітряна загроза",),
+    )
+
+    assert "Бета-данные" not in bot.build_alarm_alert_text(state)
+    text = bot.build_alarm_alert_text(state, {
+        "reasons": True,
+        "lifecycle": True,
+        "confidence": True,
+        "course": True,
+    })
+    assert "Бета-данные NEPTUN" in text
+    assert "Причины: Повітряна загроза" in text
+    assert "Стадия: требует подтверждения" in text
+    assert "Уверенность: средняя" in text
+    assert "Курс: предположительный" in text

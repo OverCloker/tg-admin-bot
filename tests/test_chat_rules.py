@@ -88,7 +88,8 @@ def test_rules_ui_and_chat_keyboard() -> None:
     assert "text-align: center" in MINI_APP_HTML
     assert 'class="rules-chat-picker"' in MINI_APP_HTML
     assert MINI_APP_HTML.count('class="setting-switch-row wide"') == 2
-    assert MINI_APP_HTML.count('class="slider round"') == 2
+    assert 'id="rulesAgreement" type="checkbox"' in MINI_APP_HTML
+    assert 'id="rulesAutomatic" type="checkbox"' in MINI_APP_HTML
     assert ".switch input:checked + .slider" in MINI_APP_HTML
     assert 'body[data-theme="glass"] .rules-chat-picker' in MINI_APP_HTML
     assert 'body[data-theme="classic"] .rules-chat-picker' in MINI_APP_HTML

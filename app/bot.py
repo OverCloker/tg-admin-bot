@@ -10926,7 +10926,24 @@ def parse_alerts_location_state(payload: object) -> AlertsLocationState:
     return AlertsLocationState(status=status, alert_level=alert_level, threats=ordered_threats)
 
 
-def alerts_location_state_signature(state: AlertsLocationState) -> str:
+def alerts_location_state_signature(
+    state: AlertsLocationState,
+    *,
+    include_neptun_beta: bool = False,
+) -> str:
+    beta = {}
+    if include_neptun_beta and state.source == "neptun":
+        beta = {
+            "official_reasons": list(state.official_reasons),
+            "threats": [
+                {
+                    "lifecycle": threat.lifecycle,
+                    "display_confidence": threat.display_confidence,
+                    "presumptive_course": threat.presumptive_course,
+                }
+                for threat in state.threats
+            ],
+        }
     return json.dumps(
         {
             "status": state.status,
@@ -10939,6 +10956,7 @@ def alerts_location_state_signature(state: AlertsLocationState) -> str:
                 }
                 for threat in state.threats
             ],
+            "neptun_beta": beta,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -10971,7 +10989,67 @@ def compact_alarm_threat_lines(state: AlertsLocationState) -> list[str]:
     return lines
 
 
-def format_alerts_location_details(state: AlertsLocationState) -> str:
+def neptun_beta_detail_lines(
+    state: AlertsLocationState,
+    options: dict[str, bool] | None,
+) -> list[str]:
+    if state.source != "neptun" or not options or not any(options.values()):
+        return []
+
+    lines: list[str] = []
+    if options.get("reasons") and state.official_reasons:
+        reasons = ", ".join(escape(item) for item in state.official_reasons[:4])
+        lines.append(f"• Причины: {reasons}")
+
+    if options.get("lifecycle"):
+        lifecycle_labels = {
+            "confirmed": "подтверждено",
+            "uncertain": "требует подтверждения",
+            "stale": "данные устаревают",
+            "resolved": "завершено",
+        }
+        values = list(dict.fromkeys(
+            lifecycle_labels.get(value.casefold(), value)
+            for threat in state.threats
+            if (value := (threat.lifecycle or "").strip())
+        ))
+        if values:
+            lines.append(f"• Стадия: {escape(', '.join(values[:4]))}")
+
+    if options.get("confidence"):
+        confidence_labels = {
+            "high": "высокая",
+            "medium": "средняя",
+            "low": "низкая",
+        }
+        values = list(dict.fromkeys(
+            confidence_labels.get(value.casefold(), value)
+            for threat in state.threats
+            if (value := (threat.display_confidence or "").strip())
+        ))
+        if values:
+            lines.append(f"• Уверенность: {escape(', '.join(values[:4]))}")
+
+    if options.get("course"):
+        courses = [
+            threat.presumptive_course
+            for threat in state.threats
+            if threat.presumptive_course is not None
+        ]
+        if courses:
+            lines.append(
+                "• Курс: предположительный"
+                if any(courses)
+                else "• Курс: подтверждённый"
+            )
+
+    return ["🧪 <b>Бета-данные NEPTUN:</b>", *lines] if lines else []
+
+
+def format_alerts_location_details(
+    state: AlertsLocationState,
+    neptun_beta: dict[str, bool] | None = None,
+) -> str:
     lines: list[str] = []
     if state.alert_level == "red":
         lines.append("Уровень: 🔴 красный")
@@ -10982,6 +11060,9 @@ def format_alerts_location_details(state: AlertsLocationState) -> str:
     if threat_lines:
         lines.append("Конкретные угрозы:")
         lines.extend(threat_lines)
+    beta_lines = neptun_beta_detail_lines(state, neptun_beta)
+    if beta_lines:
+        lines.extend(beta_lines)
     return "\n".join(lines)
 
 
@@ -11006,14 +11087,17 @@ def format_current_alarm_status(state: AlertsLocationState) -> str:
     return "\n".join(lines)
 
 
-def build_alarm_alert_text(state: AlertsLocationState) -> str:
+def build_alarm_alert_text(
+    state: AlertsLocationState,
+    neptun_beta: dict[str, bool] | None = None,
+) -> str:
     if state.source == "neptun":
         if state.provider_mode == "combined" and state.official_alert:
             alarm_kind = "частичная воздушная тревога" if state.status == "P" else "воздушная тревога"
             lines = [
                 f"NEPTUN сообщает: объявлена {alarm_kind} — <b>{escape(state.location_title)}</b>."
             ]
-            details = format_alerts_location_details(state)
+            details = format_alerts_location_details(state, neptun_beta)
             if details:
                 lines.append(details)
             lines.append("ℹ️ Данные обновляются автоматически каждые 30 секунд.")
@@ -11021,7 +11105,7 @@ def build_alarm_alert_text(state: AlertsLocationState) -> str:
         lines = [
             f'NEPTUN сообщает: активная угроза для <b>{escape(state.location_title)}</b>.'
         ]
-        details = format_alerts_location_details(state)
+        details = format_alerts_location_details(state, neptun_beta)
         if details:
             lines.append(details)
         lines.append("ℹ️ Данные обновляются автоматически каждые 30 секунд.")
@@ -11218,6 +11302,13 @@ async def delete_previous_alarm_status_message(bot: Bot, chat_id: int, status: s
     db.clear_alarm_api_status_message_ids(chat_id, status)
 
 
+def chat_neptun_beta_options(
+    chat_id: int,
+    state: AlertsLocationState,
+) -> dict[str, bool] | None:
+    return db.alarm_api_neptun_beta(chat_id) if state.source == "neptun" else None
+
+
 async def activate_alarm_from_api(
     bot: Bot,
     chat_id: int,
@@ -11233,7 +11324,7 @@ async def activate_alarm_from_api(
     alert_message = await send_alarm_notification(
         bot,
         chat_id,
-        build_alarm_alert_text(state),
+        build_alarm_alert_text(state, chat_neptun_beta_options(chat_id, state)),
     )
     if alert_message is not None:
         db.set_alarm_api_status_message_id(chat_id, "A", alert_message.message_id)
@@ -11255,7 +11346,10 @@ async def edit_alarm_status_message(
     chat_id: int,
     alert_state: AlertsLocationState,
 ) -> bool:
-    text = build_alarm_alert_text(alert_state)
+    text = build_alarm_alert_text(
+        alert_state,
+        chat_neptun_beta_options(chat_id, alert_state),
+    )
     message_id = db.alarm_api_status_message_id(chat_id, "A")
     if message_id is not None:
         try:
@@ -11385,7 +11479,7 @@ async def alerts_monitor_loop(bot: Bot) -> None:
     }
     if UKRAINE_ALARM_API_TOKEN:
         providers["ukraine_alarm"] = UkraineAlarmProvider(UKRAINE_ALARM_API_TOKEN)
-    selections_seen: dict[int, tuple[str, str]] = {}
+    selections_seen: dict[int, tuple[str, str, str]] = {}
     notified_states: dict[int, AlertsLocationState] = {}
     pending_escalations: dict[int, AlertsEscalationCandidate] = {}
     while True:
@@ -11446,9 +11540,22 @@ async def alerts_monitor_loop(bot: Bot) -> None:
                         continue
                     PROVIDER_STATES[(source, location)] = alert_state
                     status = alert_state.status
-                    details_signature = alerts_location_state_signature(alert_state)
+                    beta_options = (
+                        db.alarm_api_neptun_beta(chat_id)
+                        if source == "neptun"
+                        else {}
+                    )
+                    details_signature = alerts_location_state_signature(
+                        alert_state,
+                        include_neptun_beta=any(beta_options.values()),
+                    )
                     active = status in {"A", "P"}
-                    selection = (source, location)
+                    beta_selection = json.dumps(
+                        beta_options,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    selection = (source, location, beta_selection)
                     if selections_seen.get(chat_id, selection) != selection:
                         notified_states.pop(chat_id, None)
                         pending_escalations.pop(chat_id, None)
@@ -11492,7 +11599,10 @@ async def alerts_monitor_loop(bot: Bot) -> None:
                         else:
                             pending_escalations[chat_id] = candidate
 
-                        if alerts_location_state_signature(previous_state) != details_signature:
+                        if alerts_location_state_signature(
+                            previous_state,
+                            include_neptun_beta=any(beta_options.values()),
+                        ) != details_signature:
                             if await update_alarm_from_api(
                                 bot,
                                 chat_id,
@@ -11587,6 +11697,12 @@ def alarm_status_text(chat_id: int) -> str:
             threat_text = ", ".join(labels) if labels else "активная угроза"
             lines.append(f"{icon} Угроза: <b>{escape(threat_text)}</b>.")
         if source == "neptun":
+            beta_lines = neptun_beta_detail_lines(
+                state,
+                db.alarm_api_neptun_beta(chat_id),
+            ) if state is not None else []
+            if beta_lines:
+                lines.extend(beta_lines)
             lines.append('Источник: <a href="https://neptun.in.ua/">NEPTUN</a>.')
         else:
             lines.append("Источник: <b>UkraineAlarm</b>.")

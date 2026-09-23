@@ -98,6 +98,9 @@ class AlertsThreat:
     started_at: str | None
     source_message: str | None
     location_title: str | None = None
+    lifecycle: str | None = None
+    display_confidence: str | None = None
+    presumptive_course: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +113,7 @@ class AlertsLocationState:
     official_area: str | None = None
     provider_mode: str | None = None
     official_alert: bool | None = None
+    official_reasons: tuple[str, ...] = ()
 
 
 class AlertProvider(Protocol):
@@ -195,6 +199,13 @@ def parse_neptun_alerts(
                 started_at=str(item.get("confirmedAt") or item.get("updatedAt") or "").strip() or None,
                 source_message=explanation or str(item.get("title") or "").strip() or None,
                 location_title=scope or None,
+                lifecycle=str(item.get("lifecycle") or "").strip() or None,
+                display_confidence=str(item.get("displayConfidence") or "").strip() or None,
+                presumptive_course=(
+                    item.get("presumptiveCourse")
+                    if isinstance(item.get("presumptiveCourse"), bool)
+                    else None
+                ),
             )
         )
     alert_level = (
@@ -261,6 +272,27 @@ def parse_neptun_official_alerts(
 
     raw_level = str(matched.get("level") or "").strip().casefold()
     level = raw_level if raw_level in {"yellow", "red"} else None
+
+    reasons: list[str] = []
+    raw_reasons = matched.get("reasons")
+    if isinstance(raw_reasons, str):
+        raw_reasons = [raw_reasons]
+    if isinstance(raw_reasons, list):
+        for item in raw_reasons:
+            if isinstance(item, str):
+                value = item.strip()
+            elif isinstance(item, dict):
+                value = str(
+                    item.get("reason")
+                    or item.get("title")
+                    or item.get("name")
+                    or item.get("type")
+                    or ""
+                ).strip()
+            else:
+                value = ""
+            if value and value not in reasons:
+                reasons.append(value)
     return AlertsLocationState(
         "A",
         alert_level=level,
@@ -268,6 +300,7 @@ def parse_neptun_official_alerts(
         location_title=location.city,
         official_area=location.official_area,
         provider_mode="alerts",
+        official_reasons=tuple(reasons),
     )
 
 
@@ -305,6 +338,7 @@ class NeptunProvider:
             official_area=official.official_area,
             provider_mode="combined",
             official_alert=official_active,
+            official_reasons=official.official_reasons,
         )
 
 
