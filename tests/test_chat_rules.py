@@ -187,9 +187,7 @@ def test_only_target_user_can_accept_and_restore_permissions(tmp_path, monkeypat
     _, database = prepared_db(tmp_path)
     database.set_chat_rules_settings(-100, "Правила", False, 60, True, 42)
     database.begin_chat_rule_agreement(-100, 9, restricted=True, prompt_message_id=777)
-    chat_permissions = bot.default_open_permissions()
     telegram_bot = SimpleNamespace(
-        get_chat=AsyncMock(return_value=SimpleNamespace(permissions=chat_permissions)),
         restrict_chat_member=AsyncMock(),
     )
     message = SimpleNamespace(edit_text=AsyncMock())
@@ -205,7 +203,13 @@ def test_only_target_user_can_accept_and_restore_permissions(tmp_path, monkeypat
 
     telegram_bot.restrict_chat_member.assert_awaited_once()
     restored = telegram_bot.restrict_chat_member.await_args.kwargs["permissions"]
-    assert restored.can_send_messages is True
+    assert all(
+        getattr(restored, permission) is True
+        for permission in type(restored).model_fields
+    )
+    assert telegram_bot.restrict_chat_member.await_args.kwargs[
+        "use_independent_chat_permissions"
+    ] is True
     assert database.get_chat_rule_agreement(-100, 9)["agreed_at"]
     acceptance = database.get_chat_rules_acceptance(-100, 9)
     assert acceptance["rules_updated_at"] == database.get_chat_rules_settings(-100).updated_at

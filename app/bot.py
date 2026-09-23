@@ -4330,15 +4330,8 @@ def rules_pending_permissions() -> ChatPermissions:
     )
 
 
-async def current_default_chat_permissions(bot: Bot, chat_id: int) -> ChatPermissions:
-    try:
-        chat = await bot.get_chat(chat_id)
-        return chat.permissions or default_open_permissions()
-    except (TelegramBadRequest, TelegramForbiddenError):
-        return default_open_permissions()
-
-
 def default_open_permissions() -> ChatPermissions:
+    """Lift a member's personal restrictions so the chat defaults apply again."""
     return ChatPermissions(
         can_send_messages=True,
         can_send_audios=True,
@@ -4351,6 +4344,11 @@ def default_open_permissions() -> ChatPermissions:
         can_send_other_messages=True,
         can_add_web_page_previews=True,
         can_react_to_messages=True,
+        can_edit_tag=True,
+        can_change_info=True,
+        can_invite_users=True,
+        can_pin_messages=True,
+        can_manage_topics=True,
     )
 
 
@@ -5581,7 +5579,7 @@ async def participant_membership_changed(event: ChatMemberUpdated) -> None:
                 await event.bot.restrict_chat_member(
                     chat_id=event.chat.id,
                     user_id=telegram_user.id,
-                    permissions=await current_default_chat_permissions(event.bot, event.chat.id),
+                    permissions=default_open_permissions(),
                     use_independent_chat_permissions=True,
                 )
         db.complete_chat_rule_agreement(event.chat.id, telegram_user.id)
@@ -12312,7 +12310,7 @@ async def accept_rules_callback(callback: CallbackQuery) -> None:
             await callback.bot.restrict_chat_member(
                 chat_id=chat_id,
                 user_id=user_id,
-                permissions=await current_default_chat_permissions(callback.bot, chat_id),
+                permissions=default_open_permissions(),
                 use_independent_chat_permissions=True,
             )
         if not db.complete_chat_rule_agreement(chat_id, user_id):
