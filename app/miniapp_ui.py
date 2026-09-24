@@ -1923,6 +1923,10 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   function handleTopProfileButton() {
+    if (window.accessDraft?.changes.size && activeView === "adminPanel") {
+      if (!confirm("Отменить несохранённые изменения доступа?")) return;
+      window.accessDraft = null;
+    }
     if (activeView === "profile") {
       returnFromProfile();
     } else {
@@ -2942,7 +2946,7 @@ MINI_APP_HTML = r"""<!doctype html>
     return `<label class="switch" aria-label="${escapeHtml(label)}: ${escapeHtml(item.title)}">
       <input type="checkbox" data-feature="${escapeHtml(item.id)}" data-mode="${escapeHtml(item.mode || 'both')}"
         ${item.enabled ? "checked" : ""}
-        onchange="saveAccessPermission(${chatId}, ${userId}, this.dataset.feature, this.dataset.mode, this.checked)">
+        onchange="stageAccessPermission(this)">
       <span class="slider round"></span>
     </label>`;
   }
@@ -2991,9 +2995,46 @@ MINI_APP_HTML = r"""<!doctype html>
     else window.openAccessGroups.add(featureId);
   }
 
-  async function showAccessManager(chatId = null, userId = null, restoreScroll = false) {
+  function stageAccessPermission(input) {
+    const draft = window.accessDraft;
+    if (!draft || draft.saving || !input) return;
+    const feature = input.dataset.feature;
+    draft.changes.set(feature, { feature, mode: input.dataset.mode || "both", allowed: input.checked });
+    const children = document.getElementById(`accessChildren_${feature}`);
+    if (children) {
+      children.querySelectorAll('input[data-feature]').forEach(child => {
+        child.checked = input.checked;
+        draft.changes.set(child.dataset.feature, {
+          feature: child.dataset.feature, mode: child.dataset.mode || "both", allowed: input.checked
+        });
+      });
+    } else if (feature.includes(".")) {
+      const parent = feature.split(".", 1)[0];
+      const siblings = document.querySelectorAll(`#accessChildren_${parent} input[data-feature]`);
+      const master = document.querySelector(`input[data-feature="${parent}"]`);
+      if (master && siblings.length) master.checked = Array.from(siblings).every(child => child.checked);
+    }
+    const saveButton = document.getElementById("saveAccessButton");
+    if (saveButton) saveButton.disabled = false;
+  }
+
+  function openAccessManager(chatId, userId, selector = null) {
+    const draft = window.accessDraft;
+    if (draft?.changes.size && !confirm("Есть несохранённые изменения доступа. Отменить их?")) {
+      if (selector) selector.value = String(selector.dataset.previous || "");
+      return;
+    }
+    showAccessManager(chatId, userId);
+  }
+
+  function leaveAccessManager() {
+    if (window.accessDraft?.changes.size && !confirm("Отменить несохранённые изменения доступа?")) return;
+    window.accessDraft = null;
+    showAdminPanel();
+  }
+
+  async function showAccessManager(chatId = null, userId = null) {
     const requestId = beginScreenRequest("adminPanel");
-    const previousScroll = restoreScroll ? window.scrollY : 0;
     content.innerHTML = `<section class="panel muted">Загружаю права доступа...</section>`;
     try {
       const query = new URLSearchParams();
@@ -3005,15 +3046,16 @@ MINI_APP_HTML = r"""<!doctype html>
       const selectedUserId = Number(data.selectedUserId || 0);
       const admins = data.admins || [];
       const features = data.features || [];
+      window.accessDraft = { chatId: selectedChatId, userId: selectedUserId, changes: new Map() };
       content.innerHTML = `<section class="panel">
         <h2>Доступ</h2>
         <p class="muted">Выберите группу и человека. Каждый переключатель разрешает действие; у раздела верхний переключатель включает или выключает все его подпункты. Права меняет только владелец.</p>
         <div class="mine-admin-form">
           <label class="wide">Группа
-            <select class="wide" onchange="showAccessManager(this.value)">${triggerChatOptionsHtml(data.chats || [], selectedChatId)}</select>
+            <select class="wide" data-previous="${selectedChatId}" onchange="openAccessManager(this.value, null, this)">${triggerChatOptionsHtml(data.chats || [], selectedChatId)}</select>
           </label>
           <label class="wide">Администратор или получивший доступ пользователь
-            <select class="wide" onchange="showAccessManager(${selectedChatId}, this.value)">
+            <select class="wide" data-previous="${selectedUserId}" onchange="openAccessManager(${selectedChatId}, this.value, this)">
               <option value="0">Выберите пользователя</option>
               ${admins.map(item => `<option value="${Number(item.user_id)}" ${Number(item.user_id) === selectedUserId ? "selected" : ""}>${escapeHtml(item.full_name || item.username || String(item.user_id))} · ID ${Number(item.user_id)}</option>`).join("")}
             </select>
@@ -3021,33 +3063,50 @@ MINI_APP_HTML = r"""<!doctype html>
           <label class="wide">Telegram ID другого пользователя
             <input id="accessTargetId" class="wide" type="number" min="1" inputmode="numeric" placeholder="ID пользователя">
           </label>
-          <button class="btn secondary wide" onclick="showAccessManager(${selectedChatId}, Number(document.getElementById('accessTargetId')?.value || 0))">Выбрать по ID</button>
+          <button class="btn secondary wide" onclick="openAccessManager(${selectedChatId}, Number(document.getElementById('accessTargetId')?.value || 0))">Выбрать по ID</button>
         </div>
       </section>
       ${selectedUserId && selectedChatId ? `<section class="panel">
         <h2>Права · ID ${selectedUserId}</h2>
         <p class="muted">Разделы раскрываются нажатием на название. Отдельные действия расположены вне разделов. Недоступные для делегирования функции владельца здесь не показываются.</p>
         <div class="role-list">${accessPermissionsHtml(features, selectedChatId, selectedUserId)}</div>
+        <button id="saveAccessButton" class="btn wide" style="margin-top:16px" disabled onclick="saveAccessPermissions()">Сохранить изменения</button>
       </section>` : `<section class="panel muted">Выберите группу и пользователя, чтобы настроить права.</section>`}
-      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
-      if (restoreScroll) requestAnimationFrame(() => window.scrollTo(0, previousScroll));
-      else scrollToTop();
+      <section class="panel"><button class="btn secondary" style="margin:0" onclick="leaveAccessManager()">Назад в админ-панель</button></section>`;
+      scrollToTop();
     } catch (error) {
       if (isCurrentScreenRequest(requestId)) showError(error);
     }
   }
 
-  async function saveAccessPermission(chatId, userId, feature, mode, allowed) {
+  async function saveAccessPermissions() {
+    const draft = window.accessDraft;
+    if (!draft?.changes.size) return;
+    const button = document.getElementById("saveAccessButton");
+    draft.saving = true;
+    const switches = document.querySelectorAll('.access-group input[data-feature], .access-feature-row input[data-feature]');
+    switches.forEach(input => { input.disabled = true; });
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Сохраняю…";
+    }
     try {
-      await api("/miniapp/profile/access", {
+      const changes = Array.from(draft.changes.values()).sort((left, right) => Number(left.feature.includes(".")) - Number(right.feature.includes(".")));
+      await api("/miniapp/profile/access/batch", {
         method: "POST",
-        body: JSON.stringify({ chatId: Number(chatId), userId: Number(userId), feature, mode, allowed })
+        body: JSON.stringify({ chatId: draft.chatId, userId: draft.userId, changes })
       });
-      showNotice("Право доступа сохранено.");
-      showAccessManager(chatId, userId, true);
+      draft.changes.clear();
+      showNotice("Права доступа сохранены.");
     } catch (error) {
       alert(error.message);
-      showAccessManager(chatId, userId, true);
+    } finally {
+      draft.saving = false;
+      switches.forEach(input => { input.disabled = false; });
+      if (button) {
+        button.disabled = !draft.changes.size;
+        button.textContent = "Сохранить изменения";
+      }
     }
   }
 
@@ -4116,19 +4175,26 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   function renderMine(scroll = true) {
-    if (!state) return;
+    if (!state) {
+      api("/miniapp/mine")
+        .then(data => { state = data; renderMine(scroll); })
+        .catch(showError);
+      return;
+    }
     setScreenHeader("mine");
     content.innerHTML = mineHtml();
     if (scroll) scrollToTop();
   }
 
   async function load() {
-    const initialView = readStartParam();
+    const initialView = readStartParam() || "profile";
     const intendedOwner = readStartOwner();
     setScreenHeader(["shop", "bag", "profile", "weather", "radio", "rules", "reminders", "moderation"].includes(initialView) ? initialView : "mine");
     try {
-      state = await api("/miniapp/mine");
-      if (intendedOwner && Number(state.userId) !== intendedOwner) {
+      try { state = await api("/miniapp/mine"); }
+      catch (error) { if (initialView !== "profile") throw error; }
+      const currentUserId = Number(state?.userId || telegram?.initDataUnsafe?.user?.id || 0);
+      if (intendedOwner && currentUserId && currentUserId !== intendedOwner) {
         nameNode.textContent = "Чужая кнопка";
         content.innerHTML = '<section class="panel"><h2>Эта кнопка принадлежит другому пользователю</h2><p class="muted">Вызови свою команду «копай» или «сумка» в чате.</p></section>';
         return;

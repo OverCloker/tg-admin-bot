@@ -132,12 +132,21 @@ class MiniAppModeratorRoleClear(BaseModel):
     target: str = Field(min_length=1, max_length=64)
 
 
-class MiniAppAccessSet(BaseModel):
-    chatId: int
-    userId: int = Field(gt=0)
+class MiniAppAccessChange(BaseModel):
     feature: str = Field(min_length=1, max_length=64)
     mode: str = Field(pattern=r"^(view|write|both)$")
     allowed: bool
+
+
+class MiniAppAccessSet(MiniAppAccessChange):
+    chatId: int
+    userId: int = Field(gt=0)
+
+
+class MiniAppAccessBatch(BaseModel):
+    chatId: int
+    userId: int = Field(gt=0)
+    changes: list[MiniAppAccessChange] = Field(min_length=1, max_length=100)
 
 
 class MiniAppBlacklistSave(BaseModel):
@@ -3028,45 +3037,62 @@ def miniapp_profile_access(
         db.close()
 
 
+def _miniapp_access_updates(changes: list[MiniAppAccessChange]) -> dict[str, bool]:
+    from .bot import ADMIN_PERMISSION_IDS, ADMIN_SUBFEATURES, admin_permission_key
+
+    updates: dict[str, bool] = {}
+    for change in changes:
+        if change.feature not in ADMIN_PERMISSION_IDS or change.feature.split(".", 1)[0] in MINIAPP_OWNER_ONLY_ACCESS_FEATURES:
+            raise HTTPException(400, "Неизвестное право.")
+        modes = ("view", "write") if change.mode == "both" else (change.mode,)
+        feature_ids = [change.feature]
+        if change.mode == "both" and change.feature in ADMIN_SUBFEATURES:
+            feature_ids.extend(item_id for item_id, _ in ADMIN_SUBFEATURES[change.feature])
+        for feature_id in feature_ids:
+            for mode in modes:
+                updates[admin_permission_key(feature_id, mode)] = change.allowed
+            if "." not in feature_id:
+                updates[feature_id] = False
+            elif change.allowed:
+                updates[admin_permission_key(feature_id.split(".", 1)[0], "view")] = True
+    return updates
+
+
+def _miniapp_save_access_changes(
+    chat_id: int, user_id: int, changes: list[MiniAppAccessChange], actor_id: int,
+) -> None:
+    if not _miniapp_can_manage_roles(actor_id):
+        raise HTTPException(403, "Управлять доступом может только владелец.")
+    if user_id == actor_id:
+        raise HTTPException(400, "Права владельца менять нельзя.")
+    updates = _miniapp_access_updates(changes)
+    db = _db()
+    try:
+        if db.get_chat(chat_id) is None:
+            raise HTTPException(404, "Группа не найдена.")
+        db.set_admin_feature_permissions_bulk(chat_id, user_id, updates, actor_id)
+    finally:
+        db.close()
+
+
 @router.post("/miniapp/profile/access")
 def miniapp_profile_access_set(
     payload: MiniAppAccessSet,
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     actor = _telegram_user(x_telegram_init_data)
-    if not _miniapp_can_manage_roles(actor["id"]):
-        raise HTTPException(403, "Управлять доступом может только владелец.")
-    from .bot import ADMIN_PERMISSION_IDS, ADMIN_SUBFEATURES, admin_permission_key
+    _miniapp_save_access_changes(payload.chatId, payload.userId, [payload], actor["id"])
+    return {"ok": True, "allowed": payload.allowed}
 
-    if payload.feature not in ADMIN_PERMISSION_IDS or payload.feature.split(".", 1)[0] in MINIAPP_OWNER_ONLY_ACCESS_FEATURES:
-        raise HTTPException(400, "Неизвестное право.")
-    if payload.userId == actor["id"]:
-        raise HTTPException(400, "Права владельца менять нельзя.")
-    db = _db()
-    try:
-        if db.get_chat(payload.chatId) is None:
-            raise HTTPException(404, "Группа не найдена.")
-        modes = ("view", "write") if payload.mode == "both" else (payload.mode,)
-        feature_ids = [payload.feature]
-        if payload.mode == "both" and payload.feature in ADMIN_SUBFEATURES:
-            feature_ids.extend(item_id for item_id, _ in ADMIN_SUBFEATURES[payload.feature])
-        for feature_id in feature_ids:
-            for mode in modes:
-                db.set_admin_feature_permission(
-                    payload.chatId, payload.userId,
-                    admin_permission_key(feature_id, mode), payload.allowed, actor["id"],
-                )
-            if "." not in feature_id:
-                db.set_admin_feature_permission(payload.chatId, payload.userId, feature_id, False, actor["id"])
-        if payload.allowed and "." in payload.feature:
-            parent = payload.feature.split(".", 1)[0]
-            db.set_admin_feature_permission(
-                payload.chatId, payload.userId,
-                admin_permission_key(parent, "view"), True, actor["id"],
-            )
-        return {"ok": True, "allowed": payload.allowed}
-    finally:
-        db.close()
+
+@router.post("/miniapp/profile/access/batch")
+def miniapp_profile_access_batch(
+    payload: MiniAppAccessBatch,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    actor = _telegram_user(x_telegram_init_data)
+    _miniapp_save_access_changes(payload.chatId, payload.userId, payload.changes, actor["id"])
+    return {"ok": True, "saved": len(payload.changes)}
 
 
 @router.get("/miniapp/profile/moderation/role-tabs")

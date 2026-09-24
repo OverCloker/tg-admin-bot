@@ -115,7 +115,8 @@ def test_current_telegram_url_wins_over_stale_launch_data() -> None:
     assert 'if (initialView === "shop") await showShop();' in MINI_APP_HTML
     assert 'initialView === "shop" && state.registered' not in MINI_APP_HTML
     assert 'normalized.startsWith("shop_")' in MINI_APP_HTML
-    assert 'Number(state.userId) !== intendedOwner' in MINI_APP_HTML
+    assert 'currentUserId !== intendedOwner' in MINI_APP_HTML
+    assert 'catch (error) { if (initialView !== "profile") throw error; }' in MINI_APP_HTML
 
 
 def test_miniapp_contains_requested_animations() -> None:
@@ -319,7 +320,10 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'showBlacklistManager()' in MINI_APP_HTML
     assert 'Чёрный список' in MINI_APP_HTML
     assert 'Открыть тревоги' in MINI_APP_HTML
-    assert 'function showAccessManager(chatId = null, userId = null, restoreScroll = false)' in MINI_APP_HTML
+    assert 'function showAccessManager(chatId = null, userId = null)' in MINI_APP_HTML
+    assert 'const initialView = readStartParam() || "profile";' in MINI_APP_HTML
+    assert 'id="saveAccessButton"' in MINI_APP_HTML
+    assert '"/miniapp/profile/access/batch"' in MINI_APP_HTML
     assert 'function showModeratorRoleManager(tabKey = null)' in MINI_APP_HTML
     assert 'class="slider round"' in MINI_APP_HTML
     assert 'function accessPermissionsHtml(features, chatId, userId)' in MINI_APP_HTML

@@ -2451,6 +2451,30 @@ class Database:
         )
         self._conn.commit()
 
+    def set_admin_feature_permissions_bulk(
+        self,
+        chat_id: int,
+        user_id: int,
+        changes: dict[str, bool],
+        updated_by: int | None,
+    ) -> None:
+        timestamp = utc_now()
+        with self._conn:
+            self._conn.executemany(
+                """
+                insert into chat_admin_feature_permissions (chat_id, user_id, feature, allowed, updated_by, updated_at)
+                values (?, ?, ?, ?, ?, ?)
+                on conflict(chat_id, user_id, feature) do update set
+                    allowed = excluded.allowed,
+                    updated_by = excluded.updated_by,
+                    updated_at = excluded.updated_at
+                """,
+                [
+                    (chat_id, user_id, feature, int(allowed), updated_by, timestamp)
+                    for feature, allowed in changes.items()
+                ],
+            )
+
     def user_admin_chat_ids(self, user_id: int) -> set[int]:
         rows = self._conn.execute(
             """

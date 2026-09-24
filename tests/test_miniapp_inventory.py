@@ -15,6 +15,8 @@ from app.miniapp import (
     MiniAppBlacklistSave,
     MiniAppAlarmSettingsSet,
     MiniAppAccessSet,
+    MiniAppAccessBatch,
+    MiniAppAccessChange,
     MiniAppModeratorRoleClear,
     MiniAppModeratorRoleSet,
     MiniAppTriggerDelete,
@@ -1129,6 +1131,42 @@ def test_miniapp_access_bulk_and_owner_only_features(tmp_path, monkeypatch) -> N
     narrowed = miniapp.miniapp_profile_access(chat_id=-100, user_id=8, x_telegram_init_data="test")
     assert next(item for item in narrowed["features"] if item["id"] == "quotes.add")["enabled"] is True
     assert next(item for item in narrowed["features"] if item["id"] == "quotes.delete")["enabled"] is False
+
+
+def test_miniapp_access_batch_saves_once_and_rejects_invalid_change(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-100, "Chat", "supergroup", None)
+    db.close()
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _data: {"id": 42})
+
+    changes = [
+        MiniAppAccessChange(feature="quotes", mode="both", allowed=True),
+        MiniAppAccessChange(feature="quotes.delete", mode="both", allowed=False),
+    ]
+    result = miniapp.miniapp_profile_access_batch(
+        MiniAppAccessBatch(chatId=-100, userId=8, changes=changes), x_telegram_init_data="test"
+    )
+    assert result["saved"] == 2
+    access = miniapp.miniapp_profile_access(chat_id=-100, user_id=8, x_telegram_init_data="test")
+    assert next(item for item in access["features"] if item["id"] == "quotes.add")["enabled"] is True
+    assert next(item for item in access["features"] if item["id"] == "quotes.delete")["enabled"] is False
+
+    invalid = MiniAppAccessBatch(chatId=-100, userId=8, changes=[
+        MiniAppAccessChange(feature="logs", mode="view", allowed=True),
+        MiniAppAccessChange(feature="stars", mode="both", allowed=True),
+    ])
+    with pytest.raises(Exception) as denied:
+        miniapp.miniapp_profile_access_batch(invalid, x_telegram_init_data="test")
+    assert getattr(denied.value, "status_code", None) == 400
+    db_check = Database(str(db_path))
+    try:
+        assert db_check.admin_feature_permission(-100, 8, "logs.view") is None
+    finally:
+        db_check.close()
 
 
 def test_miniapp_alarm_settings_are_scoped_to_chat_admin(tmp_path, monkeypatch) -> None:
