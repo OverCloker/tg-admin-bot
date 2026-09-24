@@ -155,6 +155,59 @@ def test_shop_catalog_exposes_mined_resources_and_merchant(tmp_path) -> None:
     assert merchant["res_iron"]["quantity"] == 3
     assert merchant["res_iron"]["total"] == merchant["res_iron"]["price"] * 3
     assert catalog["merchant"]["total"] >= merchant["res_iron"]["total"]
+    assert {recipe["key"] for recipe in catalog["crafting"]} == {"tea", "scanner", "map", "talisman"}
+
+
+def test_resource_exchange_is_atomic_and_grants_item(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.register_dig_player(0, 42, "miner", "Шахтёр")
+    db.add_dig_item(0, 42, "res_stone", 2)
+    db.add_dig_item(0, 42, "res_coal", 1)
+    db.close()
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _data: {"id": 42})
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+
+    result = miniapp.miniapp_merchant_craft(miniapp.MineCraft(recipe_key="tea"), x_telegram_init_data="test")
+    assert result["ok"] is True
+    db = Database(str(db_path))
+    try:
+        assert db.get_dig_item_quantity(0, 42, "tea") == 1
+        assert db.get_dig_item_quantity(0, 42, "res_stone") == 0
+        assert db.get_dig_item_quantity(0, 42, "res_coal") == 0
+    finally:
+        db.close()
+    with pytest.raises(Exception, match="Недостаточно ресурсов"):
+        miniapp.miniapp_merchant_craft(miniapp.MineCraft(recipe_key="tea"), x_telegram_init_data="test")
+
+
+def test_golden_ticket_has_more_prizes_including_items(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.register_dig_player(0, 42, "miner", "Шахтёр")
+    db.add_dig_item(0, 42, "golden_ticket", 1)
+    db.close()
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _data: {"id": 42})
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+
+    miniapp.gold_ticket_start(x_telegram_init_data="test")
+    db = Database(str(db_path))
+    try:
+        import json
+        cells = json.loads(db.get_gold_ticket_game(42)["cells_json"])
+        assert len([value for value in cells if value]) == 7
+        prize_cell = cells.index("item:scanner")
+    finally:
+        db.close()
+    result = miniapp.gold_ticket_pick(miniapp.TicketPick(cell=prize_cell), x_telegram_init_data="test")
+    assert result["rewardText"] == "Сканер"
+    db = Database(str(db_path))
+    try:
+        assert db.get_dig_item_quantity(0, 42, "scanner") == 1
+    finally:
+        db.close()
 
 
 def test_profile_cosmetics_are_exposed_after_purchase(tmp_path) -> None:

@@ -1369,6 +1369,7 @@ class Database:
                 mine_count integer not null,
                 luck_at_start integer not null,
                 earned_coins integer not null default 0,
+                entry_paid integer not null default 0,
                 created_at text not null,
                 updated_at text not null
             );
@@ -1413,6 +1414,7 @@ class Database:
         self._migrate_personal_weather()
         self._migrate_chat_lock_settings()
         self._migrate_chat_rules_settings()
+        self._migrate_minesweeper_entry_paid()
         self._conn.execute(
             "delete from star_payments where charge_id <> '' and id not in "
             "(select min(id) from star_payments where charge_id <> '' group by charge_id)"
@@ -1422,6 +1424,11 @@ class Database:
             "on star_payments(charge_id) where charge_id <> ''"
         )
         self._conn.commit()
+
+    def _migrate_minesweeper_entry_paid(self) -> None:
+        columns = {row["name"] for row in self._conn.execute("pragma table_info(minesweeper_games)").fetchall()}
+        if "entry_paid" not in columns:
+            self._conn.execute("alter table minesweeper_games add column entry_paid integer not null default 0")
 
     def _migrate_personal_reminders(self) -> None:
         columns = {
@@ -1977,7 +1984,7 @@ class Database:
     def get_minesweeper_game(self, user_id: int) -> dict | None:
         row = self._conn.execute(
             "select user_id, mines_json, opened_json, mine_count, luck_at_start, "
-            "earned_coins, created_at, updated_at from minesweeper_games where user_id = ?",
+            "earned_coins, entry_paid, created_at, updated_at from minesweeper_games where user_id = ?",
             (int(user_id),),
         ).fetchone()
         return dict(row) if row else None
@@ -1991,25 +1998,27 @@ class Database:
         luck_at_start: int,
         earned_coins: int,
         created_at: str,
+        entry_paid: bool = False,
     ) -> None:
         self._conn.execute(
             """
             insert into minesweeper_games (
                 user_id, mines_json, opened_json, mine_count, luck_at_start,
-                earned_coins, created_at, updated_at
-            ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                earned_coins, entry_paid, created_at, updated_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(user_id) do update set
                 mines_json = excluded.mines_json,
                 opened_json = excluded.opened_json,
                 mine_count = excluded.mine_count,
                 luck_at_start = excluded.luck_at_start,
                 earned_coins = excluded.earned_coins,
+                entry_paid = excluded.entry_paid,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at
             """,
             (
                 int(user_id), mines_json, opened_json, max(0, int(mine_count)),
-                max(0, min(100, int(luck_at_start))), max(0, int(earned_coins)),
+                max(0, min(100, int(luck_at_start))), max(0, int(earned_coins)), int(entry_paid),
                 created_at, utc_now(),
             ),
         )

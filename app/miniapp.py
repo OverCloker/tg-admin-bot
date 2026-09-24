@@ -246,6 +246,18 @@ class MerchantSale(BaseModel):
     item_key: str | None = Field(default=None, min_length=1, max_length=64)
 
 
+class MineCraft(BaseModel):
+    recipe_key: str = Field(min_length=1, max_length=64)
+
+
+MINE_CRAFT_RECIPES: dict[str, dict[str, Any]] = {
+    "tea": {"name": "Чай", "ingredients": {"res_stone": 2, "res_coal": 1}},
+    "scanner": {"name": "Сканер", "ingredients": {"res_iron": 4, "res_glow_moss": 2}},
+    "map": {"name": "Карта", "ingredients": {"res_silver": 3, "res_crystal": 2}},
+    "talisman": {"name": "Талисман", "ingredients": {"res_ember": 4, "res_fossil": 3}},
+}
+
+
 class ShiftContractPick(BaseModel):
     contract_key: str = Field(min_length=1, max_length=64)
 
@@ -2310,6 +2322,19 @@ def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
         for key in MINE_RESOURCE_ORDER
     ]
     merchant_total = sum(item["total"] for item in merchant_items)
+    crafting = [
+        {
+            "key": key,
+            "name": recipe["name"],
+            "ingredients": [
+                {"key": resource, "name": MINE_RESOURCE_CATALOG[resource]["title"],
+                 "required": count, "owned": int(items.get(resource, 0))}
+                for resource, count in recipe["ingredients"].items()
+            ],
+            "canCraft": all(int(items.get(resource, 0)) >= count for resource, count in recipe["ingredients"].items()),
+        }
+        for key, recipe in MINE_CRAFT_RECIPES.items()
+    ]
     inventory = [
         {"title": title, "icon": icons[title], "items": values}
         for title, values in grouped.items()
@@ -2319,6 +2344,7 @@ def _shop_catalog(db: Database, user_id: int) -> dict[str, Any]:
         "coins": db.get_dig_player(0, user_id).coins,
         "categories": categories,
         "inventory": inventory,
+        "crafting": crafting,
         "merchant": {
             "items": merchant_items,
             "total": merchant_total,
@@ -2448,6 +2474,35 @@ def miniapp_shop_use(
                 "state": _state(db, user["id"]),
                 "shop": _shop_catalog(db, user["id"]),
             }
+        finally:
+            db.close()
+
+
+@router.post("/miniapp/merchant/craft")
+def miniapp_merchant_craft(
+    payload: MineCraft,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    recipe = MINE_CRAFT_RECIPES.get(payload.recipe_key)
+    if recipe is None:
+        raise HTTPException(400, "Неизвестный рецепт.")
+    with _dig_user_lock(user["id"]):
+        db = _db()
+        db.atomic_on_close()
+        try:
+            _ensure_mine_not_blocked(db, user["id"])
+            if not db.get_dig_player(0, user["id"]):
+                raise HTTPException(400, "Сначала зарегистрируйтесь в шахте.")
+            ingredients = recipe["ingredients"]
+            if any(db.get_dig_item_quantity(0, user["id"], key) < count for key, count in ingredients.items()):
+                raise HTTPException(400, "Недостаточно ресурсов для обмена.")
+            for key, count in ingredients.items():
+                if not db.consume_dig_items(0, user["id"], key, count):
+                    raise HTTPException(409, "Ресурсы изменились. Повторите попытку.")
+            db.add_dig_item(0, user["id"], payload.recipe_key, 1)
+            return {"ok": True, "message": f"Получен предмет: {recipe['name']}.",
+                    "state": _state(db, user["id"]), "shop": _shop_catalog(db, user["id"])}
         finally:
             db.close()
 
@@ -3995,8 +4050,9 @@ def gold_ticket_start(x_telegram_init_data: str | None = Header(default=None, al
                 return {"ok": True, "game": active, "state": _state(db, user["id"])}
             if not db.consume_dig_item(0, user["id"], "golden_ticket"):
                 raise HTTPException(400, "У тебя нет золотого билета.")
-            cells = [0] * 9
-            for cell, prize in zip(secrets.SystemRandom().sample(range(9), 3), (10, 25, 50)):
+            cells: list[int | str] = [0] * 9
+            prizes: tuple[int | str, ...] = (100, 250, 500, 750, 1500, "item:tea", "item:scanner")
+            for cell, prize in zip(secrets.SystemRandom().sample(range(9), len(prizes)), prizes):
                 cells[cell] = prize
             now = datetime.now(timezone.utc).isoformat(timespec="seconds")
             db.save_gold_ticket_game(user["id"], json.dumps(cells), "[]", 3, now)
@@ -4025,18 +4081,26 @@ def gold_ticket_pick(
             if int(game["attempts_left"]) <= 0:
                 raise HTTPException(400, "Попытки закончились.")
             cells = json.loads(game["cells_json"])
-            prize = int(cells[payload.cell])
+            raw_prize = cells[payload.cell]
+            prize = int(raw_prize) if isinstance(raw_prize, int) else 0
+            item_prize = raw_prize.removeprefix("item:") if isinstance(raw_prize, str) else ""
+            if item_prize and item_prize not in {"tea", "scanner"}:
+                raise HTTPException(500, "Неверная награда билета.")
             opened.append(payload.cell)
             attempts_left = int(game["attempts_left"]) - 1
             if prize:
                 db.add_dig_coins(0, user["id"], prize)
+            if item_prize:
+                db.add_dig_item(0, user["id"], item_prize, 1)
             if attempts_left <= 0:
                 db.clear_gold_ticket_game(user["id"])
                 next_game = None
             else:
                 db.save_gold_ticket_game(user["id"], game["cells_json"], json.dumps(opened), attempts_left, game["created_at"])
                 next_game = _ticket_public(db, user["id"])
-            return {"ok": True, "cell": payload.cell, "prize": prize, "attemptsLeft": attempts_left, "game": next_game, "state": _state(db, user["id"])}
+            reward_text = f"{prize} котоинов" if prize else (MINE_CRAFT_RECIPES[item_prize]["name"] if item_prize else "")
+            return {"ok": True, "cell": payload.cell, "prize": prize, "rewardText": reward_text,
+                    "attemptsLeft": attempts_left, "game": next_game, "state": _state(db, user["id"])}
         finally:
             db.close()
 
@@ -4306,9 +4370,9 @@ def minesweeper_start(
             mine_count = minesweeper_mine_count(luck)
             mines = sorted(secrets.SystemRandom().sample(range(MINESWEEPER_CELLS), mine_count))
             created_at = now.isoformat(timespec="seconds")
-            db.set_dig_luck(0, user["id"], luck, created_at)
+            db.set_dig_luck(0, user["id"], luck - MINESWEEPER_MINE_LUCK_COST, created_at)
             db.save_minesweeper_game(
-                user["id"], json.dumps(mines), "{}", mine_count, luck, 0, created_at
+                user["id"], json.dumps(mines), "{}", mine_count, luck, 0, created_at, entry_paid=True
             )
             return {
                 "ok": True,
@@ -4366,8 +4430,9 @@ def minesweeper_pick(
                 current_luck = _refreshed_luck(
                     db, game, user["id"], player.luck, player.last_luck_at, now
                 )
-                new_luck = max(0, current_luck - MINESWEEPER_MINE_LUCK_COST)
-                db.set_dig_luck(0, user["id"], new_luck, now.isoformat(timespec="seconds"))
+                luck_lost = 0 if session["entry_paid"] else min(current_luck, MINESWEEPER_MINE_LUCK_COST)
+                if luck_lost:
+                    db.set_dig_luck(0, user["id"], current_luck - luck_lost, now.isoformat(timespec="seconds"))
                 db.clear_minesweeper_game(user["id"])
                 return {
                     "ok": True,
@@ -4375,8 +4440,8 @@ def minesweeper_pick(
                     "finished": True,
                     "cell": payload.cell,
                     "mines": sorted(mines),
-                    "luckLost": current_luck - new_luck,
-                    "message": f"💥 Мина! Потеряно {current_luck - new_luck} удачи. Раунд завершён.",
+                    "luckLost": luck_lost,
+                    "message": f"💥 Мина! Раунд завершён. Удача уже списана при входе." if session["entry_paid"] else f"💥 Мина! Потеряно {luck_lost} удачи. Раунд завершён.",
                     "state": _state(db, user["id"]),
                 }
 
@@ -4423,7 +4488,7 @@ def minesweeper_pick(
                 db.save_minesweeper_game(
                     user["id"], session["mines_json"], json.dumps(opened, ensure_ascii=False),
                     int(session["mine_count"]), int(session["luck_at_start"]), earned,
-                    session["created_at"],
+                    session["created_at"], entry_paid=bool(session["entry_paid"]),
                 )
             event_text = f" {event['text']}" if event else ""
             find_text = ""

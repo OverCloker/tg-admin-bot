@@ -56,10 +56,33 @@ def test_minesweeper_session_persists(tmp_path) -> None:
         assert session is not None
         assert json.loads(session["mines_json"]) == [0, 8]
         assert session["earned_coins"] == 4
+        assert session["entry_paid"] == 0  # legacy rounds still pay only on a mine
         reopened.clear_minesweeper_game(42)
         assert reopened.get_minesweeper_game(42) is None
     finally:
         reopened.close()
+
+
+def test_new_round_pays_on_start_and_not_again_on_mine(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.register_dig_player(0, 20, "miner", "Шахтёр")
+    db.close()
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _data: {"id": 20})
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp, "_ensure_miniapp_mine_access", lambda _user_id: None)
+
+    started = miniapp.minesweeper_start(x_telegram_init_data="test")
+    assert started["state"]["luck"] == 90
+    db = Database(str(db_path))
+    session = db.get_minesweeper_game(20)
+    assert session["entry_paid"] == 1
+    mine = json.loads(session["mines_json"])[0]
+    db.close()
+    hit = miniapp.minesweeper_pick(MinesweeperPick(cell=mine), x_telegram_init_data="test")
+    assert hit["luckLost"] == 0
+    assert hit["state"]["luck"] == 90
 
 
 def test_safe_pick_is_paid_once_and_mine_costs_luck(tmp_path, monkeypatch) -> None:

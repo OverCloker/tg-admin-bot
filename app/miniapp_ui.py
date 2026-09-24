@@ -4095,7 +4095,7 @@ MINI_APP_HTML = r"""<!doctype html>
     if (!game) {
       return `<section class="panel">
         <div class="section-title"><h2>🎟️ Золотой билет</h2><span class="counter">${state.goldenTickets} шт.</span></div>
-        <p class="muted">Три попытки. В трёх из девяти котиков спрятаны 10, 25 и 50 котоинов.</p>
+        <p class="muted">Три попытки. В семи из девяти клеток — от 100 до 1500 котоинов или полезный предмет.</p>
         <button class="btn" onclick="startGoldTicket()">Играть</button>
       </section>`;
     }
@@ -4119,7 +4119,7 @@ MINI_APP_HTML = r"""<!doctype html>
       const canStart = Number(state.luck || 0) >= 10;
       return `<section class="panel minesweeper-shell">
         <div class="section-title"><h2>💣 Сапёр 9×9</h2><span class="counter">удача ${state.luck}/100</span></div>
-        <p class="muted">Чем меньше удачи на старте, тем больше мин: примерно от 10 до 50. В безопасных клетках лежат котоины, продаваемая добыча и редкие золотые билеты. Мина завершает раунд и отнимает 10 удачи.</p>
+        <p class="muted">Чем меньше удачи на старте, тем больше мин: примерно от 10 до 50. В безопасных клетках лежат котоины, продаваемая добыча и редкие золотые билеты. Вход стоит 10 удачи; мина завершает раунд без повторного списания.</p>
         <button class="btn" ${canStart ? "" : "disabled"} onclick="startMinesweeper()">Начать игру</button>
       </section>`;
     }
@@ -4493,12 +4493,12 @@ MINI_APP_HTML = r"""<!doctype html>
         sleep(560)
       ]);
       button.classList.remove("breaking");
-      button.innerHTML = `<span class="cell-prize">${result.prize ? `${result.prize} 🪙` : "Пусто"}</span>`;
+      button.innerHTML = `<span class="cell-prize">${result.rewardText ? escapeHtml(result.rewardText) : "Пусто"}</span>`;
       state = result.state;
       updateGameUi(
         "gold",
         result.attemptsLeft,
-        result.prize ? `Найдено ${result.prize} котоинов!` : "Под котиком пусто."
+        result.rewardText ? `Найдено: ${result.rewardText}!` : "Под котиком пусто."
       );
     } catch (error) {
       button.classList.remove("breaking");
@@ -4620,6 +4620,19 @@ MINI_APP_HTML = r"""<!doctype html>
         <div class="inventory-list">${merchantRows}</div>
         <button class="btn" ${(shop.merchant && shop.merchant.total > 0) ? "" : "disabled"} onclick="sellMerchantResource()">Продать всю добычу</button>
       </section>`;
+      const craftingRows = (shop.crafting || []).map(recipe => `
+        <div class="inventory-row">
+          <div class="inventory-row-main">
+            <span>${escapeHtml(recipe.name)}</span>
+            <button class="btn inventory-use" ${recipe.canCraft ? "" : "disabled"} onclick="craftMineItem('${escapeJs(recipe.key)}')">Обменять</button>
+          </div>
+          <small>${recipe.ingredients.map(item => `${escapeHtml(item.name)} ${item.owned}/${item.required}`).join(" · ")}</small>
+        </div>`).join("");
+      const crafting = `<section class="panel">
+        <div class="section-title"><h2>🛠️ Обмен добычи</h2></div>
+        <p class="muted">Собери ресурсы и обменяй их на расходники. Продажа остаётся доступной.</p>
+        <div class="inventory-list">${craftingRows}</div>
+      </section>`;
       content.innerHTML = `<section class="bag-screen">
         <div class="bag-summary">
           <h2>Снаряжение</h2>
@@ -4632,11 +4645,29 @@ MINI_APP_HTML = r"""<!doctype html>
           <button class="btn secondary" onclick="renderMine()">Вернуться в шахту</button>
         </div>
         ${merchant}
+        ${crafting}
         <div class="inventory">${inventory}</div>
       </section>`;
       scrollToTop();
     } catch (error) {
       showError(error);
+    }
+  }
+
+  async function craftMineItem(recipeKey) {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await api("/miniapp/merchant/craft", {
+        method: "POST", body: JSON.stringify({ recipe_key: recipeKey })
+      });
+      state = result.state;
+      await showBag();
+      showNotice(result.message);
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      busy = false;
     }
   }
 
