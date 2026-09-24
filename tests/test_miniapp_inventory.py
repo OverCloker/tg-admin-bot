@@ -1093,6 +1093,44 @@ def test_miniapp_owner_delegates_moderator_roles_for_one_chat(tmp_path, monkeypa
     assert getattr(denied_after_revoke.value, "status_code", None) == 403
 
 
+def test_miniapp_access_bulk_and_owner_only_features(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-100, "Chat", "supergroup", None)
+    db.close()
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _data: {"id": 42})
+
+    initial = miniapp.miniapp_profile_access(chat_id=-100, user_id=8, x_telegram_init_data="test")
+    assert not {"restart", "stars"} & {item["id"] for item in initial["features"]}
+    assert next(item for item in initial["features"] if item["id"] == "logs")["mode"] == "view"
+    with pytest.raises(Exception) as denied:
+        miniapp.miniapp_profile_access_set(
+            MiniAppAccessSet(chatId=-100, userId=8, feature="stars", mode="both", allowed=True),
+            x_telegram_init_data="test",
+        )
+    assert getattr(denied.value, "status_code", None) == 400
+
+    miniapp.miniapp_profile_access_set(
+        MiniAppAccessSet(chatId=-100, userId=8, feature="quotes", mode="both", allowed=True),
+        x_telegram_init_data="test",
+    )
+    granted = miniapp.miniapp_profile_access(chat_id=-100, user_id=8, x_telegram_init_data="test")
+    assert all(
+        item["enabled"] for item in granted["features"]
+        if item["id"] in {"quotes", "quotes.add", "quotes.delete"}
+    )
+    miniapp.miniapp_profile_access_set(
+        MiniAppAccessSet(chatId=-100, userId=8, feature="quotes.delete", mode="both", allowed=False),
+        x_telegram_init_data="test",
+    )
+    narrowed = miniapp.miniapp_profile_access(chat_id=-100, user_id=8, x_telegram_init_data="test")
+    assert next(item for item in narrowed["features"] if item["id"] == "quotes.add")["enabled"] is True
+    assert next(item for item in narrowed["features"] if item["id"] == "quotes.delete")["enabled"] is False
+
+
 def test_miniapp_alarm_settings_are_scoped_to_chat_admin(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("OWNER_ID", "42")
     db_path = tmp_path / "bot.sqlite3"

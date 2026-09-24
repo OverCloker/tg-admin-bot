@@ -667,23 +667,45 @@ MINI_APP_HTML = r"""<!doctype html>
     .slider.round,
     .slider.round::before { border-radius: 999px; }
     .access-feature-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 54px 54px;
+      display: flex;
       align-items: center;
-      gap: 10px;
-      padding: 12px;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 58px;
+      padding: 10px 12px;
       border: 1px solid var(--line);
       border-radius: var(--radius-sm);
       background: var(--panel-2);
     }
-    .access-feature-row > span:first-child { min-width: 0; overflow-wrap: anywhere; }
-    .access-feature-row.child > span:first-child { padding-left: 12px; }
-    .access-switch-heading {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 54px 54px;
-      gap: 10px;
-      padding: 0 12px;
-      text-align: center;
+    .access-feature-row > span:first-child { min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
+    .access-feature-row.child { margin-left: 14px; border-left: 3px solid var(--accent); }
+    .access-group {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel-2);
+    }
+    .access-group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .access-group-expand {
+      min-width: 0;
+      flex: 1;
+      padding: 8px 0;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      font: inherit;
+      font-weight: 850;
+      cursor: pointer;
+    }
+    .access-group-children { display: grid; gap: 8px; margin-top: 12px; }
+    .access-group-children[hidden] { display: none; }
+    .access-group-note { display: block; font-size: .82em; font-weight: 500; color: var(--muted); }
+    body[data-theme="classic"] .access-group,
+    body[data-theme="classic"] .access-feature-row {
+      border-color: #fff #404040 #404040 #fff;
+      background: #c0c0c0;
+      box-shadow: 1px 1px 0 #000;
     }
     body[data-theme="glass"] .rules-chat-picker,
     body[data-theme="glass"] .setting-switch-row {
@@ -2916,8 +2938,62 @@ MINI_APP_HTML = r"""<!doctype html>
     }
   }
 
-  async function showAccessManager(chatId = null, userId = null) {
+  function accessSwitchHtml(item, chatId, userId, label) {
+    return `<label class="switch" aria-label="${escapeHtml(label)}: ${escapeHtml(item.title)}">
+      <input type="checkbox" data-feature="${escapeHtml(item.id)}" data-mode="${escapeHtml(item.mode || 'both')}"
+        ${item.enabled ? "checked" : ""}
+        onchange="saveAccessPermission(${chatId}, ${userId}, this.dataset.feature, this.dataset.mode, this.checked)">
+      <span class="slider round"></span>
+    </label>`;
+  }
+
+  function accessPermissionsHtml(features, chatId, userId) {
+    const groups = [];
+    for (const item of features) {
+      if (item.child && groups.length) groups[groups.length - 1].children.push(item);
+      else groups.push({ item, children: [] });
+    }
+    const titles = { triggers: "Триггеры", blacklist: "Чёрный список", quotes: "Цитаты", send: "Сообщения в чат", giveaway: "Розыгрыш", alarm: "Тревога", quiet: "Затихни", ads: "Реклама" };
+    return groups.map(({ item, children }) => {
+      if (!children.length) {
+        const action = item.mode === "view" ? "Разрешить просмотр" : "Разрешить действие";
+        return `<div class="access-feature-row"><span><b>${escapeHtml(item.title)}</b>${item.view && !item.write && item.mode !== "view" ? `<small class="access-group-note">Сейчас доступен только просмотр</small>` : ""}</span>${accessSwitchHtml(item, chatId, userId, action)}</div>`;
+      }
+      const groupEnabled = children.every(child => child.enabled);
+      const groupItem = { ...item, mode: "both", enabled: groupEnabled };
+      const isOpen = window.openAccessGroups?.has(item.id) || false;
+      const childrenId = `accessChildren_${item.id}`;
+      return `<section class="access-group">
+        <div class="access-group-head">
+          <button class="access-group-expand" aria-expanded="${isOpen}" aria-controls="${childrenId}" onclick="toggleAccessGroup(${jsAttrString(item.id)})">
+            ${escapeHtml(titles[item.id] || item.title)} <span aria-hidden="true">${isOpen ? "▾" : "▸"}</span>
+            <small class="access-group-note">Подпункты: ${children.length} · нажмите для раскрытия</small>
+          </button>
+          ${accessSwitchHtml(groupItem, chatId, userId, "Разрешить все действия раздела")}
+        </div>
+        <div class="access-group-children" id="${childrenId}" ${isOpen ? "" : "hidden"}>
+          ${children.map(child => `<div class="access-feature-row child"><span>${escapeHtml(child.title)}${child.view && !child.write ? `<small class="access-group-note">Сейчас доступен только просмотр</small>` : ""}</span>${accessSwitchHtml(child, chatId, userId, "Разрешить действие")}</div>`).join("")}
+        </div>
+      </section>`;
+    }).join("");
+  }
+
+  function toggleAccessGroup(featureId) {
+    if (!window.openAccessGroups) window.openAccessGroups = new Set();
+    const children = document.getElementById(`accessChildren_${featureId}`);
+    const button = children?.previousElementSibling?.querySelector(".access-group-expand");
+    if (!children || !button) return;
+    children.hidden = !children.hidden;
+    button.setAttribute("aria-expanded", String(!children.hidden));
+    const arrow = button.querySelector('[aria-hidden="true"]');
+    if (arrow) arrow.textContent = children.hidden ? "▸" : "▾";
+    if (children.hidden) window.openAccessGroups.delete(featureId);
+    else window.openAccessGroups.add(featureId);
+  }
+
+  async function showAccessManager(chatId = null, userId = null, restoreScroll = false) {
     const requestId = beginScreenRequest("adminPanel");
+    const previousScroll = restoreScroll ? window.scrollY : 0;
     content.innerHTML = `<section class="panel muted">Загружаю права доступа...</section>`;
     try {
       const query = new URLSearchParams();
@@ -2931,7 +3007,7 @@ MINI_APP_HTML = r"""<!doctype html>
       const features = data.features || [];
       content.innerHTML = `<section class="panel">
         <h2>Доступ</h2>
-        <p class="muted">Права задаются отдельно для каждой группы и пользователя. Только владелец может менять доступ. «Менять» для права «Назначать и снимать модераторов» разрешает выдачу и снятие модерации в этой группе.</p>
+        <p class="muted">Выберите группу и человека. Каждый переключатель разрешает действие; у раздела верхний переключатель включает или выключает все его подпункты. Права меняет только владелец.</p>
         <div class="mine-admin-form">
           <label class="wide">Группа
             <select class="wide" onchange="showAccessManager(this.value)">${triggerChatOptionsHtml(data.chats || [], selectedChatId)}</select>
@@ -2950,15 +3026,12 @@ MINI_APP_HTML = r"""<!doctype html>
       </section>
       ${selectedUserId && selectedChatId ? `<section class="panel">
         <h2>Права · ID ${selectedUserId}</h2>
-        <div class="access-switch-heading"><span></span><span>Видеть</span><span>Менять</span></div>
-        <div class="role-list">${features.map(item => `<div class="access-feature-row${item.child ? " child" : ""}">
-          <span>${escapeHtml(item.title)}</span>
-          <label class="switch" aria-label="Видеть: ${escapeHtml(item.title)}"><input type="checkbox" data-feature="${escapeHtml(item.id)}" ${item.view ? "checked" : ""} onchange="saveAccessPermission(${selectedChatId}, ${selectedUserId}, this.dataset.feature, 'view', this.checked)"><span class="slider round"></span></label>
-          <label class="switch" aria-label="Менять: ${escapeHtml(item.title)}"><input type="checkbox" data-feature="${escapeHtml(item.id)}" ${item.write ? "checked" : ""} onchange="saveAccessPermission(${selectedChatId}, ${selectedUserId}, this.dataset.feature, 'write', this.checked)"><span class="slider round"></span></label>
-        </div>`).join("")}</div>
+        <p class="muted">Разделы раскрываются нажатием на название. Отдельные действия расположены вне разделов. Недоступные для делегирования функции владельца здесь не показываются.</p>
+        <div class="role-list">${accessPermissionsHtml(features, selectedChatId, selectedUserId)}</div>
       </section>` : `<section class="panel muted">Выберите группу и пользователя, чтобы настроить права.</section>`}
       <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
-      scrollToTop();
+      if (restoreScroll) requestAnimationFrame(() => window.scrollTo(0, previousScroll));
+      else scrollToTop();
     } catch (error) {
       if (isCurrentScreenRequest(requestId)) showError(error);
     }
@@ -2971,10 +3044,10 @@ MINI_APP_HTML = r"""<!doctype html>
         body: JSON.stringify({ chatId: Number(chatId), userId: Number(userId), feature, mode, allowed })
       });
       showNotice("Право доступа сохранено.");
-      showAccessManager(chatId, userId);
+      showAccessManager(chatId, userId, true);
     } catch (error) {
       alert(error.message);
-      showAccessManager(chatId, userId);
+      showAccessManager(chatId, userId, true);
     }
   }
 

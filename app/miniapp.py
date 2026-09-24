@@ -136,7 +136,7 @@ class MiniAppAccessSet(BaseModel):
     chatId: int
     userId: int = Field(gt=0)
     feature: str = Field(min_length=1, max_length=64)
-    mode: str = Field(pattern=r"^(view|write)$")
+    mode: str = Field(pattern=r"^(view|write|both)$")
     allowed: bool
 
 
@@ -851,6 +851,10 @@ def _miniapp_feature_allowed(db: Database, chat_id: int, user_id: int, feature: 
     if "." in feature:
         return _miniapp_feature_allowed(db, chat_id, user_id, feature.split(".", 1)[0], mode)
     return False
+
+
+MINIAPP_OWNER_ONLY_ACCESS_FEATURES = {"restart", "stars"}
+MINIAPP_READ_ONLY_ACCESS_FEATURES = {"participants", "checkAccess", "logs"}
 
 
 def _miniapp_profile_role_groups(db: Database) -> list[dict[str, Any]]:
@@ -2997,13 +3001,20 @@ def miniapp_profile_access(
         features = []
         if target_id and selected:
             for feature, title in ADMIN_FEATURES:
+                if feature in MINIAPP_OWNER_ONLY_ACCESS_FEATURES:
+                    continue
                 for feature_id, feature_title in [(feature, title), *ADMIN_SUBFEATURES.get(feature, [])]:
+                    mode = "view" if feature_id in MINIAPP_READ_ONLY_ACCESS_FEATURES else "both"
+                    can_view = _miniapp_feature_allowed(db, selected, target_id, feature_id, "view")
+                    can_write = _miniapp_feature_allowed(db, selected, target_id, feature_id, "write")
                     features.append({
                         "id": feature_id,
                         "title": feature_title,
                         "child": feature_id != feature,
-                        "view": _miniapp_feature_allowed(db, selected, target_id, feature_id, "view"),
-                        "write": _miniapp_feature_allowed(db, selected, target_id, feature_id, "write"),
+                        "mode": mode,
+                        "view": can_view,
+                        "write": can_write,
+                        "enabled": can_view if mode == "view" else can_view and can_write,
                     })
         return {
             "ok": True,
@@ -3025,9 +3036,9 @@ def miniapp_profile_access_set(
     actor = _telegram_user(x_telegram_init_data)
     if not _miniapp_can_manage_roles(actor["id"]):
         raise HTTPException(403, "Управлять доступом может только владелец.")
-    from .bot import ADMIN_PERMISSION_IDS, admin_permission_key
+    from .bot import ADMIN_PERMISSION_IDS, ADMIN_SUBFEATURES, admin_permission_key
 
-    if payload.feature not in ADMIN_PERMISSION_IDS:
+    if payload.feature not in ADMIN_PERMISSION_IDS or payload.feature.split(".", 1)[0] in MINIAPP_OWNER_ONLY_ACCESS_FEATURES:
         raise HTTPException(400, "Неизвестное право.")
     if payload.userId == actor["id"]:
         raise HTTPException(400, "Права владельца менять нельзя.")
@@ -3035,12 +3046,24 @@ def miniapp_profile_access_set(
     try:
         if db.get_chat(payload.chatId) is None:
             raise HTTPException(404, "Группа не найдена.")
-        db.set_admin_feature_permission(
-            payload.chatId, payload.userId,
-            admin_permission_key(payload.feature, payload.mode), payload.allowed, actor["id"],
-        )
-        if "." not in payload.feature:
-            db.set_admin_feature_permission(payload.chatId, payload.userId, payload.feature, False, actor["id"])
+        modes = ("view", "write") if payload.mode == "both" else (payload.mode,)
+        feature_ids = [payload.feature]
+        if payload.mode == "both" and payload.feature in ADMIN_SUBFEATURES:
+            feature_ids.extend(item_id for item_id, _ in ADMIN_SUBFEATURES[payload.feature])
+        for feature_id in feature_ids:
+            for mode in modes:
+                db.set_admin_feature_permission(
+                    payload.chatId, payload.userId,
+                    admin_permission_key(feature_id, mode), payload.allowed, actor["id"],
+                )
+            if "." not in feature_id:
+                db.set_admin_feature_permission(payload.chatId, payload.userId, feature_id, False, actor["id"])
+        if payload.allowed and "." in payload.feature:
+            parent = payload.feature.split(".", 1)[0]
+            db.set_admin_feature_permission(
+                payload.chatId, payload.userId,
+                admin_permission_key(parent, "view"), True, actor["id"],
+            )
         return {"ok": True, "allowed": payload.allowed}
     finally:
         db.close()
