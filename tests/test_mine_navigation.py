@@ -318,7 +318,10 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert '"/miniapp/profile/blacklist"' in MINI_APP_HTML
     assert 'showBlacklistManager()' in MINI_APP_HTML
     assert 'Чёрный список' in MINI_APP_HTML
-    assert 'Открыть модерацию' in MINI_APP_HTML
+    assert 'Открыть тревоги' in MINI_APP_HTML
+    assert 'function showAccessManager(chatId = null, userId = null)' in MINI_APP_HTML
+    assert 'function showModeratorRoleManager(tabKey = null)' in MINI_APP_HTML
+    assert 'class="slider round"' in MINI_APP_HTML
     assert 'function profileAvatarHtml(user, cosmetics = {}, small = false)' in MINI_APP_HTML
     assert 'function friendRowHtml(friend)' in MINI_APP_HTML
     assert ".profile-avatar img { position: relative; z-index: 2;" in MINI_APP_HTML

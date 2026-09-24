@@ -666,6 +666,25 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     .slider.round,
     .slider.round::before { border-radius: 999px; }
+    .access-feature-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 54px 54px;
+      align-items: center;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--panel-2);
+    }
+    .access-feature-row > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+    .access-feature-row.child > span:first-child { padding-left: 12px; }
+    .access-switch-heading {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 54px 54px;
+      gap: 10px;
+      padding: 0 12px;
+      text-align: center;
+    }
     body[data-theme="glass"] .rules-chat-picker,
     body[data-theme="glass"] .setting-switch-row {
       border-color: #ffffff4a;
@@ -2713,8 +2732,8 @@ MINI_APP_HTML = r"""<!doctype html>
     const active = tabs.find(tab => tab.key === tabKey) || tabs[0];
     window.currentRoleTabKey = active.key;
     content.innerHTML = `<section class="panel">
-      <h2>Роли</h2>
-      <p class="muted">Вкладки разделяют роли приложения и роли по конкретным группам: так видно, из какой группы пришёл админ или модер.</p>
+      <h2>${window.currentRoleManagerMode === "moderator" ? "Модераторы" : "Роли"}</h2>
+      <p class="muted">${window.currentRoleManagerMode === "moderator" ? "Назначение и снятие модераторов в доступных группах." : "Вкладки разделяют роли приложения и роли по конкретным группам: так видно, из какой группы пришёл админ или модер."}</p>
       ${roleTabsHtml(tabs, active.key)}
       <p class="muted">${escapeHtml(active.subtitle || "")}</p>
     </section>
@@ -2726,10 +2745,14 @@ MINI_APP_HTML = r"""<!doctype html>
   function adminSectionHtml(section) {
     const action = section.key === "roles" && section.enabled
       ? `<button class="btn secondary" onclick="showRoleManager()">Открыть роли</button>`
+      : section.key === "access" && section.enabled
+        ? `<button class="btn secondary" onclick="showAccessManager()">Открыть доступ</button>`
+      : section.key === "moderator-roles" && section.enabled
+        ? `<button class="btn secondary" onclick="showModeratorRoleManager()">Открыть модераторов</button>`
       : section.key === "mine" && section.enabled
         ? `<button class="btn secondary" onclick="showMineAdmin()">Открыть шахту</button>`
         : section.key === "moderation" && section.enabled
-          ? `<button class="btn secondary" onclick="showModerationManager()">Открыть модерацию</button>`
+          ? `<button class="btn secondary" onclick="showModerationManager()">Открыть тревоги</button>`
           : section.key === "blacklist" && section.enabled
             ? `<button class="btn secondary" onclick="showBlacklistManager()">Открыть список</button>`
           : section.key === "rules" && section.enabled
@@ -2893,9 +2916,71 @@ MINI_APP_HTML = r"""<!doctype html>
     }
   }
 
+  async function showAccessManager(chatId = null, userId = null) {
+    const requestId = beginScreenRequest("adminPanel");
+    content.innerHTML = `<section class="panel muted">Загружаю права доступа...</section>`;
+    try {
+      const query = new URLSearchParams();
+      if (chatId) query.set("chat_id", String(chatId));
+      if (userId) query.set("user_id", String(userId));
+      const data = await api(`/miniapp/profile/access?${query}`);
+      if (!isCurrentScreenRequest(requestId)) return;
+      const selectedChatId = Number(data.selectedChatId || 0);
+      const selectedUserId = Number(data.selectedUserId || 0);
+      const admins = data.admins || [];
+      const features = data.features || [];
+      content.innerHTML = `<section class="panel">
+        <h2>Доступ</h2>
+        <p class="muted">Права задаются отдельно для каждой группы и пользователя. Только владелец может менять доступ. «Менять» для права «Назначать и снимать модераторов» разрешает выдачу и снятие модерации в этой группе.</p>
+        <div class="mine-admin-form">
+          <label class="wide">Группа
+            <select class="wide" onchange="showAccessManager(this.value)">${triggerChatOptionsHtml(data.chats || [], selectedChatId)}</select>
+          </label>
+          <label class="wide">Администратор или получивший доступ пользователь
+            <select class="wide" onchange="showAccessManager(${selectedChatId}, this.value)">
+              <option value="0">Выберите пользователя</option>
+              ${admins.map(item => `<option value="${Number(item.user_id)}" ${Number(item.user_id) === selectedUserId ? "selected" : ""}>${escapeHtml(item.full_name || item.username || String(item.user_id))} · ID ${Number(item.user_id)}</option>`).join("")}
+            </select>
+          </label>
+          <label class="wide">Telegram ID другого пользователя
+            <input id="accessTargetId" class="wide" type="number" min="1" inputmode="numeric" placeholder="ID пользователя">
+          </label>
+          <button class="btn secondary wide" onclick="showAccessManager(${selectedChatId}, Number(document.getElementById('accessTargetId')?.value || 0))">Выбрать по ID</button>
+        </div>
+      </section>
+      ${selectedUserId && selectedChatId ? `<section class="panel">
+        <h2>Права · ID ${selectedUserId}</h2>
+        <div class="access-switch-heading"><span></span><span>Видеть</span><span>Менять</span></div>
+        <div class="role-list">${features.map(item => `<div class="access-feature-row${item.child ? " child" : ""}">
+          <span>${escapeHtml(item.title)}</span>
+          <label class="switch" aria-label="Видеть: ${escapeHtml(item.title)}"><input type="checkbox" data-feature="${escapeHtml(item.id)}" ${item.view ? "checked" : ""} onchange="saveAccessPermission(${selectedChatId}, ${selectedUserId}, this.dataset.feature, 'view', this.checked)"><span class="slider round"></span></label>
+          <label class="switch" aria-label="Менять: ${escapeHtml(item.title)}"><input type="checkbox" data-feature="${escapeHtml(item.id)}" ${item.write ? "checked" : ""} onchange="saveAccessPermission(${selectedChatId}, ${selectedUserId}, this.dataset.feature, 'write', this.checked)"><span class="slider round"></span></label>
+        </div>`).join("")}</div>
+      </section>` : `<section class="panel muted">Выберите группу и пользователя, чтобы настроить права.</section>`}
+      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
+      scrollToTop();
+    } catch (error) {
+      if (isCurrentScreenRequest(requestId)) showError(error);
+    }
+  }
+
+  async function saveAccessPermission(chatId, userId, feature, mode, allowed) {
+    try {
+      await api("/miniapp/profile/access", {
+        method: "POST",
+        body: JSON.stringify({ chatId: Number(chatId), userId: Number(userId), feature, mode, allowed })
+      });
+      showNotice("Право доступа сохранено.");
+      showAccessManager(chatId, userId);
+    } catch (error) {
+      alert(error.message);
+      showAccessManager(chatId, userId);
+    }
+  }
+
   async function showModerationManager(chatId = null) {
     const requestId = beginScreenRequest("adminPanel");
-    content.innerHTML = `<section class="panel muted">Загружаю модерацию...</section>`;
+    content.innerHTML = `<section class="panel muted">Загружаю настройки тревог...</section>`;
     try {
       const path = chatId ? `/miniapp/profile/moderation?chat_id=${encodeURIComponent(chatId)}` : "/miniapp/profile/moderation";
       const data = await api(path);
@@ -2959,8 +3044,8 @@ MINI_APP_HTML = r"""<!doctype html>
         </div>` : `<p class="muted">Источник: <b>${escapeHtml(alarm.sourceTitle || "")}</b> · ${escapeHtml(alarm.locationTitle || "")}. Изменять тревогу может только администратор этой группы.</p>`}
       </section>` : "";
       content.innerHTML = `<section class="panel">
-        <h2>Модерация</h2>
-        <p class="muted">Здесь только настройки модерации выбранной группы. Роли назначаются в отдельном разделе “Роли”, логи уходят в staff-группу.</p>
+        <h2>Настройки тревог</h2>
+        <p class="muted">Выберите группу, источник тревоги и способ оповещения.</p>
         <div class="mine-admin-form">
           <select id="moderationChatSelect" class="wide" onchange="showModerationManager(this.value)">
             ${triggerChatOptionsHtml(chats, selectedChatId)}
@@ -2968,7 +3053,7 @@ MINI_APP_HTML = r"""<!doctype html>
         </div>
       </section>
       ${alarmTools}
-      ${selectedChatId ? "" : `<section class="panel muted">Нет доступных чатов для модерации.</section>`}
+      ${selectedChatId ? "" : `<section class="panel muted">Нет доступных групп для настройки тревог.</section>`}
       <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
       scrollToTop();
     } catch (error) {
@@ -3027,7 +3112,7 @@ MINI_APP_HTML = r"""<!doctype html>
         body: JSON.stringify({ chatId: Number(chatId), target, role })
       });
       showNotice("Роль модерации выдана.");
-      showRoleManager(window.currentRoleTabKey);
+      refreshRoleManager();
     } catch (error) {
       alert(error.message);
     }
@@ -3041,7 +3126,7 @@ MINI_APP_HTML = r"""<!doctype html>
         body: JSON.stringify({ chatId: Number(chatId), target: String(target) })
       });
       showNotice("Роль модерации снята.");
-      showRoleManager(window.currentRoleTabKey);
+      refreshRoleManager();
     } catch (error) {
       alert(error.message);
     }
@@ -3376,6 +3461,7 @@ MINI_APP_HTML = r"""<!doctype html>
 
   async function showRoleManager(tabKey = null) {
     setScreenHeader("adminPanel");
+    window.currentRoleManagerMode = "owner";
     content.innerHTML = `<section class="panel muted">Загружаю роли...</section>`;
     try {
       const data = await api("/miniapp/profile/roles");
@@ -3384,6 +3470,25 @@ MINI_APP_HTML = r"""<!doctype html>
     } catch (error) {
       showError(error);
     }
+  }
+
+  async function showModeratorRoleManager(tabKey = null) {
+    const requestId = beginScreenRequest("adminPanel");
+    window.currentRoleManagerMode = "moderator";
+    content.innerHTML = `<section class="panel muted">Загружаю модераторов...</section>`;
+    try {
+      const data = await api("/miniapp/profile/moderation/role-tabs");
+      if (!isCurrentScreenRequest(requestId)) return;
+      window.currentRoleTabs = data.tabs || [];
+      renderRoleManagerTab(tabKey || window.currentRoleTabKey);
+    } catch (error) {
+      if (isCurrentScreenRequest(requestId)) showError(error);
+    }
+  }
+
+  function refreshRoleManager() {
+    if (window.currentRoleManagerMode === "moderator") showModeratorRoleManager(window.currentRoleTabKey);
+    else showRoleManager(window.currentRoleTabKey);
   }
 
   async function setProfileRole(roleKey = "", label = "") {

@@ -132,6 +132,14 @@ class MiniAppModeratorRoleClear(BaseModel):
     target: str = Field(min_length=1, max_length=64)
 
 
+class MiniAppAccessSet(BaseModel):
+    chatId: int
+    userId: int = Field(gt=0)
+    feature: str = Field(min_length=1, max_length=64)
+    mode: str = Field(pattern=r"^(view|write)$")
+    allowed: bool
+
+
 class MiniAppBlacklistSave(BaseModel):
     chatId: int
     word: str = Field(min_length=1, max_length=120)
@@ -810,7 +818,39 @@ async def _refresh_miniapp_telegram_admins(db: Database) -> list[dict[str, Any]]
 
 
 def _miniapp_can_view_admin_panel(db: Database, user_id: int) -> bool:
-    return _miniapp_is_app_admin(db, user_id) or bool(db.list_user_moderator_roles(user_id))
+    return (
+        _miniapp_is_app_admin(db, user_id)
+        or bool(db.list_user_moderator_roles(user_id))
+        or bool(_miniapp_moderator_role_chat_ids(db, user_id))
+    )
+
+
+def _miniapp_moderator_role_chat_ids(db: Database, user_id: int) -> set[int]:
+    if _miniapp_can_manage_roles(user_id):
+        return {int(chat.chat_id) for chat in db.list_chats()}
+    return {
+        int(chat.chat_id) for chat in db.list_chats()
+        if db.admin_feature_allowed(chat.chat_id, user_id, "moderationRoles.write")
+    }
+
+
+def _miniapp_can_assign_moderators(db: Database, chat_id: int, user_id: int) -> bool:
+    return int(chat_id) in _miniapp_moderator_role_chat_ids(db, user_id)
+
+
+def _miniapp_feature_allowed(db: Database, chat_id: int, user_id: int, feature: str, mode: str) -> bool:
+    key = f"{feature}.{mode}"
+    value = db.admin_feature_permission(chat_id, user_id, key)
+    if value is not None:
+        return value
+    if any(db.has_admin_feature_permission(chat_id, user_id, f"{feature}.{item}") for item in ("view", "write")):
+        return False
+    legacy = db.admin_feature_permission(chat_id, user_id, feature)
+    if legacy is not None:
+        return legacy
+    if "." in feature:
+        return _miniapp_feature_allowed(db, chat_id, user_id, feature.split(".", 1)[0], mode)
+    return False
 
 
 def _miniapp_profile_role_groups(db: Database) -> list[dict[str, Any]]:
@@ -2906,14 +2946,120 @@ def miniapp_profile_admin_panel(
             },
             "sections": [
                 {"key": "roles", "title": "Роли", "enabled": is_owner, "description": "Выдача ролей приложения."},
+                {"key": "access", "title": "Доступ", "enabled": is_owner, "description": "Права админки бота для каждого пользователя и группы."},
+                {"key": "moderator-roles", "title": "Модераторы", "enabled": bool(_miniapp_moderator_role_chat_ids(db, user["id"])), "description": "Назначение и снятие модераторов по группам."},
                 {"key": "mine", "title": "Шахта", "enabled": _miniapp_can_view_mine_admin(db, user["id"]), "description": "Управление для владельца, просмотр для модераторов."},
-                {"key": "moderation", "title": "Модерация", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Управление тревогой по группам."},
+                {"key": "moderation", "title": "Настройки тревог", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Источники и уведомления о тревоге по группам."},
                 {"key": "rules", "title": "Правила", "enabled": _miniapp_can_manage_rules(db, user["id"]), "description": "Текст правил и периодическое напоминание в группах."},
                 {"key": "blacklist", "title": "Чёрный список", "enabled": _miniapp_can_manage_blacklist(db, user["id"]), "description": "Запрещённые слова, формы и синонимы."},
                 {"key": "triggers", "title": "Триггеры", "enabled": _miniapp_can_manage_triggers(db, user["id"]), "description": "Слова и фразы, на которые бот отвечает в чатах."},
                 {"key": "inline-stats", "title": "Inline-статистика", "enabled": _miniapp_has_global_admin_access(db, user["id"]), "description": "Глобальные вызовы погоды и карт тревог за день, неделю и месяц."},
             ],
         }
+    finally:
+        db.close()
+
+
+@router.get("/miniapp/profile/access")
+def miniapp_profile_access(
+    chat_id: int | None = Query(default=None),
+    user_id: int | None = Query(default=None),
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    actor = _telegram_user(x_telegram_init_data)
+    if not _miniapp_can_manage_roles(actor["id"]):
+        raise HTTPException(403, "Управлять доступом может только владелец.")
+    from .bot import ADMIN_FEATURES, ADMIN_SUBFEATURES
+
+    db = _db()
+    try:
+        chats = db.list_chats()
+        selected = int(chat_id) if chat_id is not None else (int(chats[0].chat_id) if chats else 0)
+        if selected and db.get_chat(selected) is None:
+            raise HTTPException(404, "Группа не найдена.")
+        admins = [
+            item for item in db.list_chat_telegram_admins(selected)
+            if int(item["user_id"]) != actor["id"]
+        ] if selected else []
+        assigned_ids = {int(item.user_id) for item in db.list_admin_feature_permissions(selected)} if selected else set()
+        known_ids = {int(item["user_id"]) for item in admins}
+        for assigned_id in sorted(assigned_ids - known_ids):
+            known = db.get_known_user(assigned_id)
+            admins.append({
+                "user_id": assigned_id,
+                "username": known.username if known else "",
+                "full_name": known.full_name if known else str(assigned_id),
+                "status": "delegated",
+            })
+        target_id = int(user_id) if user_id is not None else (int(admins[0]["user_id"]) if admins else 0)
+        if target_id < 0:
+            raise HTTPException(400, "Некорректный Telegram ID.")
+        features = []
+        if target_id and selected:
+            for feature, title in ADMIN_FEATURES:
+                for feature_id, feature_title in [(feature, title), *ADMIN_SUBFEATURES.get(feature, [])]:
+                    features.append({
+                        "id": feature_id,
+                        "title": feature_title,
+                        "child": feature_id != feature,
+                        "view": _miniapp_feature_allowed(db, selected, target_id, feature_id, "view"),
+                        "write": _miniapp_feature_allowed(db, selected, target_id, feature_id, "write"),
+                    })
+        return {
+            "ok": True,
+            "chats": [_miniapp_chat_public(chat) for chat in chats],
+            "selectedChatId": selected,
+            "selectedUserId": target_id,
+            "admins": admins,
+            "features": features,
+        }
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/access")
+def miniapp_profile_access_set(
+    payload: MiniAppAccessSet,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    actor = _telegram_user(x_telegram_init_data)
+    if not _miniapp_can_manage_roles(actor["id"]):
+        raise HTTPException(403, "Управлять доступом может только владелец.")
+    from .bot import ADMIN_PERMISSION_IDS, admin_permission_key
+
+    if payload.feature not in ADMIN_PERMISSION_IDS:
+        raise HTTPException(400, "Неизвестное право.")
+    if payload.userId == actor["id"]:
+        raise HTTPException(400, "Права владельца менять нельзя.")
+    db = _db()
+    try:
+        if db.get_chat(payload.chatId) is None:
+            raise HTTPException(404, "Группа не найдена.")
+        db.set_admin_feature_permission(
+            payload.chatId, payload.userId,
+            admin_permission_key(payload.feature, payload.mode), payload.allowed, actor["id"],
+        )
+        if "." not in payload.feature:
+            db.set_admin_feature_permission(payload.chatId, payload.userId, payload.feature, False, actor["id"])
+        return {"ok": True, "allowed": payload.allowed}
+    finally:
+        db.close()
+
+
+@router.get("/miniapp/profile/moderation/role-tabs")
+def miniapp_profile_moderator_role_tabs(
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    actor = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        chat_ids = _miniapp_moderator_role_chat_ids(db, actor["id"])
+        if not chat_ids:
+            raise HTTPException(403, "Нет прав на назначение модераторов.")
+        return {"ok": True, "tabs": [
+            tab for tab in _miniapp_role_tabs(db)
+            if int(tab.get("chatId") or 0) in chat_ids
+        ]}
     finally:
         db.close()
 
@@ -3104,13 +3250,13 @@ def miniapp_profile_moderation_role_set(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    if not _miniapp_can_manage_roles(user["id"]):
-        raise HTTPException(403, "Назначать роли модерации может только владелец.")
     role = payload.role.strip().casefold()
     if role not in MINIAPP_MODERATOR_ROLE_RANKS:
         raise HTTPException(400, "Можно назначить только помощника, модератора или старшего модератора.")
     db = _db()
     try:
+        if not _miniapp_can_assign_moderators(db, payload.chatId, user["id"]):
+            raise HTTPException(403, "Нет прав на назначение модераторов этой группы.")
         if db.get_chat(payload.chatId) is None:
             raise HTTPException(404, "Чат не найден.")
         target_id, full_name, username = _resolve_profile_role_target(db, payload.target)
@@ -3133,10 +3279,10 @@ def miniapp_profile_moderation_role_clear(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
-    if not _miniapp_can_manage_roles(user["id"]):
-        raise HTTPException(403, "Снимать роли модерации может только владелец.")
     db = _db()
     try:
+        if not _miniapp_can_assign_moderators(db, payload.chatId, user["id"]):
+            raise HTTPException(403, "Нет прав на снятие модераторов этой группы.")
         if db.get_chat(payload.chatId) is None:
             raise HTTPException(404, "Чат не найден.")
         target_id, full_name, username = _resolve_profile_role_target(db, payload.target)

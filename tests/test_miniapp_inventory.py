@@ -14,6 +14,7 @@ from app.miniapp import (
     MiniAppBlacklistDelete,
     MiniAppBlacklistSave,
     MiniAppAlarmSettingsSet,
+    MiniAppAccessSet,
     MiniAppModeratorRoleClear,
     MiniAppModeratorRoleSet,
     MiniAppTriggerDelete,
@@ -1037,6 +1038,59 @@ def test_miniapp_moderation_roles_are_owner_managed(tmp_path, monkeypatch) -> No
         x_telegram_init_data="test",
     )
     assert cleared["removed"] is True
+
+
+def test_miniapp_owner_delegates_moderator_roles_for_one_chat(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OWNER_ID", "42")
+    db_path = tmp_path / "bot.sqlite3"
+    db = Database(str(db_path))
+    db.init()
+    db.upsert_chat(-100, "Allowed", "supergroup", None)
+    db.upsert_chat(-200, "Other", "supergroup", None)
+    db.upsert_seen_user(-100, 7, "helper", "Helper", False)
+    db.close()
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(db_path)))
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _data: {"id": 42})
+
+    grant = MiniAppAccessSet(chatId=-100, userId=8, feature="moderationRoles", mode="write", allowed=True)
+    assert miniapp.miniapp_profile_access_set(grant, x_telegram_init_data="test")["allowed"] is True
+    access = miniapp.miniapp_profile_access(chat_id=-100, user_id=8, x_telegram_init_data="test")
+    permission = next(item for item in access["features"] if item["id"] == "moderationRoles")
+    assert permission["write"] is True
+    assert permission["view"] is False
+
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _data: {"id": 8})
+    db_check = Database(str(db_path))
+    try:
+        assert miniapp._miniapp_can_view_admin_panel(db_check, 8) is True
+    finally:
+        db_check.close()
+    tabs = miniapp.miniapp_profile_moderator_role_tabs(x_telegram_init_data="test")["tabs"]
+    assert {tab["chatId"] for tab in tabs} == {-100}
+    miniapp.miniapp_profile_moderation_role_set(
+        MiniAppModeratorRoleSet(chatId=-100, target="@helper", role="moderator"),
+        x_telegram_init_data="test",
+    )
+    with pytest.raises(Exception) as denied:
+        miniapp.miniapp_profile_moderation_role_set(
+            MiniAppModeratorRoleSet(chatId=-200, target="@helper", role="senior"),
+            x_telegram_init_data="test",
+        )
+    assert getattr(denied.value, "status_code", None) == 403
+    with pytest.raises(Exception) as denied_access:
+        miniapp.miniapp_profile_access_set(grant, x_telegram_init_data="test")
+    assert getattr(denied_access.value, "status_code", None) == 403
+    assert miniapp.miniapp_profile_moderation_role_clear(
+        MiniAppModeratorRoleClear(chatId=-100, target="7"), x_telegram_init_data="test"
+    )["removed"] is True
+
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _data: {"id": 42})
+    revoke = grant.model_copy(update={"allowed": False})
+    miniapp.miniapp_profile_access_set(revoke, x_telegram_init_data="test")
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _data: {"id": 8})
+    with pytest.raises(Exception) as denied_after_revoke:
+        miniapp.miniapp_profile_moderator_role_tabs(x_telegram_init_data="test")
+    assert getattr(denied_after_revoke.value, "status_code", None) == 403
 
 
 def test_miniapp_alarm_settings_are_scoped_to_chat_admin(tmp_path, monkeypatch) -> None:

@@ -574,6 +574,7 @@ ADMIN_FEATURES = [
     ("stars", "Звезды"),
     ("mine", "Шахта"),
     ("logs", "Логи"),
+    ("moderationRoles", "Назначать и снимать модераторов"),
 ]
 ADMIN_FEATURE_IDS = {feature_id for feature_id, _ in ADMIN_FEATURES}
 ADMIN_SUBFEATURES = {
