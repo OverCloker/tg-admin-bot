@@ -1,3 +1,5 @@
+name: otveto4ka
+
 services:
   telegram-bot-api:
     build:
@@ -68,8 +70,8 @@ services:
       FFMPEG_PATH: /usr/bin/ffmpeg
       TZ: Europe/Kiev
     ports:
-      - "8000:8000"
-      - "50000:8000"
+      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:50000:8000"
     volumes:
       - bot_data:/data
       - bot_downloads:/app/downloads

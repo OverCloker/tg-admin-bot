@@ -9,6 +9,7 @@ DEPLOY_NOTICE_DONE=0
 DEPLOY_NOTICE_TARGETS=""
 
 cd "$PROJECT_DIR"
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-otveto4ka}"
 
 env_value() {
     key=$1
@@ -30,7 +31,7 @@ resolve_deploy_notice_targets() {
     # With no explicit list, notify every group registered in the bot database.
     # Keep the legacy target too, but replace its top-level entry with the
     # configured topic when DEPLOY_NOTIFY_THREAD_ID is present.
-    registered_targets=$(docker compose exec -T bot python -c \
+    registered_targets=$(docker compose exec -T --user 10001:10001 bot python -c \
         'from app.config import load_config; from app.db import Database; db=Database(load_config().db_path); print(" ".join(str(chat.chat_id) for chat in db.list_chats())); db.close()' \
         2>/dev/null || true)
     for registered_chat_id in $registered_targets; do
@@ -128,6 +129,25 @@ if [ -z "$BRANCH" ]; then
     echo "Cannot detect current git branch. Pass it explicitly: sh server-deploy.sh main"
     exit 1
 fi
+
+echo "== database backup =="
+# Abort the deployment if a consistent pre-migration backup cannot be made.
+docker compose exec -T --user 10001:10001 api python -c '
+import os, sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+path = Path(os.environ.get("DB_PATH", "/data/bot.sqlite3"))
+directory = path.parent / "backups"
+directory.mkdir(mode=0o700, exist_ok=True)
+backup = directory / ("before-deploy-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:8] + ".sqlite3")
+with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as source, sqlite3.connect(backup) as target:
+    source.backup(target)
+    if target.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+        raise RuntimeError("Backup integrity check failed")
+os.chmod(backup, 0o600)
+print("Database backup:", backup)
+'
 
 echo "== git =="
 git -c safe.directory="$GIT_SAFE_DIR" fetch origin "$BRANCH"

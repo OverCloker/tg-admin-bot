@@ -4,6 +4,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_deploy_pins_project_and_backs_up_before_pull():
+    script = (ROOT / "server-deploy.sh").read_text(encoding="utf-8")
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert 'export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-otveto4ka}"' in script
+    assert compose.startswith("name: otveto4ka\n")
+    assert '"127.0.0.1:8000:8000"' in compose
+    assert '"127.0.0.1:50000:8000"' in compose
+    assert script.index('source.backup(target)') < script.index('pull --ff-only')
+    assert 'exec -T --user 10001:10001 api python' in script
+
+
 def test_auto_update_does_not_exec_deploy_and_uses_kernel_lock():
     script = (ROOT / "server-auto-update.sh").read_text(encoding="utf-8")
 
