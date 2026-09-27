@@ -1248,8 +1248,7 @@ class Database:
                 last_dig_at text,
                 created_at text not null,
                 updated_at text not null,
-                primary key (chat_id, user_id),
-                foreign key (chat_id) references chats(chat_id) on delete cascade
+                primary key (chat_id, user_id)
             );
 
             create table if not exists dig_items (
@@ -1410,6 +1409,7 @@ class Database:
         self._migrate_blacklist_words()
         self._migrate_advertisements()
         self._migrate_global_dig_game()
+        self._migrate_global_dig_foreign_key()
         self._migrate_personal_reminders()
         self._migrate_personal_weather()
         self._migrate_chat_lock_settings()
@@ -1568,6 +1568,26 @@ class Database:
                     last_sent_at = (select last_sent_at from advertisement_settings where chat_id = advertisements.chat_id)
                 """
             )
+
+    def _migrate_global_dig_foreign_key(self) -> None:
+        """Global players belong to users, not to a registered Telegram chat."""
+        if not self._conn.execute('pragma foreign_key_list(dig_players)').fetchall():
+            return
+        if self._conn.execute('pragma foreign_keys').fetchone()[0]:
+            raise RuntimeError("Global mine schema migration requires foreign_keys=OFF")
+        sql = self._conn.execute("select sql from sqlite_master where name='dig_players'").fetchone()[0]
+        import re
+        sql, count = re.subn(r',\s*foreign key\s*\(chat_id\)\s*references chats\(chat_id\)\s*on delete cascade', '', sql, flags=re.I)
+        if count != 1:
+            raise RuntimeError("Unexpected dig_players foreign key definition")
+        sql = re.sub(r'^(CREATE TABLE\s+)(?:"dig_players"|dig_players)', r'\1dig_players_global_restore', sql, count=1, flags=re.I)
+        indexes = [row[0] for row in self._conn.execute("select sql from sqlite_master where tbl_name='dig_players' and type in ('index','trigger') and sql is not null")]
+        self._conn.execute(sql)
+        self._conn.execute('insert into dig_players_global_restore select * from dig_players')
+        self._conn.execute('drop table dig_players')
+        self._conn.execute('alter table dig_players_global_restore rename to dig_players')
+        for index_sql in indexes:
+            self._conn.execute(index_sql)
 
     def _migrate_global_dig_game(self) -> None:
         old_players = self._conn.execute(
