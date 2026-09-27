@@ -8,6 +8,7 @@ __pycache__/
 venv/
 .pytest-tmp/
 .pytest-tmp-*/
+.pytest-restore-audit*/
 .pytest_cache/
 .pytest_tmp*/
 .ruff_cache/
