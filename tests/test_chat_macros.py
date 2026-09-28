@@ -10,6 +10,7 @@ from app import bot, miniapp
 from app.db import Database
 from app.macros import parse_macro_action, validate_macro_phrase
 from app.miniapp import MiniAppMacroDelete, MiniAppMacroSave
+from app.miniapp_ui import MINI_APP_HTML
 
 
 def test_macro_action_language() -> None:
@@ -22,6 +23,13 @@ def test_macro_action_language() -> None:
         parse_macro_action("затихни @bad 30м")
     with pytest.raises(ValueError):
         parse_macro_action("/shell rm -rf /tmp")
+
+
+def test_macro_editor_uses_full_group_picker_and_styled_switch() -> None:
+    assert 'class="rules-chat-picker" for="macroChatSelect"' in MINI_APP_HTML
+    assert 'class="macro-selected-chat"' in MINI_APP_HTML
+    assert 'class="switch" aria-label="Включить макрос"' in MINI_APP_HTML
+    assert '<span class="slider round"></span>' in MINI_APP_HTML
 
 
 def test_macro_save_list_rename_and_delete(tmp_path, monkeypatch) -> None:

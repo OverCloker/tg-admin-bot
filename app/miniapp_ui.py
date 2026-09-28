@@ -598,6 +598,12 @@ MINI_APP_HTML = r"""<!doctype html>
       font-weight: 850 !important;
       line-height: 1.2;
     }
+    .macro-selected-chat {
+      margin: 10px 2px 0;
+      overflow-wrap: anywhere;
+      font-size: clamp(17px, 4vw, 20px);
+      line-height: 1.3;
+    }
     .setting-switch-row {
       grid-column: 1 / -1;
       display: flex;
@@ -3416,7 +3422,13 @@ MINI_APP_HTML = r"""<!doctype html>
           <span id="macroMediaStatus" class="trigger-media-status">${item.mediaBroken ? "Старый файл недоступен — загрузи новый." : item.mediaFileId ? "Вложение сохранено. Новый файл заменит его." : "До 40 МБ."}</span>
           <button class="btn secondary" type="button" style="margin:0" onclick="clearMacroMedia()">Убрать вложение</button>
         </div>
-        <label class="wide"><input id="macroEnabled" type="checkbox" ${item.enabled === false ? "" : "checked"}> Включён</label>
+        <div class="setting-switch-row macro-switch-row wide">
+          <label for="macroEnabled">Макрос включён</label>
+          <label class="switch" aria-label="Включить макрос">
+            <input id="macroEnabled" type="checkbox" ${item.enabled === false ? "" : "checked"}>
+            <span class="slider round"></span>
+          </label>
+        </div>
         <button class="btn" onclick="saveMiniAppMacro(${Number(chatId)})">Сохранить макрос</button>
         <button class="btn secondary" onclick="showMacroManager(${Number(chatId)})">Отмена</button>
       </div>
@@ -3444,11 +3456,18 @@ MINI_APP_HTML = r"""<!doctype html>
       const path = chatId ? `/miniapp/profile/macros?chat_id=${encodeURIComponent(chatId)}` : "/miniapp/profile/macros";
       const data = await api(path);
       const selected = Number(data.selectedChatId || 0);
+      const selectedChat = (data.chats || []).find(chat => Number(chat.id) === selected);
       window.currentMiniAppMacros = data.macros || [];
       content.innerHTML = `<section class="panel">
         <h2>Макросы</h2>
         <p class="muted">Фраза срабатывает только при полном совпадении. Изменение прав администратора или модератора действует сразу.</p>
-        <select class="wide" onchange="showMacroManager(this.value)">${triggerChatOptionsHtml(data.chats || [], selected)}</select>
+        <div class="mine-admin-form">
+          <label class="rules-chat-picker" for="macroChatSelect">
+            <span>Группа</span>
+            <select id="macroChatSelect" onchange="showMacroManager(this.value)">${triggerChatOptionsHtml(data.chats || [], selected)}</select>
+          </label>
+        </div>
+        ${selectedChat ? `<p class="macro-selected-chat"><b>${escapeHtml(selectedChat.title || String(selected))}</b><br><span class="muted">ID ${selected}</span></p>` : ""}
         ${selected ? `<button class="btn" style="margin-top:10px" onclick="showMacroManager(${selected}, { phrase: '', action: '', enabled: true })">Добавить макрос</button>` : ""}
       </section>
       ${selected ? macroEditorHtml(selected, editor) : ""}
