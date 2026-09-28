@@ -7,5 +7,6 @@ fastapi==0.141.1
 python-multipart==0.0.32
 uvicorn[standard]==0.52.1
 faster-whisper==1.2.1
-yt-dlp==2026.7.4
+yt-dlp[default,deno]==2026.8.19
+deno==2.9.5
 Pillow==12.3.0

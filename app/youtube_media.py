@@ -100,6 +100,10 @@ def is_instagram_url(url: str) -> bool:
 def friendly_error(exc: Exception) -> YoutubeMediaError:
     text = str(exc)
     lowered = text.lower()
+    if "sign in to confirm" in lowered and "not a bot" in lowered:
+        return YoutubeMediaError(
+            "YouTube просит подтвердить запрос с сервера. Видео может быть публичным; попробуйте позже."
+        )
     if "private video" in lowered or "sign in" in lowered or "login" in lowered:
         return YoutubeMediaError("Видео требует авторизацию или является приватным.")
     if "not available in your country" in lowered or "geo" in lowered:

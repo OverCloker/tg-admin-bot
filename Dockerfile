@@ -20,7 +20,9 @@ RUN apt-get update \
 
 COPY requirements.txt .
 RUN python -m pip install --upgrade pip \
-    && pip install -r requirements.txt
+    && pip install -r requirements.txt \
+    && deno --version \
+    && python -c "import importlib.util; assert importlib.util.find_spec('yt_dlp_ejs')"
 
 COPY app ./app
 COPY README.md ./
