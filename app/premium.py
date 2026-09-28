@@ -105,6 +105,8 @@ class PremiumService:
         raw_path = getattr(db_path, "path", db_path)
         self.path = Path(raw_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        owner_id = os.getenv("OWNER_ID", "").strip()
+        self._lifetime_owner_id = int(owner_id) if owner_id.isdecimal() else None
         self._lock = RLock()
         self._conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -241,8 +243,13 @@ class PremiumService:
     def has_active_premium(self, user_id: int) -> bool:
         return self.get_user_plan(user_id) is not None
 
+    def has_lifetime_premium(self, user_id: int) -> bool:
+        return self._lifetime_owner_id is not None and int(user_id) == self._lifetime_owner_id
+
     @synchronized
     def get_user_plan(self, user_id: int) -> PlanConfig | None:
+        if self.has_lifetime_premium(user_id):
+            return PLANS["extended"]
         subscription = self.get_user_subscription(user_id)
         if not subscription or subscription["status"] != "active":
             return None

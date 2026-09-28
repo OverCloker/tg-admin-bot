@@ -9806,7 +9806,10 @@ def premium_status_text(user_id: int) -> str:
                 "",
             ]
         )
-    if current and subscription:
+    if current and premium_service.has_lifetime_premium(user_id):
+        lines.append(f"Текущий тариф: <b>{escape(current.title)}</b> — бессрочно")
+        lines.append(f"Использовано медиа-задач сегодня: <b>{premium_service.daily_media_usage(user_id)}/{current.daily_media_tasks}</b>")
+    elif current and subscription:
         lines.append(f"Текущий тариф: <b>{escape(current.title)}</b>")
         lines.append(f"Активен до: <b>{datetime.fromisoformat(subscription['expires_at']).astimezone().strftime('%d.%m.%Y %H:%M')}</b>")
         lines.append(f"Использовано медиа-задач сегодня: <b>{premium_service.daily_media_usage(user_id)}/{current.daily_media_tasks}</b>")

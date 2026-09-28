@@ -295,6 +295,7 @@ def _active_premium(premium: PremiumService, user_id: int) -> dict[str, Any]:
     subscription = premium.get_user_subscription(user_id)
     return {
         "active": plan is not None,
+        "lifetime": premium.has_lifetime_premium(user_id),
         "plan": plan_public_dict(plan) if plan else None,
         "subscription": dict(subscription) if subscription else None,
     }
@@ -437,10 +438,13 @@ def profile_chat_text(profile: dict[str, Any], short: bool = True) -> str:
     premium_text = "активен"
     if premium.get("active") and premium.get("plan"):
         premium_text = premium["plan"].get("title", "Premium")
-        subscription = premium.get("subscription") or {}
-        expires = _format_dt(subscription.get("expires_at"))
-        if expires:
-            premium_text += f" до {escape(expires)}"
+        if premium.get("lifetime"):
+            premium_text += " — бессрочно"
+        else:
+            subscription = premium.get("subscription") or {}
+            expires = _format_dt(subscription.get("expires_at"))
+            if expires:
+                premium_text += f" до {escape(expires)}"
     elif not premium.get("active"):
         premium_text = "не активен"
 

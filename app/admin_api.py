@@ -3570,6 +3570,7 @@ def premium_me(user: Annotated[dict[str, Any], Depends(require_user)]) -> dict[s
         subscription = premium.get_user_subscription(user_id)
         return {
             "active": plan is not None,
+            "lifetime": premium.has_lifetime_premium(user_id),
             "plan": plan_public_dict(plan) if plan else None,
             "subscription": dict(subscription) if subscription else None,
             "usageToday": premium.daily_media_usage(user_id),
@@ -3592,6 +3593,7 @@ def user_premium_me(user: Annotated[dict[str, Any], Depends(require_user)]) -> d
         subscription = premium.get_user_subscription(user_id)
         return {
             "active": plan is not None,
+            "lifetime": premium.has_lifetime_premium(user_id),
             "plan": plan_public_dict(plan) if plan else None,
             "subscription": dict(subscription) if subscription else None,
             "usageToday": premium.daily_media_usage(user_id),
@@ -3823,6 +3825,7 @@ async def user_me(request: Request, user: Annotated[dict[str, Any], Depends(requ
         premium_subscription = premium.get_user_subscription(user_id)
         premium_data = {
             "active": premium_plan is not None,
+            "lifetime": premium.has_lifetime_premium(user_id),
             "plan": plan_public_dict(premium_plan) if premium_plan else None,
             "subscription": dict(premium_subscription) if premium_subscription else None,
             "usageToday": premium.daily_media_usage(user_id),

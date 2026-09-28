@@ -3892,7 +3892,7 @@ MINI_APP_HTML = r"""<!doctype html>
     const viewer = profile.viewer || {};
     const friends = social.friends || [];
     const isSelf = viewer.isSelf !== false;
-    const premiumText = premium.active ? (plan.title || "Premium активен") : "не активен";
+    const premiumText = premium.active ? `${plan.title || "Premium активен"}${premium.lifetime ? " · бессрочно" : ""}` : "не активен";
     const cosmeticsBadges = (cosmetics.badges || []).map(item => `${escapeHtml(item.emoji || "")} ${escapeHtml(item.title || "")}`).join(" · ");
     const cosmeticsHtml = (cosmetics.frame || cosmetics.background || cosmeticsBadges) ? `
       <section class="panel">
