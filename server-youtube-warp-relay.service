@@ -1,0 +1,18 @@
+[Unit]
+Description=Private YouTube WARP proxy relay for OtvetO4ka Docker network
+Requires=docker.service
+Wants=warp-svc.service
+After=docker.service warp-svc.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/otveto4ka-youtube-warp-relay
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

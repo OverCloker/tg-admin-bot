@@ -503,3 +503,48 @@ https://bot.example.com/miniapp
 Cloudflare Tunnel is for browser/API traffic. Keep SSH and Portainer behind
 Tailscale. This gives the correct split: Cloudflare for users and Mini App,
 Tailscale for private server administration.
+
+## YouTube downloads through WARP local proxy (optional)
+
+This is for a server whose direct IP gets YouTube's "not a bot" challenge.
+It does not replace Cloudflare Tunnel and does not route the bot's other
+requests through WARP. Confirm that `warp-cli settings` says
+`Mode: WarpProxy on port 40000` before installing the relay. Do not use the
+full-device `warp` mode on a remote VPS.
+
+On the VPS, after installing/registering WARP and testing a download through
+`socks5://127.0.0.1:40000`, install the private relay:
+
+```bash
+cd /home/debian/otveto4ka-current
+sudo sh server-install-youtube-warp-relay.sh
+sudo ss -ltn '( sport = :40001 )'
+```
+
+The relay binds only to Docker's private `bridge` gateway, accepts clients
+only from `otveto4ka_default`'s subnet, and forwards them to WARP's loopback
+proxy. It is not a public Docker port. The service starts WARP only after
+checking proxy mode; its process drops to `nobody` before accepting traffic.
+If Docker's project subnet changes, restart the relay service.
+
+Test from the Compose network before changing bot settings:
+
+```bash
+sudo docker compose run --rm --no-deps --user 10001:10001 --entrypoint python bot \
+  -m yt_dlp --proxy socks5://host.docker.internal:40001 --simulate --no-playlist \
+  'https://www.youtube.com/watch?v=jNQXAC9IVRw'
+```
+
+Only after that succeeds, put this line in the server's private `.env` and
+recreate `bot` and `api`:
+
+```env
+YOUTUBE_PROXY_URL=socks5://host.docker.internal:40001
+```
+
+`inspect_youtube` and `download_youtube` then use the proxy for YouTube and
+YouTube Music; Instagram and all other bot traffic remain direct. The proxy
+URL is optional, so an empty value preserves previous behavior. Check
+`systemctl status otveto4ka-youtube-warp-relay.service` and `warp-cli status`
+after reboot. WARP's exit IP may be challenged by YouTube later; it is not a
+guaranteed permanent bypass.

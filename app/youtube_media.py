@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 import time
@@ -97,6 +98,14 @@ def is_instagram_url(url: str) -> bool:
     return host.casefold().rstrip(".") in INSTAGRAM_HOSTS
 
 
+def _apply_youtube_proxy(options: dict, url: str) -> None:
+    """Use the optional proxy for YouTube without changing Instagram traffic."""
+    if not is_instagram_url(url):
+        proxy = os.getenv("YOUTUBE_PROXY_URL", "").strip()
+        if proxy:
+            options["proxy"] = proxy
+
+
 def friendly_error(exc: Exception) -> YoutubeMediaError:
     text = str(exc)
     lowered = text.lower()
@@ -159,6 +168,7 @@ def inspect_youtube(url: str, download_type: str | None = None) -> YoutubeInfo:
         "noplaylist": True,
         "socket_timeout": 20,
     }
+    _apply_youtube_proxy(options, url)
     try:
         with YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -222,6 +232,7 @@ def download_youtube(url: str, download_type: str, task_id: int, max_file_size: 
         "fragment_retries": 3,
         "file_access_retries": 3,
     }
+    _apply_youtube_proxy(options, url)
     if max_file_size and max_file_size > 0:
         options["max_filesize"] = int(max_file_size)
     if is_instagram_url(url) and download_type != "video_mp4":
