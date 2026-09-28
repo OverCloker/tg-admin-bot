@@ -915,6 +915,7 @@ def test_miniapp_chat_admin_and_moderator_only_see_their_chats(tmp_path, monkeyp
     assert panel["summary"]["chats"] == 2
     assert panel["summary"]["triggers"] == 1
     assert panel["summary"]["blacklistWords"] == 1
+    assert next(section for section in panel["sections"] if section["key"] == "mine")["title"] == "Настройки шахты"
     assert {chat["id"] for chat in moderation["chats"]} == {-100, -200}
     assert {chat["id"] for chat in triggers["chats"]} == {-100}
     assert {chat["id"] for chat in blacklist["chats"]} == {-100}

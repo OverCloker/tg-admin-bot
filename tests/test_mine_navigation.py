@@ -116,7 +116,7 @@ def test_current_telegram_url_wins_over_stale_launch_data() -> None:
     assert 'initialView === "shop" && state.registered' not in MINI_APP_HTML
     assert 'normalized.startsWith("shop_")' in MINI_APP_HTML
     assert 'currentUserId !== intendedOwner' in MINI_APP_HTML
-    assert 'catch (error) { if (initialView !== "profile") throw error; }' in MINI_APP_HTML
+    assert 'if (["mine", "shop", "bag"].includes(initialView)) {' in MINI_APP_HTML
 
 
 def test_miniapp_contains_requested_animations() -> None:
@@ -262,7 +262,7 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'Редактировать</button>' in MINI_APP_HTML
     assert 'Удалить</button>' in MINI_APP_HTML
     assert 'Открыть триггеры' in MINI_APP_HTML
-    assert '${adminPanelButtonHtml(viewer)}' in MINI_APP_HTML
+    assert '${isSelf ? adminPanelButtonHtml(viewer) : ""}' in MINI_APP_HTML
     assert 'group.assignable === false ? ""' in MINI_APP_HTML
     assert 'function roleGroupHtml(group, tab = {})' in MINI_APP_HTML
     assert 'function renderRoleManagerTab(tabKey = null)' in MINI_APP_HTML
@@ -274,7 +274,7 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function setModerationRole(chatId, role)' not in MINI_APP_HTML
     assert 'data.canManageRoles' not in MINI_APP_HTML
     assert 'function showMineAdmin(page = 1)' in MINI_APP_HTML
-    assert 'viewer.canViewMineAdmin' in MINI_APP_HTML
+    assert 'onclick="showMine()">⛏️ Шахта</button>' in MINI_APP_HTML
     assert 'body[data-theme="glass"] .mine-admin-card::before' in MINI_APP_HTML
     assert 'body[data-theme="glass"] .mine-admin-row::before' in MINI_APP_HTML
     assert 'body[data-theme="glass"] .mine-admin-form input' in MINI_APP_HTML
@@ -308,7 +308,7 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert '"/miniapp/profile/mine-admin/delete"' in MINI_APP_HTML
     assert '"/miniapp/profile/mine-admin/block"' in MINI_APP_HTML
     assert '"/miniapp/profile/mine-admin/unblock"' in MINI_APP_HTML
-    assert 'onclick="showMineAdmin()">⛏️ Шахта</button>' in MINI_APP_HTML
+    assert 'onclick="showMineAdmin()">Настройки шахты</button>' in MINI_APP_HTML
     assert '"/miniapp/profile/roles"' in MINI_APP_HTML
     assert 'function showModerationManager(chatId = null)' in MINI_APP_HTML
     assert '"/miniapp/profile/moderation/roles"' in MINI_APP_HTML
@@ -401,13 +401,30 @@ def test_miniapp_has_interface_themes() -> None:
     assert 'settings.theme' in MINI_APP_HTML
 
 
-def test_miniapp_replaces_rank_card_with_two_utility_buttons_on_mine() -> None:
+def test_miniapp_utility_actions_live_in_own_profile_not_mine() -> None:
     mine_html = MINI_APP_HTML.split("function mineHtml()", 1)[1].split("function goldTicketHtml()", 1)[0]
+    profile_html = MINI_APP_HTML.split("function renderProfile(profile)", 1)[1].split("function showFriendsInfo()", 1)[0]
 
-    assert "${utilityActionsHtml()}" in mine_html
+    assert "${utilityActionsHtml()}" not in mine_html
+    assert '${isSelf ? `<section class="panel"><h2>Для меня</h2>${utilityActionsHtml()}</section>` : ""}' in profile_html
+    assert 'onclick="showMine()">⛏️ Шахта</button>' in profile_html
+    assert '${isSelf ? adminPanelButtonHtml(viewer) : ""}' in profile_html
+    assert 'mineAdminButtonHtml' not in MINI_APP_HTML
     assert "${rankCosmeticHtml(false)}" not in mine_html
     assert '<button class="btn secondary" onclick="showWeather()">Погода</button>' in MINI_APP_HTML
     assert '<button class="btn secondary" onclick="showRadio()">Радио</button>' in MINI_APP_HTML
+
+
+def test_miniapp_independent_profile_screens_do_not_require_mine_access() -> None:
+    load_html = MINI_APP_HTML.split("async function load()", 1)[1].split("async function registerMine()", 1)[0]
+    assert 'if (["mine", "shop", "bag"].includes(initialView)) {' in load_html
+    assert 'state = await api("/miniapp/mine");' in load_html
+    assert 'else if (initialView === "weather") await showWeather();' in load_html
+    assert 'else if (initialView === "reminders") await showReminders();' in load_html
+    assert 'else if (initialView === "rules") await showRules(readRulesChatId());' in load_html
+    assert 'else if (initialView === "mine") renderMine();' in load_html
+    assert 'else await showProfile();' in load_html
+    assert 'onclick="showProfile()">Назад к профилю</button>' in MINI_APP_HTML
 
 
 def test_secret_message_command_is_removed() -> None:

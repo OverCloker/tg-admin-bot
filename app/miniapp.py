@@ -3032,7 +3032,7 @@ def miniapp_profile_admin_panel(
                 {"key": "roles", "title": "Роли", "enabled": is_owner, "description": "Выдача ролей приложения."},
                 {"key": "access", "title": "Доступ", "enabled": is_owner, "description": "Права админки бота для каждого пользователя и группы."},
                 {"key": "moderator-roles", "title": "Модераторы", "enabled": bool(_miniapp_moderator_role_chat_ids(db, user["id"])), "description": "Назначение и снятие модераторов по группам."},
-                {"key": "mine", "title": "Шахта", "enabled": _miniapp_can_view_mine_admin(db, user["id"]), "description": "Управление для владельца, просмотр для модераторов."},
+                {"key": "mine", "title": "Настройки шахты", "enabled": _miniapp_can_view_mine_admin(db, user["id"]), "description": "Управление для владельца, просмотр для модераторов."},
                 {"key": "moderation", "title": "Настройки тревог", "enabled": _miniapp_can_view_moderation(db, user["id"]), "description": "Источники и уведомления о тревоге по группам."},
                 {"key": "rules", "title": "Правила", "enabled": _miniapp_can_manage_rules(db, user["id"]), "description": "Текст правил и периодическое напоминание в группах."},
                 {"key": "blacklist", "title": "Чёрный список", "enabled": _miniapp_can_manage_blacklist(db, user["id"]), "description": "Запрещённые слова, формы и синонимы."},

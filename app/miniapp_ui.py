@@ -1949,7 +1949,8 @@ MINI_APP_HTML = r"""<!doctype html>
     if (target === "radio") return showRadio();
     if (target === "rules") return showRules();
     if (target === "mineAdmin") return showMineAdmin();
-    return renderMine();
+    if (target === "adminPanel") return showAdminPanel();
+    return showMine();
   }
 
   function scrollToTop() {
@@ -2220,14 +2221,14 @@ MINI_APP_HTML = r"""<!doctype html>
         </select>
       </section>` : "";
       if (!selectedChatId || !(data.rulesText || "").trim()) {
-        content.innerHTML = `<section class="panel"><h2>Правила</h2><p class="muted">Для ваших групп правила пока не опубликованы. В чате их также можно открыть командой «важное».</p></section>`;
+        content.innerHTML = `<section class="panel"><h2>Правила</h2><p class="muted">Для ваших групп правила пока не опубликованы. В чате их также можно открыть командой «важное».</p></section><section class="panel"><button class="btn secondary" onclick="showProfile()">Назад к профилю</button></section>`;
         return;
       }
       content.innerHTML = `${selector}<section class="panel">
         <h2>Правила · ${escapeHtml(data.selectedChat?.title || "Группа")}</h2>
         <p class="muted"><b>Обязательно к прочтению</b></p>
         <div class="rules-body">${escapeHtml(data.rulesText || "")}</div>
-      </section>`;
+      </section><section class="panel"><button class="btn secondary" onclick="showProfile()">Назад к профилю</button></section>`;
       scrollToTop();
     } catch (error) {
       if (isCurrentScreenRequest(requestId)) showError(error);
@@ -2353,7 +2354,7 @@ MINI_APP_HTML = r"""<!doctype html>
         <input id="weatherCityInput" placeholder="Например: Кривой Рог" value="${escapeHtml(settings.weatherCity || "")}">
         <div class="mini-row">
           <button class="btn" onclick="refreshMiniWeather(true)">Обновить</button>
-          <button class="btn secondary" onclick="renderMine()">Назад</button>
+          <button class="btn secondary" onclick="showProfile()">Назад к профилю</button>
         </div>
       </div>
     </section>${weatherBlock}`;
@@ -2437,7 +2438,7 @@ MINI_APP_HTML = r"""<!doctype html>
           <button class="btn" onclick="savePersonalWeather()">Сохранить расписание</button>
           <div class="mini-row">
             <button class="btn secondary" onclick="showWeather()">Погода сейчас</button>
-            <button class="btn secondary" onclick="renderMine()">Назад</button>
+            <button class="btn secondary" onclick="showProfile()">Назад к профилю</button>
           </div>
         </div>
       </section>`;
@@ -2577,7 +2578,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <div id="radioNow" class="muted" style="margin-top:10px">${last ? `Последняя станция: ${escapeHtml(last.name)}` : "Станция не выбрана."}</div>
       <p class="muted">Плеер закреплён снизу и не сбрасывается при переходе по Mini App.</p>
       <div id="radioStations" class="radio-list"></div>
-      <button class="btn secondary" onclick="renderMine()">Назад в шахту</button>
+      <button class="btn secondary" onclick="showProfile()">Назад к профилю</button>
     </section>`;
     renderRadioResults();
     scrollToTop();
@@ -2697,12 +2698,6 @@ MINI_APP_HTML = r"""<!doctype html>
       : "";
   }
 
-  function mineAdminButtonHtml(viewer) {
-    return viewer && viewer.canViewMineAdmin
-      ? `<button class="btn secondary" onclick="showMineAdmin()">⛏️ Шахта</button>`
-      : "";
-  }
-
   function roleRowHtml(item, group = {}, tab = {}) {
     const sourceTitle = item.source === "owner"
       ? "владелец"
@@ -2782,7 +2777,7 @@ MINI_APP_HTML = r"""<!doctype html>
       : section.key === "moderator-roles" && section.enabled
         ? `<button class="btn secondary" onclick="showModeratorRoleManager()">Открыть модераторов</button>`
       : section.key === "mine" && section.enabled
-        ? `<button class="btn secondary" onclick="showMineAdmin()">Открыть шахту</button>`
+        ? `<button class="btn secondary" onclick="showMineAdmin()">Настройки шахты</button>`
         : section.key === "moderation" && section.enabled
           ? `<button class="btn secondary" onclick="showModerationManager()">Открыть тревоги</button>`
           : section.key === "blacklist" && section.enabled
@@ -3902,7 +3897,7 @@ MINI_APP_HTML = r"""<!doctype html>
         <h2>Заблокированы в копай</h2>
         <div class="role-list">${blocked.map(item => mineAdminBlockRowHtml(item, canManage)).join("") || `<p class="muted">Блокировок пока нет.</p>`}</div>
       </section>
-      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showProfile()">Назад к профилю</button></section>
+      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>
       </div>`;
       scrollToTop();
     } catch (error) {
@@ -4054,13 +4049,13 @@ MINI_APP_HTML = r"""<!doctype html>
       </div>
       <div class="profile-actions">
         <button class="btn secondary" onclick="showFriendsInfo()">${friends.length ? `Друзья: ${friends.length}` : "Друзья"}</button>
-        ${isSelf ? `<button class="btn secondary" onclick="showBag()">Сумка</button>` : `<button class="btn secondary" onclick="showProfile()">Мой профиль</button>`}
+        ${isSelf ? `<button class="btn secondary" onclick="showMine()">⛏️ Шахта</button><button class="btn secondary" onclick="showBag()">Сумка</button>` : `<button class="btn secondary" onclick="showProfile()">Мой профиль</button>`}
         ${isSelf ? `<button class="btn secondary" onclick="showWardrobe()">Оформить профиль</button><button class="btn secondary" onclick="showShop('gifts')">Купить подарок</button>` : ""}
-        ${adminPanelButtonHtml(viewer)}
-        ${mineAdminButtonHtml(viewer)}
+        ${isSelf ? adminPanelButtonHtml(viewer) : ""}
       </div>
       ${isSelf ? themeSwitcherHtml() : ""}
     </section>
+    ${isSelf ? `<section class="panel"><h2>Для меня</h2>${utilityActionsHtml()}</section>` : ""}
     ${friendsPreview ? `<section class="panel"><h2>${isSelf ? "Друзья" : "Связи"}</h2><div class="friend-list">${friendsPreview}</div>${friends.length > 3 ? `<button class="btn secondary" onclick="showFriendsInfo()">Показать всех: ${friends.length}</button>` : ""}</section>` : ""}
     <section class="panel">
       <h2>Шахта</h2>
@@ -4072,7 +4067,7 @@ MINI_APP_HTML = r"""<!doctype html>
     ${social.partner && !(social.relationships || []).length ? `<section class="panel"><h2>💕 Отношения</h2><p>Пара: <b>${escapeHtml(social.partner.fullName || 'Игрок')}</b></p><p class="muted">Цветы, парный кристалл и приглашение на свидание остаются памятными подарками в профиле.</p>${isSelf ? `<button class="btn" onclick="showShop('relationships')">Подарок паре</button>` : ''}</section>` : ''}
     <section class="panel"><h2>🎁 Витрина подарков</h2><p class="muted">Подарки остаются в коллекции. Закреплённые показываются первыми.</p>
     ${(mine.gifts || []).map(gift => `<div class="profile-card" style="margin-bottom:12px"><b>${gift.pinned ? "📌 " : ""}${escapeHtml(gift.title)}</b><p>От: ${escapeHtml(gift.sender)} · ${escapeHtml(new Date(gift.createdAt).toLocaleDateString())}</p>${isSelf ? `<button class="btn secondary" onclick="pinGift(${Number(gift.id)}, ${!gift.pinned})">${gift.pinned ? "Открепить" : "Закрепить"}</button>` : ""}</div>`).join("") || '<p class="muted">Здесь появятся подарки от друзей и пары.</p>'}</section>
-    <section class="panel"><button class="btn secondary" style="margin:0" onclick="${isSelf ? "renderMine()" : "showProfile()"}">${isSelf ? "Назад в шахту" : "Назад к моему профилю"}</button></section>`;
+    <section class="panel"><button class="btn secondary" style="margin:0" onclick="${isSelf ? "showMine()" : "showProfile()"}">${isSelf ? "Открыть шахту" : "Назад к моему профилю"}</button></section>`;
     scrollToTop();
   }
 
@@ -4155,7 +4150,6 @@ MINI_APP_HTML = r"""<!doctype html>
         <div class="stat">🍀<b>${state.luck}/100</b></div>
         <div class="stat">🏆<b>${state.record} м</b></div>
       </div>
-      ${utilityActionsHtml()}
       <div class="mine-desktop-layout">
         <div class="mine-dashboard-column">
           ${shiftContractHtml()}
@@ -4319,13 +4313,27 @@ MINI_APP_HTML = r"""<!doctype html>
     if (scroll) scrollToTop();
   }
 
+  async function showMine() {
+    const requestId = beginScreenRequest("mine");
+    content.innerHTML = `<section class="panel muted">Загружаю шахту...</section>`;
+    try {
+      const data = await api("/miniapp/mine");
+      if (!isCurrentScreenRequest(requestId)) return;
+      state = data;
+      renderMine();
+    } catch (error) {
+      if (isCurrentScreenRequest(requestId)) showError(error);
+    }
+  }
+
   async function load() {
     const initialView = readStartParam() || "profile";
     const intendedOwner = readStartOwner();
     setScreenHeader(["shop", "bag", "profile", "weather", "radio", "rules", "reminders", "moderation"].includes(initialView) ? initialView : "mine");
     try {
-      try { state = await api("/miniapp/mine"); }
-      catch (error) { if (initialView !== "profile") throw error; }
+      if (["mine", "shop", "bag"].includes(initialView)) {
+        state = await api("/miniapp/mine");
+      }
       const currentUserId = Number(state?.userId || telegram?.initDataUnsafe?.user?.id || 0);
       if (intendedOwner && currentUserId && currentUserId !== intendedOwner) {
         nameNode.textContent = "Чужая кнопка";
@@ -4340,7 +4348,8 @@ MINI_APP_HTML = r"""<!doctype html>
       else if (initialView === "radio") showRadio();
       else if (initialView === "rules") await showRules(readRulesChatId());
       else if (initialView === "moderation") await showModerationManager();
-      else renderMine();
+      else if (initialView === "mine") renderMine();
+      else await showProfile();
     } catch (error) {
       nameNode.textContent = "Ошибка загрузки";
       showError(error);
@@ -4710,10 +4719,13 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   async function showBag() {
-    setScreenHeader("bag");
+    const requestId = beginScreenRequest("bag");
     scrollToTop();
     try {
+      if (!state) state = await api("/miniapp/mine");
+      if (!isCurrentScreenRequest(requestId)) return;
       const shop = await api("/miniapp/shop");
+      if (!isCurrentScreenRequest(requestId)) return;
       const inventory = shop.inventory && shop.inventory.length
         ? shop.inventory.map((group, index) => {
           const rows = group.items.map(item => `
