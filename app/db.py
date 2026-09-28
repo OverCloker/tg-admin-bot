@@ -384,6 +384,18 @@ class BlacklistWord:
 
 
 @dataclass(frozen=True)
+class ChatBlacklistedUser:
+    chat_id: int
+    user_id: int
+    username: str | None
+    full_name: str
+    reason: str
+    added_by: int | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class BlacklistWordVariant:
     id: int
     chat_id: int
@@ -1117,6 +1129,22 @@ class Database:
                 primary key (chat_id, word),
                 foreign key (chat_id) references chats(chat_id) on delete cascade
             );
+
+            create table if not exists chat_blacklisted_users (
+                chat_id integer not null,
+                user_id integer not null,
+                username text,
+                full_name text not null,
+                reason text not null default '',
+                added_by integer,
+                created_at text not null,
+                updated_at text not null,
+                primary key (chat_id, user_id),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create index if not exists idx_chat_blacklisted_users_chat_time
+                on chat_blacklisted_users(chat_id, created_at, user_id);
 
             create table if not exists blacklist_reply_variants (
                 id integer primary key autoincrement,
@@ -5494,6 +5522,63 @@ class Database:
             (chat_id, normalize_trigger(word), added_by, utc_now(), max(0, min(10080, int(mute_minutes)))),
         )
         self._conn.commit()
+
+    def save_chat_blacklisted_user(
+        self, chat_id: int, user_id: int, username: str | None,
+        full_name: str, reason: str, added_by: int | None,
+    ) -> None:
+        now = utc_now()
+        self._conn.execute(
+            """
+            insert into chat_blacklisted_users
+                (chat_id, user_id, username, full_name, reason, added_by, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(chat_id, user_id) do update set
+                username = excluded.username,
+                full_name = excluded.full_name,
+                reason = excluded.reason,
+                added_by = excluded.added_by,
+                updated_at = excluded.updated_at
+            """,
+            (chat_id, user_id, normalize_username(username) if username else None,
+             full_name, reason, added_by, now, now),
+        )
+        self._conn.commit()
+
+    def delete_chat_blacklisted_user(self, chat_id: int, user_id: int) -> bool:
+        cursor = self._conn.execute(
+            "delete from chat_blacklisted_users where chat_id = ? and user_id = ?",
+            (chat_id, user_id),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def list_chat_blacklisted_users(self, chat_id: int) -> list[ChatBlacklistedUser]:
+        rows = self._conn.execute(
+            """
+            select chat_id, user_id, username, full_name, reason, added_by, created_at, updated_at
+            from chat_blacklisted_users
+            where chat_id = ?
+            order by created_at, user_id
+            """,
+            (chat_id,),
+        ).fetchall()
+        return [ChatBlacklistedUser(**dict(row)) for row in rows]
+
+    def get_chat_blacklisted_user_by_username(
+        self, chat_id: int, username: str,
+    ) -> ChatBlacklistedUser | None:
+        row = self._conn.execute(
+            """
+            select chat_id, user_id, username, full_name, reason, added_by, created_at, updated_at
+            from chat_blacklisted_users
+            where chat_id = ? and username = ? collate nocase
+            order by updated_at desc
+            limit 1
+            """,
+            (chat_id, normalize_username(username)),
+        ).fetchone()
+        return ChatBlacklistedUser(**dict(row)) if row else None
 
     def delete_blacklist_word(self, chat_id: int, word: str) -> bool:
         normalized = normalize_trigger(word)

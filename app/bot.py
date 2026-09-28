@@ -1925,10 +1925,16 @@ HELP_SECTIONS = {
         "<code>чат старт</code> — вернуть прежние права на текст; только админ\n"
         "<code>подтвердить комментарий</code> — подтвердить действие помощника; старший/админ\n"
         "<code>затихни админ @ник 2ч - причина</code> — тихий режим администратора; нужен доступ Telegram к удалению\n\n"
-        "<b>Чёрный список</b> · только админы\n"
+        "<b>Чёрный список пользователей</b>\n"
+        "<code>черный список</code> — показать людей и причины\n"
+        "Ответом: <code>добавить в черный список</code>, следующей строкой причина\n"
+        "<code>@ник в чс</code> — добавить; причину можно написать следующей строкой\n"
+        "Ответом: <code>удалить из чс</code> или <code>@ник из чс</code>\n"
+        "Добавлять и удалять могут админы и модераторы. Список не банит автоматически.\n\n"
+        "<b>Чёрный список слов</b> · только админы бота (владелец)\n"
         "<code>запрет слово</code> — добавить выражение\n"
         "<code>разрешить слово</code> — удалить выражение\n"
-        "<code>черный список</code> — показать все выражения\n"
+        "<code>черный список слов</code> — показать все выражения\n"
         "Муты за нарушения за неделю: 5м → 10м → 30м → 1ч; затем по 1ч. "
         "Сброс каждый понедельник в 00:00 по Киеву.\n\n"
         "<b>Персонал</b>\n"
@@ -14028,7 +14034,7 @@ async def delete_blacklist_word(message: Message) -> None:
     await safe_reply(message, "Слово удалено из черного списка." if deleted else "Такого слова в черном списке нет.")
 
 
-@router.message(F.text.casefold() == "черный список")
+@router.message(F.text.regexp(re.compile(r"^/?ч[её]рный\s+список\s+слов[?!.]?$", re.IGNORECASE)))
 async def list_blacklist_words(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
         return
@@ -14037,12 +14043,109 @@ async def list_blacklist_words(message: Message) -> None:
 
     words = db.list_blacklist_words(message.chat.id)
     if not words:
-        await safe_reply(message, "Черный список пуст.")
+        await safe_reply(message, "Черный список слов пуст.")
         return
 
-    lines = ["<b>Черный список:</b>"]
+    lines = ["<b>Черный список слов:</b>"]
     lines.extend(f"{index}. {escape(item.word)}" for index, item in enumerate(words, start=1))
     await safe_reply(message, "\n".join(lines))
+
+
+CHAT_BLACKLIST_TARGET_RE = r"(?:@[A-Za-z0-9_]{5,32}|[1-9]\d{0,19})"
+CHAT_BLACKLIST_ADD_RE = re.compile(
+    rf"^(?:добавить\s+в\s+(?:ч[её]рный\s+список|чс)(?:\s+(?P<after>{CHAT_BLACKLIST_TARGET_RE}))?"
+    rf"|(?P<before>{CHAT_BLACKLIST_TARGET_RE})\s+в\s+чс)(?:\s*[-—:]\s*(?P<note>.*))?$",
+    re.IGNORECASE,
+)
+CHAT_BLACKLIST_REMOVE_RE = re.compile(
+    rf"^(?:удалить\s+из\s+(?:ч[её]рного\s+списка|чс)(?:\s+(?P<after>{CHAT_BLACKLIST_TARGET_RE}))?"
+    rf"|(?P<before>{CHAT_BLACKLIST_TARGET_RE})\s+из\s+чс)$",
+    re.IGNORECASE,
+)
+CHAT_BLACKLIST_ACTION_RE = re.compile(
+    r"^(?:добавить\s+в\s+(?:ч[её]рный\s+список|чс)|удалить\s+из\s+(?:ч[её]рного\s+списка|чс)|"
+    r"(?:@[A-Za-z0-9_]{5,32}|[1-9]\d{0,19})\s+(?:в|из)\s+чс)(?:\s|$)",
+    re.IGNORECASE,
+)
+
+
+def parse_chat_blacklist_action(text: str) -> tuple[str, str | None, str] | None:
+    lines = (text or "").strip().splitlines()
+    if not lines:
+        return None
+    first, *rest = lines
+    first = first.strip()
+    if match := CHAT_BLACKLIST_ADD_RE.fullmatch(first):
+        reason = " ".join(" ".join([match.group("note") or "", *rest]).split())
+        return "add", match.group("after") or match.group("before"), reason
+    if match := CHAT_BLACKLIST_REMOVE_RE.fullmatch(first):
+        if any(line.strip() for line in rest):
+            return None
+        return "remove", match.group("after") or match.group("before"), ""
+    return None
+
+
+@router.message(F.chat.type.in_(SUPPORTED_CHAT_TYPES), F.text.regexp(CHAT_BLACKLIST_ACTION_RE))
+async def manage_chat_blacklisted_user(message: Message) -> None:
+    if not message.from_user:
+        return
+    if await actor_moderation_role(message.bot, message.chat.id, message.from_user.id) is None:
+        await safe_reply(message, "Добавлять и удалять пользователей из чёрного списка могут админы и модераторы.")
+        return
+    parsed = parse_chat_blacklist_action(message.text or "")
+    if not parsed:
+        await safe_reply(message, "Ответь на сообщение командой «добавить в черный список» или напиши «@ник в чс». Для удаления: «удалить из чс» ответом либо «@ник из чс».")
+        return
+    action, target, reason = parsed
+    if len(reason) > 500:
+        await safe_reply(message, "Причина слишком длинная: максимум 500 символов.")
+        return
+    await remember_sender(message)
+    existing = None
+    if target and target.startswith("@") and action == "remove":
+        existing = db.get_chat_blacklisted_user_by_username(message.chat.id, target)
+    if existing:
+        target_id, target_name = existing.user_id, f"@{existing.username}"
+    elif target and target.isdigit():
+        target_id = int(target)
+        if target_id > 2**63 - 1:
+            await safe_reply(message, "Некорректный Telegram ID пользователя.")
+            return
+        known = db.get_known_user(target_id)
+        target_name = f"@{known.username}" if known and known.username else (known.full_name if known else f"ID {target_id}")
+    else:
+        target_id, target_name, error = await resolve_command_target(message, target.lstrip("@") if target else None)
+        if error:
+            await safe_reply(message, error)
+            return
+    if not target_id or not target_name:
+        return
+    if action == "remove":
+        deleted = db.delete_chat_blacklisted_user(message.chat.id, target_id)
+        await safe_reply(message, f"{escape(target_name)} удалён из чёрного списка." if deleted else f"{escape(target_name)} в чёрном списке нет.")
+        return
+    if message.reply_to_message and not target and message.reply_to_message.from_user:
+        person = message.reply_to_message.from_user
+        username, full_name = person.username, person.full_name
+    else:
+        person = db.get_seen_user_by_username(message.chat.id, target) if target and target.startswith("@") else db.get_known_user(target_id)
+        username = person.username if person else target_name.lstrip("@") if target_name.startswith("@") else None
+        full_name = person.full_name if person else target_name
+    db.save_chat_blacklisted_user(message.chat.id, target_id, username, full_name, reason, message.from_user.id)
+    await safe_reply(message, f"{escape(target_name)} добавлен в чёрный список. Причина: {escape(reason or 'не указана')}.")
+
+
+@router.message(F.chat.type.in_(SUPPORTED_CHAT_TYPES), F.text.regexp(re.compile(r"^/?ч[её]рный\s+список[?!.]?$", re.IGNORECASE)))
+async def list_chat_blacklisted_users(message: Message) -> None:
+    rows = db.list_chat_blacklisted_users(message.chat.id)
+    if not rows:
+        await safe_reply(message, "Чёрный список пользователей пуст.")
+        return
+    lines = ["<b>Чёрный список пользователей:</b>"]
+    for index, item in enumerate(rows, start=1):
+        label = f"@{item.username}" if item.username else f"{item.full_name} (ID {item.user_id})"
+        lines.append(f"{index}. {escape(label)} — {escape(item.reason or 'без причины')}")
+    await safe_reply_chunks(message, lines)
 
 
 @router.message(F.text.regexp(AUTO_WEATHER_RE))
