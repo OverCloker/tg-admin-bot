@@ -2785,6 +2785,8 @@ MINI_APP_HTML = r"""<!doctype html>
             ? `<button class="btn secondary" onclick="showRulesManager()">Открыть правила</button>`
           : section.key === "triggers" && section.enabled
             ? `<button class="btn secondary" onclick="showTriggerManager()">Открыть триггеры</button>`
+          : section.key === "macros" && section.enabled
+            ? `<button class="btn secondary" onclick="showMacroManager()">Открыть макросы</button>`
           : section.key === "inline-stats" && section.enabled
             ? `<button class="btn secondary" onclick="showInlineStatistics()">Открыть статистику</button>`
             : `<span class="muted">Нет доступа</span>`;
@@ -3383,6 +3385,118 @@ MINI_APP_HTML = r"""<!doctype html>
     } catch (error) {
       alert(error.message);
     }
+  }
+
+  function macroRowHtml(item) {
+    return `<div class="admin-list-row">
+      <span><b>${escapeHtml(item.phrase)}</b><br>
+        <span class="muted">${item.enabled ? "Включён" : "Выключен"} · ${escapeHtml(item.action || "Только вложение")}${item.mediaType ? " · " + escapeHtml(item.mediaType) : ""}${item.mediaBroken ? " · ⚠️ вложение недоступно" : ""}</span>
+      </span>
+      <span class="utility-actions" style="margin:0">
+        <button class="btn secondary" style="margin:0" onclick="editMiniAppMacro(${Number(item.chatId)}, ${jsAttrString(item.phrase)})">Изменить</button>
+        <button class="btn danger" style="margin:0" onclick="deleteMiniAppMacro(${Number(item.chatId)}, ${jsAttrString(item.phrase)})">Удалить</button>
+      </span>
+    </div>`;
+  }
+
+  function macroEditorHtml(chatId, item) {
+    if (!item) return "";
+    return `<section class="panel">
+      <h2>${item.phrase ? "Изменить макрос" : "Новый макрос"}</h2>
+      <div class="mine-admin-form">
+        <input id="macroOriginalPhrase" type="hidden" value="${escapeHtml(item.phrase || "")}">
+        <label class="wide" for="macroPhrase">Фраза запуска</label>
+        <input id="macroPhrase" class="wide" maxlength="120" placeholder="Например: вика тихо" value="${escapeHtml(item.phrase || "")}">
+        <label class="wide" for="macroAction">Что сделать</label>
+        <textarea id="macroAction" class="wide" maxlength="4000" placeholder="затихни @username 30м - причина&#10;или: сообщение: Привет!">${escapeHtml(item.action || "")}</textarea>
+        <p class="muted wide">Разрешены «затихни @ник 30м - причина» (можно указать ID вместо ника), «сообщение: текст» либо только вложение. Макрос запускается точным сообщением в выбранной группе и проверяет права отправителя.</p>
+        <div id="macroMediaBox" class="trigger-media-box wide" data-media-type="${escapeHtml(item.mediaType || "")}" data-media-file-id="${escapeHtml(item.mediaBroken ? "" : (item.mediaFileId || ""))}">
+          <b>Фото, GIF, музыка или видео — необязательно</b>
+          <input id="macroMediaFile" type="file" accept="image/jpeg,image/png,image/webp,image/gif,audio/*,video/*">
+          <span id="macroMediaStatus" class="trigger-media-status">${item.mediaBroken ? "Старый файл недоступен — загрузи новый." : item.mediaFileId ? "Вложение сохранено. Новый файл заменит его." : "До 40 МБ."}</span>
+          <button class="btn secondary" type="button" style="margin:0" onclick="clearMacroMedia()">Убрать вложение</button>
+        </div>
+        <label class="wide"><input id="macroEnabled" type="checkbox" ${item.enabled === false ? "" : "checked"}> Включён</label>
+        <button class="btn" onclick="saveMiniAppMacro(${Number(chatId)})">Сохранить макрос</button>
+        <button class="btn secondary" onclick="showMacroManager(${Number(chatId)})">Отмена</button>
+      </div>
+    </section>`;
+  }
+
+  function clearMacroMedia() {
+    const box = document.getElementById("macroMediaBox");
+    if (!box) return;
+    box.dataset.mediaType = "";
+    box.dataset.mediaFileId = "";
+    document.getElementById("macroMediaFile").value = "";
+    document.getElementById("macroMediaStatus").textContent = "Вложение убрано.";
+  }
+
+  function editMiniAppMacro(chatId, phrase) {
+    const item = (window.currentMiniAppMacros || []).find(row => row.phrase === phrase);
+    showMacroManager(chatId, item || { phrase, action: "" });
+  }
+
+  async function showMacroManager(chatId = null, editor = null) {
+    setScreenHeader("adminPanel");
+    content.innerHTML = `<section class="panel muted">Загружаю макросы...</section>`;
+    try {
+      const path = chatId ? `/miniapp/profile/macros?chat_id=${encodeURIComponent(chatId)}` : "/miniapp/profile/macros";
+      const data = await api(path);
+      const selected = Number(data.selectedChatId || 0);
+      window.currentMiniAppMacros = data.macros || [];
+      content.innerHTML = `<section class="panel">
+        <h2>Макросы</h2>
+        <p class="muted">Фраза срабатывает только при полном совпадении. Изменение прав администратора или модератора действует сразу.</p>
+        <select class="wide" onchange="showMacroManager(this.value)">${triggerChatOptionsHtml(data.chats || [], selected)}</select>
+        ${selected ? `<button class="btn" style="margin-top:10px" onclick="showMacroManager(${selected}, { phrase: '', action: '', enabled: true })">Добавить макрос</button>` : ""}
+      </section>
+      ${selected ? macroEditorHtml(selected, editor) : ""}
+      <section class="panel"><h2>Макросы группы</h2><div class="role-list">${(data.macros || []).map(macroRowHtml).join("") || `<p class="muted">Макросов пока нет.</p>`}</div></section>
+      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
+      scrollToTop();
+    } catch (error) { showError(error); }
+  }
+
+  async function saveMiniAppMacro(chatId) {
+    const phrase = document.getElementById("macroPhrase")?.value || "";
+    const action = document.getElementById("macroAction")?.value || "";
+    const box = document.getElementById("macroMediaBox");
+    const file = document.getElementById("macroMediaFile")?.files?.[0];
+    if (!phrase.trim()) { alert("Укажи фразу запуска."); return; }
+    try {
+      let mediaType = box?.dataset.mediaType || "";
+      let mediaFileId = box?.dataset.mediaFileId || "";
+      if (file) {
+        const type = (file.type || "").toLowerCase();
+        const kind = type === "image/gif" ? "animation" : type.startsWith("image/") ? "photo" : type.startsWith("audio/") ? "audio" : type.startsWith("video/") ? "video" : "";
+        if (!kind) { alert("Выбери фото, GIF, аудио или видео."); return; }
+        const form = new FormData();
+        form.append("file", file);
+        const uploaded = await apiForm(`/miniapp/profile/macros/media?media_type=${encodeURIComponent(kind)}`, form);
+        mediaType = uploaded.mediaType || "";
+        mediaFileId = uploaded.mediaFileId || "";
+        box.dataset.mediaType = mediaType;
+        box.dataset.mediaFileId = mediaFileId;
+        document.getElementById("macroMediaStatus").textContent = "Вложение загружено, сохраняю макрос...";
+      }
+      await api("/miniapp/profile/macros", { method: "POST", body: JSON.stringify({
+        chatId: Number(chatId), phrase, originalPhrase: document.getElementById("macroOriginalPhrase")?.value || "",
+        action, mediaType: mediaType || null, mediaFileId: mediaFileId || null,
+        enabled: Boolean(document.getElementById("macroEnabled")?.checked)
+      }) });
+      showNotice("Макрос сохранён.");
+      showMacroManager(chatId);
+    } catch (error) { alert(error.message); }
+  }
+
+  async function deleteMiniAppMacro(chatId, phrase) {
+    if (!confirm(`Удалить макрос «${phrase}»?`)) return;
+    try {
+      await api("/miniapp/profile/macros/delete", { method: "POST", body: JSON.stringify({ chatId: Number(chatId), phrase }) });
+      showNotice("Макрос удалён.");
+      showMacroManager(chatId);
+    } catch (error) { alert(error.message); }
   }
 
   function triggerRowHtml(item) {

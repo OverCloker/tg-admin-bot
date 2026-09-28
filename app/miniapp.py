@@ -48,6 +48,7 @@ from .dig_game import (
 )
 from .miniapp_ui import MINI_APP_HTML as MINI_APP_UI_HTML
 from .mine_access import MINE_ACCESS_DENIED_TEXT, has_mine_access
+from .macros import parse_macro_action, validate_macro_phrase
 from .premium import PremiumService
 from .telegram_client import create_bot
 from .user_profile import build_user_profile
@@ -203,6 +204,21 @@ class MiniAppTriggerSave(BaseModel):
 class MiniAppTriggerDelete(BaseModel):
     chatId: int
     trigger: str = Field(min_length=1, max_length=120)
+
+
+class MiniAppMacroSave(BaseModel):
+    chatId: int
+    phrase: str = Field(min_length=1, max_length=120)
+    originalPhrase: str | None = Field(default=None, max_length=120)
+    action: str = Field(default="", max_length=4000)
+    mediaType: str | None = Field(default=None, max_length=32)
+    mediaFileId: str | None = Field(default=None, max_length=1000)
+    enabled: bool = True
+
+
+class MiniAppMacroDelete(BaseModel):
+    chatId: int
+    phrase: str = Field(min_length=1, max_length=120)
 
 
 class MineAdminGrant(BaseModel):
@@ -3021,6 +3037,7 @@ def miniapp_profile_admin_panel(
                 {"key": "rules", "title": "Правила", "enabled": _miniapp_can_manage_rules(db, user["id"]), "description": "Текст правил и периодическое напоминание в группах."},
                 {"key": "blacklist", "title": "Чёрный список", "enabled": _miniapp_can_manage_blacklist(db, user["id"]), "description": "Запрещённые слова, формы и синонимы."},
                 {"key": "triggers", "title": "Триггеры", "enabled": _miniapp_can_manage_triggers(db, user["id"]), "description": "Слова и фразы, на которые бот отвечает в чатах."},
+                {"key": "macros", "title": "Макросы", "enabled": bool(admin_chat_ids), "description": "Точная фраза запуска, действие и вложение для выбранной группы."},
                 {"key": "inline-stats", "title": "Inline-статистика", "enabled": _miniapp_has_global_admin_access(db, user["id"]), "description": "Глобальные вызовы погоды и карт тревог за день, неделю и месяц."},
             ],
         }
@@ -3478,6 +3495,99 @@ def miniapp_profile_blacklist_delete(
         db.close()
 
 
+def _miniapp_macro_public(item: Any) -> dict[str, Any]:
+    media_id = item.media_file_id or ""
+    return {
+        "chatId": item.chat_id,
+        "phrase": item.phrase,
+        "action": item.action,
+        "mediaType": item.media_type or "",
+        "mediaFileId": media_id,
+        "mediaBroken": media_id.startswith("local:") and not Path(media_id[6:]).exists(),
+        "enabled": bool(item.enabled),
+    }
+
+
+@router.get("/miniapp/profile/macros")
+def miniapp_profile_macros(
+    chat_id: int | None = Query(default=None),
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        chat_ids = _miniapp_admin_chat_ids(db, user["id"])
+        if not chat_ids:
+            raise HTTPException(403, "Макросы доступны администраторам групп.")
+        chats = _miniapp_chats_for_ids(db, chat_ids)
+        if chat_id is not None and int(chat_id) not in chat_ids:
+            raise HTTPException(403, "Вы не являетесь администратором этой группы.")
+        selected = int(chat_id) if chat_id is not None else (int(chats[0].chat_id) if chats else 0)
+        return {
+            "ok": True,
+            "chats": [_miniapp_chat_public(chat) for chat in chats],
+            "selectedChatId": selected,
+            "macros": [_miniapp_macro_public(item) for item in db.list_chat_macros(selected)] if selected else [],
+        }
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/macros")
+def miniapp_profile_macro_save(
+    payload: MiniAppMacroSave,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    db.atomic_on_close()
+    try:
+        if not _miniapp_can_admin_chat(db, payload.chatId, user["id"]):
+            raise HTTPException(403, "Вы не являетесь администратором этой группы.")
+        if db.get_chat(payload.chatId) is None:
+            raise HTTPException(404, "Группа не найдена.")
+        try:
+            phrase = validate_macro_phrase(payload.phrase)
+            parse_macro_action(payload.action, has_media=bool(payload.mediaFileId))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        media_type = payload.mediaType or None
+        media_id = payload.mediaFileId or None
+        if bool(media_type) != bool(media_id) or (media_type and media_type not in {*TRIGGER_MEDIA_TYPES, "document"}):
+            raise HTTPException(400, "Некорректное вложение макроса.")
+        if media_id and media_id.startswith("local:"):
+            local = Path(media_id[6:]).resolve()
+            if not local.is_relative_to(_trigger_media_dir().resolve()) or not local.is_file():
+                raise HTTPException(400, "Локальное вложение недоступно.")
+        original = normalize_trigger(payload.originalPhrase or "")
+        if original and original != phrase:
+            if db.get_chat_macro(payload.chatId, phrase):
+                raise HTTPException(409, "Макрос с этой фразой уже существует.")
+            if not db.delete_chat_macro(payload.chatId, original):
+                raise HTTPException(409, "Исходный макрос уже удалён или изменён.")
+        if any(item.trigger == phrase for item in db.list_triggers(payload.chatId)):
+            raise HTTPException(409, "Такая фраза уже используется триггером.")
+        db.save_chat_macro(payload.chatId, phrase, payload.action, user["id"], media_type, media_id, payload.enabled)
+        return {"ok": True, "macro": _miniapp_macro_public(db.get_chat_macro(payload.chatId, phrase))}
+    finally:
+        db.close()
+
+
+@router.post("/miniapp/profile/macros/delete")
+def miniapp_profile_macro_delete(
+    payload: MiniAppMacroDelete,
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    user = _telegram_user(x_telegram_init_data)
+    db = _db()
+    try:
+        if not _miniapp_can_admin_chat(db, payload.chatId, user["id"]):
+            raise HTTPException(403, "Вы не являетесь администратором этой группы.")
+        return {"ok": True, "deleted": db.delete_chat_macro(payload.chatId, payload.phrase)}
+    finally:
+        db.close()
+
+
 @router.get("/miniapp/profile/triggers")
 def miniapp_profile_triggers(
     chat_id: int | None = Query(default=None),
@@ -3554,11 +3664,11 @@ def miniapp_profile_trigger_save(
         db.close()
 
 
-@router.post("/miniapp/profile/triggers/media")
 async def miniapp_profile_trigger_media_upload(
     media_type: str,
     file: UploadFile = File(...),
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+    macro: bool = False,
 ) -> dict[str, Any]:
     user = _telegram_user(x_telegram_init_data)
     db = _db()
@@ -3587,17 +3697,18 @@ async def miniapp_profile_trigger_media_upload(
             if normalized_type == "video"
             else ".jpg"
         )
+    for_macro = macro
     target = _trigger_media_dir() / f"{int(time.time())}_{secrets.token_hex(10)}{suffix}"
     size = 0
     with target.open("wb") as fh:
         while chunk := await file.read(1024 * 1024):
             size += len(chunk)
-            if size > TRIGGER_MEDIA_MAX_BYTES:
+            if size > (40 * 1024 * 1024 if for_macro else TRIGGER_MEDIA_MAX_BYTES):
                 with suppress(OSError):
                     target.unlink()
                 raise HTTPException(400, "Файл слишком большой для триггера.")
             fh.write(chunk)
-    if normalized_type in {"audio", "video"}:
+    if not for_macro and normalized_type in {"audio", "video"}:
         max_duration = 30.5 if normalized_type == "audio" else 15.5
         media_name = "Аудио-метка" if normalized_type == "audio" else "Видео"
         try:
@@ -3632,6 +3743,26 @@ async def miniapp_profile_trigger_media_upload(
         "size": size,
         "storage": "local",
     }
+
+
+@router.post("/miniapp/profile/triggers/media")
+async def miniapp_profile_trigger_media_route(
+    media_type: str,
+    file: UploadFile = File(...),
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    return await miniapp_profile_trigger_media_upload(media_type, file, x_telegram_init_data)
+
+
+@router.post("/miniapp/profile/macros/media")
+async def miniapp_profile_macro_media_upload(
+    media_type: str,
+    file: UploadFile = File(...),
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+) -> dict[str, Any]:
+    return await miniapp_profile_trigger_media_upload(
+        media_type, file, x_telegram_init_data, macro=True,
+    )
 
 
 @router.post("/miniapp/profile/triggers/delete")

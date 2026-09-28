@@ -78,6 +78,18 @@ class TriggerReplyVariant:
 
 
 @dataclass(frozen=True)
+class ChatMacro:
+    chat_id: int
+    phrase: str
+    action: str
+    media_type: str | None
+    media_file_id: str | None
+    enabled: int
+    updated_by: int | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class SeenUser:
     chat_id: int
     user_id: int
@@ -572,6 +584,19 @@ class Database:
                 updated_by integer,
                 updated_at text not null,
                 primary key (chat_id, trigger),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            );
+
+            create table if not exists chat_macros (
+                chat_id integer not null,
+                phrase text not null,
+                action text not null,
+                media_type text,
+                media_file_id text,
+                enabled integer not null default 1,
+                updated_by integer,
+                updated_at text not null,
+                primary key (chat_id, phrase),
                 foreign key (chat_id) references chats(chat_id) on delete cascade
             );
 
@@ -2136,6 +2161,46 @@ class Database:
             (chat_id, *normalized),
         ).fetchall()
         return [AutoReply(**dict(row)) for row in rows]
+
+    def get_chat_macro(self, chat_id: int, phrase: str) -> ChatMacro | None:
+        row = self._conn.execute(
+            "select * from chat_macros where chat_id = ? and phrase = ?",
+            (chat_id, normalize_trigger(phrase)),
+        ).fetchone()
+        return ChatMacro(**dict(row)) if row else None
+
+    def list_chat_macros(self, chat_id: int) -> list[ChatMacro]:
+        rows = self._conn.execute(
+            "select * from chat_macros where chat_id = ? order by phrase collate nocase",
+            (chat_id,),
+        ).fetchall()
+        return [ChatMacro(**dict(row)) for row in rows]
+
+    def save_chat_macro(
+        self, chat_id: int, phrase: str, action: str, updated_by: int,
+        media_type: str | None = None, media_file_id: str | None = None,
+        enabled: bool = True,
+    ) -> None:
+        self._conn.execute(
+            """insert into chat_macros
+                (chat_id, phrase, action, media_type, media_file_id, enabled, updated_by, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(chat_id, phrase) do update set
+                  action = excluded.action, media_type = excluded.media_type,
+                  media_file_id = excluded.media_file_id, enabled = excluded.enabled,
+                  updated_by = excluded.updated_by, updated_at = excluded.updated_at""",
+            (chat_id, normalize_trigger(phrase), action.strip(), media_type,
+             media_file_id, int(enabled), updated_by, utc_now()),
+        )
+        self._conn.commit()
+
+    def delete_chat_macro(self, chat_id: int, phrase: str) -> bool:
+        cursor = self._conn.execute(
+            "delete from chat_macros where chat_id = ? and phrase = ?",
+            (chat_id, normalize_trigger(phrase)),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
 
     def set_trigger(
         self,

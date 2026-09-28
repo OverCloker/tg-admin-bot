@@ -49,6 +49,7 @@ from .alerts_diagnostics import save_alerts_response
 from .alert_map import AlertMapResult, UnknownMapRegion, canonical_map_cache_key, fetch_alert_map
 from .inline_media import inline_photo_url, save_inline_photo
 from .db import Database, RegisteredChat, normalize_trigger, normalize_username
+from .macros import parse_macro_action
 from .dig_game import (
     INTERACTIVE_DIG_DURABILITY,
     INTERACTIVE_DIG_MAX_DEPTH,
@@ -14116,6 +14117,65 @@ async def weather(message: Message) -> None:
     await safe_reply(message, forecast, disable_web_page_preview=True)
 
 
+async def handle_chat_macro(message: Message) -> bool:
+    if not message.text or not message.from_user:
+        return False
+    macro = db.get_chat_macro(message.chat.id, message.text)
+    if not macro or not macro.enabled:
+        return False
+    actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
+    if actor_role is None:
+        return True
+    try:
+        action = parse_macro_action(macro.action, has_media=bool(macro.media_file_id))
+    except ValueError:
+        logging.warning("Invalid stored chat macro: chat=%s phrase=%s", message.chat.id, macro.phrase)
+        return True
+    if action.kind == "quiet":
+        target_id, target_name, error = await resolve_quiet_panel_target(message.bot, message.chat.id, action.target)
+        if error:
+            await safe_reply(message, error)
+            return True
+        if not target_id or not target_name or await is_chat_admin(message.bot, message.chat.id, target_id):
+            await safe_reply(message, "Администратора этой командой ограничивать нельзя.")
+            return True
+        requested = parse_quiet_duration(action.duration)
+        if not requested:
+            await safe_reply(message, "Некорректный срок мута в макросе.")
+            return True
+        limit = QUIET_MAX_MINUTES if actor_role == "admin" else moderator_max_mute_minutes(actor_role)
+        minutes = max(1, min(limit, requested))
+        permissions = ChatPermissions(
+            can_send_messages=False, can_send_audios=False, can_send_documents=False,
+            can_send_photos=False, can_send_videos=False, can_send_video_notes=False,
+            can_send_voice_notes=False, can_send_polls=False, can_send_other_messages=False,
+            can_add_web_page_previews=False, can_react_to_messages=False,
+        )
+        try:
+            await message.bot.restrict_chat_member(
+                chat_id=message.chat.id, user_id=target_id, permissions=permissions,
+                until_date=datetime.now(timezone.utc) + timedelta(minutes=minutes),
+                use_independent_chat_permissions=True,
+            )
+        except (TelegramBadRequest, TelegramForbiddenError) as exc:
+            await safe_reply(message, "Не получилось ограничить пользователя. Проверь права бота.\n" + escape(str(exc)))
+            return True
+        settings = db.get_quiet_settings(message.chat.id)
+        await safe_reply(message, render_quiet_reply(settings.reply_text, target_name, minutes, action.reason))
+        db.add_moderator_action(message.chat.id, message.from_user.id, target_id, "mute", minutes, action.reason)
+        await notify_staff_moderation(
+            message.bot,
+            "🔇 <b>Мут через макрос</b>\n"
+            f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
+            f"Кому: {escape(target_name)}\nСрок: <b>{format_quiet_duration(minutes)}</b>",
+        )
+    elif action.kind == "message":
+        await safe_reply(message, action.text, parse_mode=None, disable_web_page_preview=True)
+    if macro.media_type and macro.media_file_id:
+        await send_auto_reply_item(message, macro)
+    return True
+
+
 async def handle_auto_reply(message: Message) -> None:
     if message.chat.type not in SUPPORTED_CHAT_TYPES:
         return
@@ -14129,6 +14189,8 @@ async def handle_auto_reply(message: Message) -> None:
         return
 
     await remember_sender(message)
+    if message.text and await handle_chat_macro(message):
+        return
     await handle_birthdays(message)
 
     if await handle_alarm_mode(message):
