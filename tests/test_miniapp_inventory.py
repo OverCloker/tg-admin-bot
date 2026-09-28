@@ -360,6 +360,16 @@ def test_miniapp_mine_admin_access_is_owner_or_moderator(tmp_path, monkeypatch) 
         assert _miniapp_can_view_mine_admin(db, 9) is False
     finally:
         db.close()
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(tmp_path / "bot.sqlite3")))
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 9})
+    with pytest.raises(Exception) as denied_view:
+        miniapp.miniapp_profile_mine_admin(x_telegram_init_data="test")
+    assert getattr(denied_view.value, "status_code", None) == 403
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 7})
+    assert miniapp.miniapp_profile_mine_admin(x_telegram_init_data="test")["canManage"] is False
+    with pytest.raises(Exception) as denied_write:
+        miniapp.miniapp_profile_mine_admin_grant(miniapp.MineAdminGrant(userId=9), x_telegram_init_data="test")
+    assert getattr(denied_write.value, "status_code", None) == 403
 
 
 def test_miniapp_trigger_admin_can_list_save_and_delete(tmp_path, monkeypatch) -> None:
@@ -1049,6 +1059,14 @@ def test_miniapp_delegated_bot_feature_does_not_open_admin_panel(tmp_path, monke
         assert _miniapp_can_manage_blacklist(db, 9) is False
     finally:
         db.close()
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(tmp_path / "bot.sqlite3")))
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _init_data: {"id": 9})
+    with pytest.raises(Exception) as denied_panel:
+        miniapp.miniapp_profile_admin_panel(x_telegram_init_data="test")
+    assert getattr(denied_panel.value, "status_code", None) == 403
+    with pytest.raises(Exception) as denied_access:
+        miniapp.miniapp_profile_access(chat_id=-100, user_id=9, x_telegram_init_data="test")
+    assert getattr(denied_access.value, "status_code", None) == 403
 
 
 def test_miniapp_moderation_roles_are_owner_managed(tmp_path, monkeypatch) -> None:
@@ -1123,6 +1141,9 @@ def test_miniapp_owner_delegates_moderator_roles_for_one_chat(tmp_path, monkeypa
         db_check.close()
     tabs = miniapp.miniapp_profile_moderator_role_tabs(x_telegram_init_data="test")["tabs"]
     assert {tab["chatId"] for tab in tabs} == {-100}
+    panel = miniapp.miniapp_profile_admin_panel(x_telegram_init_data="test")
+    assert next(section for section in panel["sections"] if section["key"] == "moderator-roles")["enabled"] is True
+    assert next(section for section in panel["sections"] if section["key"] == "access")["enabled"] is False
     miniapp.miniapp_profile_moderation_role_set(
         MiniAppModeratorRoleSet(chatId=-100, target="@helper", role="moderator"),
         x_telegram_init_data="test",

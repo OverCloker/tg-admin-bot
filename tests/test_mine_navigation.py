@@ -406,13 +406,25 @@ def test_miniapp_utility_actions_live_in_own_profile_not_mine() -> None:
     profile_html = MINI_APP_HTML.split("function renderProfile(profile)", 1)[1].split("function showFriendsInfo()", 1)[0]
 
     assert "${utilityActionsHtml()}" not in mine_html
-    assert '${isSelf ? `<section class="panel"><h2>Для меня</h2>${utilityActionsHtml()}</section>` : ""}' in profile_html
+    assert '${isSelf ? `<section class="panel profile-quick-actions"><h2>Быстрый доступ</h2>${utilityActionsHtml()}</section>` : ""}' in profile_html
+    assert profile_html.index("profile-quick-actions") < profile_html.index("profile-actions")
+    assert profile_html.index("profile-mine-summary") > profile_html.index("🎁 Витрина подарков")
+    assert '<div class="profile-grid">' not in profile_html
     assert 'onclick="showMine()">⛏️ Шахта</button>' in profile_html
     assert '${isSelf ? adminPanelButtonHtml(viewer) : ""}' in profile_html
     assert 'mineAdminButtonHtml' not in MINI_APP_HTML
     assert "${rankCosmeticHtml(false)}" not in mine_html
     assert '<button class="btn secondary" onclick="showWeather()">Погода</button>' in MINI_APP_HTML
     assert '<button class="btn secondary" onclick="showRadio()">Радио</button>' in MINI_APP_HTML
+
+
+def test_miniapp_admin_panel_is_compact_and_only_lists_enabled_sections() -> None:
+    panel_html = MINI_APP_HTML.split("async function showAdminPanel()", 1)[1].split("function inlineStatsCards", 1)[0]
+    assert 'class="admin-panel-compact"' in panel_html
+    assert 'class="admin-summary"' in panel_html
+    assert 'class="admin-build-details"' in panel_html
+    assert 'sections.filter(section => section.enabled).map(adminSectionHtml)' in panel_html
+    assert 'api("/miniapp/profile/admin")' in panel_html
 
 
 def test_miniapp_independent_profile_screens_do_not_require_mine_access() -> None:

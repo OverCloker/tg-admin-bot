@@ -345,6 +345,12 @@ MINI_APP_HTML = r"""<!doctype html>
     .rank-badge { display:inline-flex; align-items:center; gap:7px; margin-top:10px; padding:7px 10px; border:1px solid var(--line); border-radius:var(--radius-sm); background: color-mix(in srgb, var(--rank-color, #678fb2) 18%, var(--panel-color)); font-size:13px; font-weight:800; }
     .utility-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
     .utility-actions .btn { min-height: 46px; margin: 0; }
+    .profile-quick-actions .utility-actions { margin-top: 10px; }
+    .profile-quick-actions .rules-entry { grid-column: auto; min-height: 46px !important; }
+    .profile-quick-actions .rules-entry span { display: none; }
+    .profile-mine-summary { padding: 10px 12px; }
+    .profile-mine-summary h2 { margin: 0 0 5px; font-size: 17px; }
+    .profile-mine-summary p { margin: 0; font-size: 13px; line-height: 1.4; }
     .rules-entry {
       grid-column: 1 / -1;
       display: grid;
@@ -777,6 +783,17 @@ MINI_APP_HTML = r"""<!doctype html>
       width:100%;
       grid-template-columns:repeat(auto-fit, minmax(94px, 1fr));
     }
+    .admin-panel-compact .admin-list-row {
+      grid-template-columns:minmax(0, 1fr) auto;
+      gap:8px;
+      min-height:44px;
+      padding:6px 8px;
+    }
+    .admin-panel-compact .admin-list-row .btn { width:auto; min-height:34px; margin:0; padding:6px 10px; font-size:13px; }
+    .admin-panel-compact .admin-summary { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+    .admin-panel-compact .admin-summary span { padding:5px 8px; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel-2); font-size:12px; }
+    .admin-panel-compact .admin-build-details { margin-top:10px; font-size:13px; }
+    .admin-panel-compact .admin-build-details summary { cursor:pointer; }
     .trigger-answer-list { display:grid; gap:8px; }
     .trigger-answer-row { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:8px; align-items:start; }
     .trigger-answer-row textarea { min-height:72px; }
@@ -2200,7 +2217,7 @@ MINI_APP_HTML = r"""<!doctype html>
       <button class="btn secondary rules-entry" onclick="showRules()"><strong>Правила</strong><span>Обязательно к прочтению</span></button>
       <button class="btn secondary" onclick="showWeather()">Погода</button>
       <button class="btn secondary" onclick="showRadio()">Радио</button>
-      <button class="btn secondary" style="grid-column:1/-1" onclick="showReminders()">🔔 Напоминания</button>
+      <button class="btn secondary" onclick="showReminders()">🔔 Напоминания</button>
     </div>`;
   }
 
@@ -2792,10 +2809,7 @@ MINI_APP_HTML = r"""<!doctype html>
             ? `<button class="btn secondary" onclick="showInlineStatistics()">Открыть статистику</button>`
             : `<span class="muted">Нет доступа</span>`;
     return `<div class="admin-list-row">
-      <span>
-        <b>${escapeHtml(section.title || section.key)}</b><br>
-        <span class="muted">${escapeHtml(section.description || "")}</span>
-      </span>
+      <span><b>${escapeHtml(section.title || section.key)}</b></span>
       ${action}
     </div>`;
   }
@@ -2809,28 +2823,25 @@ MINI_APP_HTML = r"""<!doctype html>
       const summary = data.summary || {};
       const sections = data.sections || [];
       const build = data.build || {};
-      content.innerHTML = `<section class="panel">
+      content.innerHTML = `<div class="admin-panel-compact"><section class="panel">
         <h2>Админ-панель Mini App</h2>
-        <div class="profile-card" style="margin-bottom:14px">
-          <b>Сборка Mini App / API: <code>${escapeHtml(build.shortRevision || 'не определена')}</code></b>
+        <div class="admin-summary">
+          <span>Чаты: <b>${Number(summary.chats || 0)}</b></span>
+          <span>Админы: <b>${Number(summary.admins || 0)}</b></span>
+          <span>Модераторы: <b>${Number(summary.moderators || 0)}</b></span>
+          <span>Игроки: <b>${Number(summary.minePlayers || 0)}</b></span>
+          <span>Запреты: <b>${Number(summary.blacklistWords || 0)}</b></span>
+        </div>
+        <details class="admin-build-details"><summary>Версия ${escapeHtml(build.shortRevision || 'не определена')}</summary>
           <p class="muted">Собрана: ${build.builtAt ? escapeHtml(new Date(build.builtAt).toLocaleString()) : 'локальный запуск без сборки'}</p>
           <p class="muted">API запущен: ${build.startedAt ? escapeHtml(new Date(build.startedAt).toLocaleString()) : 'нет данных'}</p>
-          <p class="muted">Это версия запущенного сервера, а не последнего скачанного обновления.</p>
-        </div>
-        <p class="muted">Панель управления Mini App. Доступные разделы зависят от роли: владелец управляет ролями, модерация работает по правам в выбранном чате.</p>
-        <div class="mine-admin-grid">
-          <div class="mine-admin-card">Чаты<b>${Number(summary.chats || 0)}</b></div>
-          <div class="mine-admin-card">Админы<b>${Number(summary.admins || 0)}</b></div>
-          <div class="mine-admin-card">Модераторы<b>${Number(summary.moderators || 0)}</b></div>
-          <div class="mine-admin-card">Игроки шахты<b>${Number(summary.minePlayers || 0)}</b></div>
-          <div class="mine-admin-card">Запреты<b>${Number(summary.blacklistWords || 0)}</b></div>
-        </div>
+        </details>
       </section>
       <section class="panel">
         <h2>Разделы</h2>
-        <div class="role-list">${sections.map(adminSectionHtml).join("")}</div>
+        <div class="role-list">${sections.filter(section => section.enabled).map(adminSectionHtml).join("") || '<p class="muted">Нет доступных разделов.</p>'}</div>
       </section>
-      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showProfile()">Назад к профилю</button></section>`;
+      <section class="panel"><button class="btn secondary" style="margin:0" onclick="showProfile()">Назад к профилю</button></section></div>`;
       scrollToTop();
     } catch (error) {
       if (isCurrentScreenRequest(requestId)) showError(error);
@@ -4038,15 +4049,9 @@ MINI_APP_HTML = r"""<!doctype html>
         ${profileBadgesHtml(profile)}
       </div>
     </section>
+    ${isSelf ? `<section class="panel profile-quick-actions"><h2>Быстрый доступ</h2>${utilityActionsHtml()}</section>` : ""}
     <section class="panel">
-      <div class="profile-grid">
-        <div class="profile-card">Premium<b>${escapeHtml(premiumText)}</b></div>
-        <div class="profile-card">Ранг<b>${escapeHtml(mine.rank || "Новичок")}</b></div>
-        <div class="profile-card">Котоины<b>${mine.coins || 0}</b></div>
-        <div class="profile-card">Глубина<b>${mine.totalDepth || 0} м</b></div>
-        <div class="profile-card">Уровень<b>${mine.level || 0}</b></div>
-        <div class="profile-card">Удача<b>${mine.luck || 0}/100</b></div>
-      </div>
+      <p class="muted">Premium: <b>${escapeHtml(premiumText)}</b></p>
       <div class="profile-actions">
         <button class="btn secondary" onclick="showFriendsInfo()">${friends.length ? `Друзья: ${friends.length}` : "Друзья"}</button>
         ${isSelf ? `<button class="btn secondary" onclick="showMine()">⛏️ Шахта</button><button class="btn secondary" onclick="showBag()">Сумка</button>` : `<button class="btn secondary" onclick="showProfile()">Мой профиль</button>`}
@@ -4055,18 +4060,14 @@ MINI_APP_HTML = r"""<!doctype html>
       </div>
       ${isSelf ? themeSwitcherHtml() : ""}
     </section>
-    ${isSelf ? `<section class="panel"><h2>Для меня</h2>${utilityActionsHtml()}</section>` : ""}
     ${friendsPreview ? `<section class="panel"><h2>${isSelf ? "Друзья" : "Связи"}</h2><div class="friend-list">${friendsPreview}</div>${friends.length > 3 ? `<button class="btn secondary" onclick="showFriendsInfo()">Показать всех: ${friends.length}</button>` : ""}</section>` : ""}
-    <section class="panel">
-      <h2>Шахта</h2>
-      <p class="muted">Рекорд: <b>${mine.bestSessionDepth || 0} м</b> · Серия: <b>${mine.streak || 0}</b> · Маршрут: <b>${escapeHtml(mine.route || "не выбран")}</b></p>
-    </section>
     ${cosmeticsHtml}
     ${(social.relationships || []).map(pair => `<section class="panel"><h2>💞 ${escapeHtml(pair.partnerName)}</h2><p class="muted">${escapeHtml(pair.chatTitle)} · вместе с ${escapeHtml(new Date(pair.since).toLocaleDateString())}</p><h3>Уровень ${pair.level}: ${escapeHtml(pair.title)}</h3><div class="meter" role="progressbar" aria-valuenow="${pair.percent}" aria-valuemin="0" aria-valuemax="100"><div class="fill" style="width:${pair.percent}%"></div></div><p>${pair.xp}${pair.nextXp ? ' / '+pair.nextXp+' опыта · осталось '+pair.remaining : ' опыта · максимальный уровень'}</p><button class="btn" ${pair.canCare?'':'disabled'} onclick="careForPartner(${Number(pair.chatId)})">${pair.canCare?'💕 Уделить внимание · +20 опыта':'Внимание сегодня уже уделено'}</button><p class="muted">Каждый может уделить внимание раз в день. Цветок: +10, кристалл: +30, свидание-подарок: +25. От подарков — до 100 опыта пары в день. Новый день по Киеву; пропуски без штрафов.</p><button class="btn secondary" onclick="showShop('relationships')">Подарки паре</button></section>`).join('')}
     ${isSelf ? `<section class="panel"><h2>Команды отношений</h2><p>В группе: <b>пара @твой_ник @ник</b>. Получатель должен подтвердить предложение.</p><p><b>отношения</b> — пара и заявки; <b>расстаться</b> — завершить с подтверждением. Предложение действует 24 часа. В каждой группе — одна пара.</p></section>` : ''}
     ${social.partner && !(social.relationships || []).length ? `<section class="panel"><h2>💕 Отношения</h2><p>Пара: <b>${escapeHtml(social.partner.fullName || 'Игрок')}</b></p><p class="muted">Цветы, парный кристалл и приглашение на свидание остаются памятными подарками в профиле.</p>${isSelf ? `<button class="btn" onclick="showShop('relationships')">Подарок паре</button>` : ''}</section>` : ''}
     <section class="panel"><h2>🎁 Витрина подарков</h2><p class="muted">Подарки остаются в коллекции. Закреплённые показываются первыми.</p>
     ${(mine.gifts || []).map(gift => `<div class="profile-card" style="margin-bottom:12px"><b>${gift.pinned ? "📌 " : ""}${escapeHtml(gift.title)}</b><p>От: ${escapeHtml(gift.sender)} · ${escapeHtml(new Date(gift.createdAt).toLocaleDateString())}</p>${isSelf ? `<button class="btn secondary" onclick="pinGift(${Number(gift.id)}, ${!gift.pinned})">${gift.pinned ? "Открепить" : "Закрепить"}</button>` : ""}</div>`).join("") || '<p class="muted">Здесь появятся подарки от друзей и пары.</p>'}</section>
+    <section class="panel profile-mine-summary"><h2>Шахта</h2><p class="muted">${escapeHtml(mine.rank || "Новичок")} · ${mine.coins || 0} 🪙 · глубина ${mine.totalDepth || 0} м · уровень ${mine.level || 0} · удача ${mine.luck || 0}/100<br>Рекорд ${mine.bestSessionDepth || 0} м · серия ${mine.streak || 0} · маршрут ${escapeHtml(mine.route || "не выбран")}</p></section>
     <section class="panel"><button class="btn secondary" style="margin:0" onclick="${isSelf ? "showMine()" : "showProfile()"}">${isSelf ? "Открыть шахту" : "Назад к моему профилю"}</button></section>`;
     scrollToTop();
   }
