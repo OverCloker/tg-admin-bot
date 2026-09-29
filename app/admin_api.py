@@ -28,7 +28,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import BufferedInputFile, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, LabeledPrice
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .config import load_config
 from .db import Database, normalize_trigger, normalize_username, utc_now
@@ -448,6 +448,88 @@ ADMIN_PANEL_HTML = r"""
       --danger-text: #ffffff;
       --bg-scrim-color: 0, 0, 0;
       --bg-scrim: 0.94;
+    }
+    body.theme-glass {
+      color-scheme: dark;
+      --bg: #142039;
+      --card: rgba(29, 47, 79, 0.86);
+      --control: #203451;
+      --menu-bg: rgba(90, 120, 163, 0.38);
+      --menu-text: #f6faff;
+      --button-bg: #a8d8f0;
+      --button-text: #10253e;
+      --secondary-bg: rgba(112, 145, 190, 0.35);
+      --secondary-text: #f6faff;
+      --field-bg: rgba(13, 29, 52, 0.82);
+      --field-text: #ffffff;
+      --field-muted: #b8cbe0;
+      --file-button-bg: #385778;
+      --file-button-text: #ffffff;
+      --text: #f6faff;
+      --muted: #ccdaeb;
+      --line: rgba(188, 215, 244, 0.43);
+      --primary: #a8d8f0;
+      --primary-soft: #466988;
+      --bg-scrim-color: 20, 32, 57;
+      --bg-scrim: 0.80;
+    }
+    body.theme-glass :is(header, .card, .modal) {
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border-radius: 22px;
+      box-shadow: 0 12px 30px rgba(3, 12, 27, 0.20);
+    }
+    body.theme-expressive {
+      --bg: #f6f1fb;
+      --card: #fffaff;
+      --control: #ffffff;
+      --menu-bg: #eee1fa;
+      --menu-text: #2f1946;
+      --button-bg: #7650a8;
+      --button-text: #ffffff;
+      --secondary-bg: #eadcf7;
+      --secondary-text: #2f1946;
+      --field-bg: #fbf5ff;
+      --field-text: #2f1946;
+      --field-muted: #705c82;
+      --file-button-bg: #eadcf7;
+      --file-button-text: #2f1946;
+      --text: #2f1946;
+      --muted: #705c82;
+      --line: #dbc9ec;
+      --primary: #7650a8;
+      --primary-soft: #eadcf7;
+      --bg-scrim-color: 246, 241, 251;
+      --bg-scrim: 0.84;
+    }
+    body.theme-expressive :is(.card, .modal) { border-radius: 26px; }
+    body.theme-expressive button { border-radius: 18px; }
+    body.theme-classic {
+      --bg: #c1c1c1;
+      --card: #d2d2d2;
+      --control: #ffffff;
+      --menu-bg: #e5e5e5;
+      --menu-text: #202020;
+      --button-bg: #303030;
+      --button-text: #ffffff;
+      --secondary-bg: #eeeeee;
+      --secondary-text: #202020;
+      --field-bg: #ffffff;
+      --field-text: #202020;
+      --field-muted: #555555;
+      --file-button-bg: #eeeeee;
+      --file-button-text: #202020;
+      --text: #202020;
+      --muted: #555555;
+      --line: #707070;
+      --primary: #333333;
+      --primary-soft: #f0f0f0;
+      --bg-scrim-color: 193, 193, 193;
+      --bg-scrim: 0.94;
+    }
+    body.theme-classic :is(header, .card, .modal, button, input, textarea, select) {
+      border-radius: 2px;
+      box-shadow: 2px 2px 0 #777777;
     }
     .row {
       display: flex;
@@ -1064,6 +1146,13 @@ ADMIN_PANEL_HTML = r"""
       document.getElementById("settingsModal").classList.remove("hidden");
     }
 
+    function openAccessKeys() {
+      if (!ownerActionsAllowed) return toast("Ключи может выдавать только владелец");
+      openSettings();
+      document.getElementById("accessKeysBlock").scrollIntoView({ block: "start" });
+      document.getElementById("accessKeyLabel")?.focus();
+    }
+
     function closeSettings() {
       document.getElementById("settingsModal").classList.add("hidden");
       unlockPageScroll();
@@ -1257,9 +1346,15 @@ ADMIN_PANEL_HTML = r"""
 
     async function loadAccessKeys() {
       if (!ownerActionsAllowed) return;
-      const items = await api("/admin/access-keys");
       const box = document.getElementById("accessKeyList");
       if (!box) return;
+      let items;
+      try {
+        items = await api("/admin/access-keys");
+      } catch (error) {
+        box.textContent = `Не удалось загрузить ключи: ${error.message}`;
+        return;
+      }
       box.innerHTML = items.length
         ? items.map(item => `
           <div class="item">
@@ -1276,15 +1371,26 @@ ADMIN_PANEL_HTML = r"""
     async function createAccessKey() {
       const label = val("accessKeyLabel");
       const userId = Number(val("accessKeyUserId"));
-      const item = await api("/admin/access-keys", {
-        method: "POST",
-        body: JSON.stringify({ label, userId })
-      });
+      if (!label || !Number.isSafeInteger(userId) || userId <= 0) {
+        toast("Укажи название и корректный Telegram ID");
+        return;
+      }
+      let item;
+      try {
+        item = await api("/admin/access-keys", {
+          method: "POST",
+          body: JSON.stringify({ label, userId })
+        });
+      } catch (error) {
+        toast(error.message || "Не удалось выдать ключ");
+        return;
+      }
       document.getElementById("newAccessKeyBox").innerHTML = `
         <div class="item">
           <div>
-            <div class="title">Новый ключ</div>
-            <div class="text">${escapeHtml(item.accessKey)}</div>
+            <div class="title">Новый ключ — скопируй сейчас</div>
+            <input aria-label="Новый ключ доступа" readonly value="${escapeHtml(item.accessKey)}" onclick="this.select()">
+            <div class="muted">После закрытия окна ключ больше не показывается.</div>
           </div>
         </div>
       `;
@@ -1314,8 +1420,20 @@ ADMIN_PANEL_HTML = r"""
         target.innerHTML = "";
         return;
       }
-      const data = await api(`/admin/permissions?chatId=${selectedChatId}`);
-      const admins = await api(`/admin/chats/${selectedChatId}/admins`);
+      let data;
+      try {
+        data = await api(`/admin/permissions?chatId=${selectedChatId}`);
+      } catch (error) {
+        target.textContent = `Не удалось загрузить доступы: ${error.message}`;
+        return;
+      }
+      let admins = { admins: [] };
+      let adminError = "";
+      try {
+        admins = await api(`/admin/chats/${selectedChatId}/admins`);
+      } catch (error) {
+        adminError = `Не удалось получить список администраторов: ${error.message}. Можно выбрать Telegram ID вручную.`;
+      }
       const permissions = data.permissions || [];
       const byUser = {};
       permissions.forEach(item => {
@@ -1323,13 +1441,16 @@ ADMIN_PANEL_HTML = r"""
         byUser[item.user_id][item.feature] = Boolean(item.allowed);
       });
       const activeUser = Number(target.dataset.userId || 0);
-      adminsBox.innerHTML = (admins.admins || []).length
+      const adminButtons = (admins.admins || []).length
         ? (admins.admins || []).map(admin => `
           <button class="secondary ${admin.userId === activeUser ? "active" : ""}" onclick="selectPermissionUser(${admin.userId})">
             ${escapeHtml(admin.fullName || admin.username || String(admin.userId))}
           </button>
         `).join("")
-        : `<p class="muted">Не удалось получить админов группы.</p>`;
+        : `<p class="muted">Администраторы не найдены автоматически.</p>`;
+      adminsBox.innerHTML = `${adminError ? `<p class="muted">${escapeHtml(adminError)}</p>` : adminButtons}
+        <input id="permissionUserId" type="number" min="1" placeholder="Telegram ID администратора">
+        <button class="secondary" onclick="selectPermissionUserFromInput()">Выбрать ID</button>`;
       const renderForUser = (userId) => {
         const current = byUser[userId] || {};
         if (!userId) {
@@ -1381,6 +1502,15 @@ ADMIN_PANEL_HTML = r"""
       await loadPermissions();
     }
 
+    async function selectPermissionUserFromInput() {
+      const userId = Number(val("permissionUserId"));
+      if (!Number.isSafeInteger(userId) || userId <= 0) {
+        toast("Укажи корректный Telegram ID администратора");
+        return;
+      }
+      await selectPermissionUser(userId);
+    }
+
     async function setPermission(userId, feature, mode, allowed) {
       userId = Number(userId);
       if (!userId) {
@@ -1388,12 +1518,17 @@ ADMIN_PANEL_HTML = r"""
         await loadPermissions();
         return;
       }
-      await api("/admin/permissions", {
-        method: "POST",
-        body: JSON.stringify({ chatId: selectedChatId, userId, feature, mode, allowed })
-      });
-      toast("Доступ обновлен");
-      await loadPermissions();
+      try {
+        await api("/admin/permissions", {
+          method: "POST",
+          body: JSON.stringify({ chatId: selectedChatId, userId, feature, mode, allowed })
+        });
+        toast("Доступ обновлен");
+      } catch (error) {
+        toast(error.message || "Не удалось изменить доступ");
+      } finally {
+        await loadPermissions();
+      }
     }
 
     async function loadAll() {
@@ -1759,6 +1894,8 @@ ADMIN_PANEL_HTML = r"""
               <div class="text">Выбери админа, затем настрой чтение и изменение каждой кнопки.</div>
             </div>
           </div>
+          <div class="row"><button onclick="openAccessKeys()">Ключи доступа</button></div>
+          <p class="muted">Ключ выдаётся по Telegram ID. Права на действия в выбранной группе настраиваются отдельно ниже.</p>
           <div id="permissionAdmins" class="row"></div>
           <div id="permissionFeatures" class="form-stack"></div>
         </div>
@@ -1804,6 +1941,9 @@ ADMIN_PANEL_HTML = r"""
             <option value="dark" ${settings.theme === "dark" ? "selected" : ""}>Темная</option>
             <option value="oled" ${settings.theme === "oled" ? "selected" : ""}>OLED</option>
             <option value="green" ${settings.theme === "green" ? "selected" : ""}>Зеленая</option>
+            <option value="glass" ${settings.theme === "glass" ? "selected" : ""}>Liquid Glass</option>
+            <option value="expressive" ${settings.theme === "expressive" ? "selected" : ""}>M3 Expressive</option>
+            <option value="classic" ${settings.theme === "classic" ? "selected" : ""}>Сапёр Classic</option>
           </select>
         </label>
         <label>Город для погоды
@@ -2548,11 +2688,14 @@ ADMIN_PANEL_HTML = r"""
         light: "#f6f8fb",
         dark: "#111827",
         green: "#f3faf6",
-        oled: "#000000"
+        oled: "#000000",
+        glass: "#142039",
+        expressive: "#f6f1fb",
+        classic: "#c1c1c1"
       };
-      document.body.classList.toggle("theme-dark", theme === "dark");
-      document.body.classList.toggle("theme-green", theme === "green");
-      document.body.classList.toggle("theme-oled", theme === "oled");
+      ["dark", "green", "oled", "glass", "expressive", "classic"].forEach(name => {
+        document.body.classList.toggle(`theme-${name}`, theme === name);
+      });
       document.documentElement.style.backgroundColor = themeColors[theme] || themeColors.light;
       const themeColorMeta = document.querySelector('meta[name="theme-color"]');
       if (themeColorMeta) {
@@ -2567,7 +2710,7 @@ ADMIN_PANEL_HTML = r"""
       }
       if (settings.background) {
         document.body.style.setProperty("--bg-image", `url("${settings.background}")`);
-        const scrim = settings.theme === "oled" ? "0.78" : settings.theme === "dark" ? "0.68" : settings.theme === "green" ? "0.74" : "0.76";
+        const scrim = settings.theme === "oled" ? "0.78" : settings.theme === "dark" ? "0.68" : settings.theme === "glass" ? "0.65" : settings.theme === "green" ? "0.74" : "0.76";
         document.body.style.setProperty("--bg-scrim", scrim);
       } else {
         document.body.style.removeProperty("--bg-image");
@@ -2714,7 +2857,15 @@ class UserLoginStatusPayload(BaseModel):
 
 class AccessKeyCreatePayload(BaseModel):
     label: str = Field(min_length=1, max_length=80)
-    userId: int
+    userId: int = Field(gt=0)
+
+    @field_validator("label")
+    @classmethod
+    def valid_label(cls, value: str) -> str:
+        label = value.strip()
+        if not label:
+            raise ValueError("Название ключа не может быть пустым")
+        return label
 
 
 class AdminPermissionPayload(BaseModel):
