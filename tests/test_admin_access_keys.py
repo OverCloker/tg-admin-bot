@@ -58,3 +58,28 @@ def test_admin_panel_offers_new_interface_themes(theme):
     page = admin_api.ADMIN_PANEL_HTML
     assert f'<option value="{theme}"' in page
     assert f'body.theme-{theme}' in page
+
+
+def test_abstergo_groups_controls_and_combines_auto_replies():
+    page = admin_api.ADMIN_PANEL_HTML
+    menu = page.split("const defaultActions = [", 1)[1].split("];", 1)[0]
+    assert '{ id: "replies", title: "Автоответы" }' in menu
+    assert '{ id: "addReply"' not in menu
+    assert '{ id: "deleteReply"' not in menu
+    for title in ("Ответы и контент", "Группа и модерация", "Управление"):
+        assert f'title: "{title}"' in page
+    assert 'if (id === "replies") return' in page
+    assert 'canWrite("addReply")' in page
+    assert 'canWrite("deleteReply")' in page
+    assert 'showAction("replies", "Автоответы")' in page
+    assert '["addReply", "deleteReply"].includes(id) ? "replies" : id' in page
+
+
+def test_abstergo_removes_green_theme_and_matches_miniapp_palette():
+    page = admin_api.ADMIN_PANEL_HTML
+    assert '<option value="green"' not in page
+    assert 'body.theme-green' not in page
+    assert 'if (theme === "green") return "expressive"' in page
+    assert '--bg: #111423;' in page  # M3 Expressive
+    assert '--bg: #050b13;' in page  # Liquid Glass
+    assert '--bg: #008080;' in page  # Classic

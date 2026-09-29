@@ -81,8 +81,8 @@ USER_LOGIN_TTL_MINUTES = 10
 USER_SESSION_DAYS = 180
 USER_SUBSCRIPTION_PERIOD = 30 * 24 * 60 * 60
 ADMIN_FEATURES: list[dict[str, str]] = [
-    {"id": "addReply", "title": "Добавить @ответ"},
-    {"id": "deleteReply", "title": "Удалить @ответ"},
+    {"id": "addReply", "title": "Автоответы: добавление"},
+    {"id": "deleteReply", "title": "Автоответы: удаление"},
     {"id": "triggers", "title": "Список триггеров"},
     {"id": "participants", "title": "Топ участников"},
     {"id": "checkAccess", "title": "Проверить доступ"},
@@ -306,7 +306,7 @@ ADMIN_PANEL_HTML = r"""
     body {
       margin: 0;
       background: var(--bg);
-      background-image: var(--bg-image, none);
+      background-image: var(--bg-image, var(--theme-bg-image, none));
       background-size: cover;
       background-position: center;
       background-attachment: fixed;
@@ -401,29 +401,6 @@ ADMIN_PANEL_HTML = r"""
       --bg-scrim-color: 17, 24, 39;
       --bg-scrim: 0.82;
     }
-    body.theme-green {
-      --bg: #f3faf6;
-      --card: #ffffff;
-      --control: #ffffff;
-      --menu-bg: #eaf5ee;
-      --menu-text: #14231b;
-      --button-bg: #247a4d;
-      --button-text: #ffffff;
-      --secondary-bg: #e2f3e9;
-      --secondary-text: #14231b;
-      --field-bg: #eaf5ee;
-      --field-text: #14231b;
-      --field-muted: #60736a;
-      --file-button-bg: #e2f3e9;
-      --file-button-text: #14231b;
-      --text: #14231b;
-      --muted: #60736a;
-      --line: #d7e7dd;
-      --primary: #247a4d;
-      --primary-soft: #e2f3e9;
-      --bg-scrim-color: 243, 250, 246;
-      --bg-scrim: 0.86;
-    }
     body.theme-oled {
       --bg: #000000;
       --card: #050505;
@@ -451,85 +428,111 @@ ADMIN_PANEL_HTML = r"""
     }
     body.theme-glass {
       color-scheme: dark;
-      --bg: #142039;
-      --card: rgba(29, 47, 79, 0.86);
-      --control: #203451;
-      --menu-bg: rgba(90, 120, 163, 0.38);
-      --menu-text: #f6faff;
-      --button-bg: #a8d8f0;
-      --button-text: #10253e;
-      --secondary-bg: rgba(112, 145, 190, 0.35);
-      --secondary-text: #f6faff;
-      --field-bg: rgba(13, 29, 52, 0.82);
-      --field-text: #ffffff;
-      --field-muted: #b8cbe0;
-      --file-button-bg: #385778;
-      --file-button-text: #ffffff;
-      --text: #f6faff;
-      --muted: #ccdaeb;
-      --line: rgba(188, 215, 244, 0.43);
-      --primary: #a8d8f0;
-      --primary-soft: #466988;
-      --bg-scrim-color: 20, 32, 57;
-      --bg-scrim: 0.80;
+      --bg: #050b13;
+      --card: linear-gradient(145deg, #ffffff46 0%, #e8f7ff1c 36%, #7aa4d20f 100%);
+      --control: #1d3149;
+      --menu-bg: linear-gradient(145deg, #ffffff54 0%, #d8f2ff25 48%, #7794c018 100%);
+      --menu-text: #fbfdff;
+      --button-bg: linear-gradient(180deg, #ffffffee 0%, #dff5ffc8 48%, #a9d8ffa8 100%);
+      --button-text: #07111c;
+      --secondary-bg: linear-gradient(145deg, #ffffff54 0%, #d8f2ff25 48%, #7794c018 100%);
+      --secondary-text: #fbfdff;
+      --field-bg: #1d3149a8;
+      --field-text: #fbfdff;
+      --field-muted: #d9e7f3;
+      --file-button-bg: #1d3149a8;
+      --file-button-text: #fbfdff;
+      --text: #fbfdff;
+      --muted: #e5edf6;
+      --line: #ffffff78;
+      --primary: #d8f1ff;
+      --primary-soft: #38536f;
+      --bg-scrim-color: 5, 11, 19;
+      --bg-scrim: 0.12;
+      --theme-bg-image:
+        radial-gradient(circle at 12% -4%, #ffffff8f, transparent 18%),
+        radial-gradient(circle at 78% 2%, #9fe9ff70, transparent 23%),
+        radial-gradient(circle at 20% 74%, #8f7dff48, transparent 30%),
+        linear-gradient(160deg, #08111d 0%, #0d1829 45%, #05070d 100%);
     }
     body.theme-glass :is(header, .card, .modal) {
-      backdrop-filter: blur(18px);
-      -webkit-backdrop-filter: blur(18px);
-      border-radius: 22px;
-      box-shadow: 0 12px 30px rgba(3, 12, 27, 0.20);
+      backdrop-filter: blur(36px) saturate(2.05) contrast(1.04);
+      -webkit-backdrop-filter: blur(36px) saturate(2.05) contrast(1.04);
+      border-radius: 30px;
+      box-shadow: 0 34px 90px #00000073, inset 0 1px 0 #ffffff9e;
     }
     body.theme-expressive {
-      --bg: #f6f1fb;
-      --card: #fffaff;
-      --control: #ffffff;
-      --menu-bg: #eee1fa;
-      --menu-text: #2f1946;
-      --button-bg: #7650a8;
-      --button-text: #ffffff;
-      --secondary-bg: #eadcf7;
-      --secondary-text: #2f1946;
-      --field-bg: #fbf5ff;
-      --field-text: #2f1946;
-      --field-muted: #705c82;
-      --file-button-bg: #eadcf7;
-      --file-button-text: #2f1946;
-      --text: #2f1946;
-      --muted: #705c82;
-      --line: #dbc9ec;
-      --primary: #7650a8;
-      --primary-soft: #eadcf7;
-      --bg-scrim-color: 246, 241, 251;
-      --bg-scrim: 0.84;
+      color-scheme: dark;
+      --bg: #111423;
+      --card: linear-gradient(145deg, #27334f 0%, #1b283f 52%, #162236 100%);
+      --control: #16243a;
+      --menu-bg: linear-gradient(145deg, #344667 0%, #223653 100%);
+      --menu-text: #fbfcff;
+      --button-bg: linear-gradient(135deg, #ffe08b 0%, #b8d7ff 52%, #d9b8ff 100%);
+      --button-text: #091322;
+      --secondary-bg: linear-gradient(145deg, #536f9a 0%, #334f79 54%, #2b4166 100%);
+      --secondary-text: #fafdff;
+      --field-bg: #16243a;
+      --field-text: #fbfcff;
+      --field-muted: #bfcae2;
+      --file-button-bg: #344667;
+      --file-button-text: #fbfcff;
+      --text: #fbfcff;
+      --muted: #d4dcef;
+      --line: #6d86b8;
+      --primary: #b8d7ff;
+      --primary-soft: #344667;
+      --bg-scrim-color: 17, 20, 35;
+      --bg-scrim: 0.12;
+      --theme-bg-image:
+        radial-gradient(circle at 12% 4%, #7ab8ff8c, transparent 25%),
+        radial-gradient(circle at 88% 10%, #ff9cc070, transparent 24%),
+        radial-gradient(circle at 24% 82%, #ffd36e55, transparent 28%),
+        linear-gradient(145deg, #151b31 0%, #0f1729 46%, #121827 100%);
     }
-    body.theme-expressive :is(.card, .modal) { border-radius: 26px; }
-    body.theme-expressive button { border-radius: 18px; }
+    body.theme-expressive :is(.card, .modal) { border-radius: 28px; box-shadow: 0 18px 42px #02071240, inset 0 1px 0 #ffffff2f; }
+    body.theme-expressive button { border-radius: 999px; }
     body.theme-classic {
-      --bg: #c1c1c1;
-      --card: #d2d2d2;
+      --bg: #008080;
+      --card: #c0c0c0;
       --control: #ffffff;
-      --menu-bg: #e5e5e5;
-      --menu-text: #202020;
-      --button-bg: #303030;
-      --button-text: #ffffff;
-      --secondary-bg: #eeeeee;
-      --secondary-text: #202020;
+      --menu-bg: #c0c0c0;
+      --menu-text: #000000;
+      --button-bg: #c0c0c0;
+      --button-text: #000000;
+      --secondary-bg: #c0c0c0;
+      --secondary-text: #000000;
       --field-bg: #ffffff;
-      --field-text: #202020;
-      --field-muted: #555555;
-      --file-button-bg: #eeeeee;
-      --file-button-text: #202020;
-      --text: #202020;
-      --muted: #555555;
-      --line: #707070;
-      --primary: #333333;
-      --primary-soft: #f0f0f0;
-      --bg-scrim-color: 193, 193, 193;
-      --bg-scrim: 0.94;
+      --field-text: #000000;
+      --field-muted: #666666;
+      --file-button-bg: #c0c0c0;
+      --file-button-text: #000000;
+      --text: #000000;
+      --muted: #404040;
+      --line: #808080;
+      --primary: #000080;
+      --primary-soft: #dedede;
+      --bg-scrim-color: 0, 128, 128;
+      --bg-scrim: 0;
+      --theme-bg-image: linear-gradient(#008080, #008080);
     }
-    body.theme-classic :is(header, .card, .modal, button, input, textarea, select) {
-      border-radius: 2px;
-      box-shadow: 2px 2px 0 #777777;
+    body.theme-classic { font-family: Arial, "MS Sans Serif", sans-serif; }
+    body.theme-classic :is(header, .card, .modal) {
+      border: 3px solid;
+      border-color: #fff #808080 #808080 #fff;
+      border-radius: 0;
+      box-shadow: 2px 2px 0 #000;
+    }
+    body.theme-classic :is(button, input, textarea, select) {
+      border: 3px solid;
+      border-color: #fff #808080 #808080 #fff;
+      border-radius: 0;
+      box-shadow: none;
+    }
+    body.theme-classic :is(input, textarea, select) { border-color: #808080 #fff #fff #808080; }
+    body.theme-classic button:active {
+      border-color: #808080 #fff #fff #808080;
+      transform: translate(1px, 1px);
     }
     .row {
       display: flex;
@@ -558,6 +561,27 @@ ADMIN_PANEL_HTML = r"""
     }
     .admin-grid {
       grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .admin-sections { display: grid; gap: 12px; }
+    .admin-section {
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--card);
+    }
+    .admin-section h3 { margin: 0 0 10px; font-size: 16px; }
+    body.theme-glass .admin-section {
+      backdrop-filter: blur(36px) saturate(2.05);
+      -webkit-backdrop-filter: blur(36px) saturate(2.05);
+      border-radius: 24px;
+    }
+    body.theme-expressive .admin-section { border-radius: 24px; }
+    body.theme-classic .admin-section {
+      border: 3px solid;
+      border-color: #fff #808080 #808080 #fff;
+      border-radius: 0;
+      box-shadow: 2px 2px 0 #000;
     }
     input, textarea {
       width: 100%;
@@ -797,7 +821,7 @@ ADMIN_PANEL_HTML = r"""
       <div class="row" style="margin-bottom:10px">
         <span class="muted" id="buttonModeHint"></span>
       </div>
-      <div id="adminMenu" class="grid admin-grid"></div>
+      <div id="adminMenu" class="admin-sections"></div>
     </section>
 
     <section class="card hidden" id="actionCard">
@@ -921,28 +945,32 @@ ADMIN_PANEL_HTML = r"""
     let weatherTimer = null;
 
     const defaultActions = [
-      { id: "addReply", title: "Добавить @ответ" },
-      { id: "deleteReply", title: "Удалить @ответ" },
-      { id: "triggers", title: "Список триггеров" },
-      { id: "participants", title: "Топ участников" },
-      { id: "checkAccess", title: "Проверить доступ" },
-      { id: "giveaway", title: "Настроить розыгрыш" },
-      { id: "restart", title: "Перезагрузка" },
-      { id: "alarm", title: "Режим тревоги" },
+      { id: "replies", title: "Автоответы" },
+      { id: "triggers", title: "Триггеры" },
+      { id: "blacklist", title: "Чёрный список слов" },
+      { id: "quotes", title: "Цитаты" },
+      { id: "ads", title: "Реклама" },
+      { id: "send", title: "Написать в чат" },
+      { id: "alarm", title: "Тревоги" },
       { id: "rollMute", title: "Roll mute" },
       { id: "quiet", title: "Затихни" },
-      { id: "blacklist", title: "Черный список слов" },
-      { id: "quotes", title: "Цитаты" },
-      { id: "send", title: "Написать в чат" },
-      { id: "feedback", title: "Обратная связь" },
-      { id: "ads", title: "Реклама" },
-      { id: "stars", title: "Звезды" },
-      { id: "premium", title: "Premium" },
-      { id: "analytics", title: "Аналитика" },
-      { id: "mine", title: "Шахта" },
-      { id: "logs", title: "Логи" },
+      { id: "giveaway", title: "Розыгрыш" },
+      { id: "participants", title: "Топ участников" },
+      { id: "checkAccess", title: "Права бота" },
       { id: "access", title: "Доступ" },
+      { id: "mine", title: "Шахта" },
+      { id: "premium", title: "Premium" },
+      { id: "stars", title: "Звёзды" },
+      { id: "analytics", title: "Аналитика" },
+      { id: "logs", title: "Логи" },
+      { id: "feedback", title: "Обратная связь" },
+      { id: "restart", title: "Перезагрузка" },
       { id: "appSettings", title: "Настройки приложения" },
+    ];
+    const adminSections = [
+      { title: "Ответы и контент", actions: ["replies", "triggers", "blacklist", "quotes", "ads", "send"] },
+      { title: "Группа и модерация", actions: ["alarm", "rollMute", "quiet", "giveaway", "participants", "checkAccess"] },
+      { title: "Управление", actions: ["access", "mine", "premium", "stars", "analytics", "logs", "feedback", "restart"] },
     ];
     let buttonSettings = loadButtonSettings();
 
@@ -1593,8 +1621,19 @@ ADMIN_PANEL_HTML = r"""
       const menu = document.getElementById("adminMenu");
       menu.innerHTML = "";
       updateReorderHint();
-      orderedActions().forEach(({ id, title }) => {
-        const button = document.createElement("button");
+      const actions = orderedActions();
+      adminSections.forEach(section => {
+        const sectionActions = actions.filter(action => section.actions.includes(action.id));
+        if (!sectionActions.length) return;
+        const sectionElement = document.createElement("section");
+        sectionElement.className = "admin-section";
+        const heading = document.createElement("h3");
+        heading.textContent = section.title;
+        const sectionGrid = document.createElement("div");
+        sectionGrid.className = "grid admin-grid";
+        sectionElement.append(heading, sectionGrid);
+        sectionActions.forEach(({ id, title }) => {
+          const button = document.createElement("button");
         const style = buttonSettings.styles[id] || {};
         button.className = `menu ${normalizedButtonSize(style.size)}`;
         if (reorderMode && pickedButtonId === id) button.classList.add("drag-picked");
@@ -1643,7 +1682,9 @@ ADMIN_PANEL_HTML = r"""
           moveButtonBefore(draggedButtonId || event.dataTransfer.getData("text/plain"), id);
           draggedButtonId = null;
         };
-        menu.appendChild(button);
+          sectionGrid.appendChild(button);
+        });
+        menu.appendChild(sectionElement);
       });
     }
 
@@ -1651,9 +1692,16 @@ ADMIN_PANEL_HTML = r"""
       const fallback = { order: defaultActions.map(item => item.id), styles: {} };
       try {
         const parsed = JSON.parse(localStorage.getItem("adminButtonSettings") || "{}");
+        const order = Array.isArray(parsed.order) ? parsed.order : fallback.order;
+        const styles = parsed.styles && typeof parsed.styles === "object" ? parsed.styles : {};
+        // Old installations stored two separate reply buttons. Keep their place
+        // and appearance while replacing them with one combined section.
+        if (!styles.replies) styles.replies = styles.addReply || styles.deleteReply || {};
+        delete styles.addReply;
+        delete styles.deleteReply;
         return {
-          order: Array.isArray(parsed.order) ? parsed.order : fallback.order,
-          styles: parsed.styles && typeof parsed.styles === "object" ? parsed.styles : {}
+          order: [...new Set(order.map(id => ["addReply", "deleteReply"].includes(id) ? "replies" : id))],
+          styles
         };
       } catch (_) {
         return fallback;
@@ -1668,9 +1716,17 @@ ADMIN_PANEL_HTML = r"""
       const byId = Object.fromEntries(defaultActions.map(item => [item.id, item]));
       const ids = [...new Set([...(buttonSettings.order || []), ...defaultActions.map(item => item.id)])]
         .filter(id => byId[id] && id !== "appSettings")
-        .filter(id => id === "access" ? ownerActionsAllowed : canUse(id));
+        .filter(id => id === "access" ? ownerActionsAllowed : canUseAction(id));
       buttonSettings.order = ids;
       return ids.map(id => byId[id]);
+    }
+
+    function canUseAction(id) {
+      return id === "replies" ? canUse("addReply") || canUse("deleteReply") : canUse(id);
+    }
+
+    function actionSection(id) {
+      return adminSections.find(section => section.actions.includes(id));
     }
 
     function startButtonHold(event, id, title) {
@@ -1734,10 +1790,15 @@ ADMIN_PANEL_HTML = r"""
     function moveButton(direction) {
       if (!editingButtonId) return;
       const order = orderedActions().map(item => item.id);
-      const index = order.indexOf(editingButtonId);
+      const section = actionSection(editingButtonId);
+      const sectionOrder = order.filter(id => actionSection(id) === section);
+      const index = sectionOrder.indexOf(editingButtonId);
       const next = index + direction;
-      if (index < 0 || next < 0 || next >= order.length) return;
-      [order[index], order[next]] = [order[next], order[index]];
+      if (index < 0 || next < 0 || next >= sectionOrder.length) return;
+      const otherId = sectionOrder[next];
+      const firstIndex = order.indexOf(editingButtonId);
+      const secondIndex = order.indexOf(otherId);
+      [order[firstIndex], order[secondIndex]] = [order[secondIndex], order[firstIndex]];
       buttonSettings.order = order;
       saveButtonSettings();
       showMenu();
@@ -1793,7 +1854,7 @@ ADMIN_PANEL_HTML = r"""
       if (reorderButton) reorderButton.textContent = reorderMode ? "Готово" : "Перемещение";
       if (editButton) editButton.textContent = editMode ? "Готово" : "Размер / цвет";
       const text = reorderMode
-        ? "Нажми кнопку, затем место для вставки. На ПК можно перетаскивать."
+        ? "Нажми кнопку, затем место для вставки в том же разделе. На ПК можно перетаскивать."
         : editMode
           ? "Нажми любую кнопку ниже, чтобы изменить размер или цвет."
           : "";
@@ -1819,6 +1880,10 @@ ADMIN_PANEL_HTML = r"""
 
     function moveButtonBefore(sourceId, targetId) {
       if (!sourceId || !targetId || sourceId === targetId) return;
+      if (actionSection(sourceId) !== actionSection(targetId)) {
+        toast("Перемещать кнопки можно внутри одного раздела");
+        return;
+      }
       const order = orderedActions().map(item => item.id).filter(id => id !== sourceId);
       const targetIndex = order.indexOf(targetId);
       if (targetIndex < 0) return;
@@ -1842,7 +1907,7 @@ ADMIN_PANEL_HTML = r"""
     }
 
     function showAction(id, title) {
-      if (id !== "access" && !canUse(id)) {
+      if (id !== "access" && !canUseAction(id)) {
         toast("Нет доступа к этой функции");
         return;
       }
@@ -1860,8 +1925,10 @@ ADMIN_PANEL_HTML = r"""
     function renderAction(id) {
       if (!overview && id !== "premium") return "";
       if (id === "send") return sendMessageForm();
-      if (id === "addReply") return canWrite(id) ? form("Сохранить", [["username", "input", "@username"], ["text", "textarea", "Ответ"]], "saveReply()") : writeLocked(id);
-      if (id === "deleteReply") return list(overview.replies, item => `@${item.username}`, item => item.text, canWrite(id) ? item => `deleteReply('${encodeURIComponent(item.username)}')` : null);
+      if (id === "replies") return `<h3>Добавить автоответ</h3>`
+        + (canWrite("addReply") ? form("Сохранить", [["username", "input", "@username"], ["text", "textarea", "Ответ"]], "saveReply()") : writeLocked("addReply"))
+        + `<h3>Сохранённые автоответы</h3>`
+        + list(overview.replies, item => `@${item.username}`, item => item.text, canWrite("deleteReply") ? item => `deleteReply('${encodeURIComponent(item.username)}')` : null);
       if (id === "triggers") return (canWrite("triggers.add") ? form("Добавить слово", [["trigger", "input", "Слово/фраза"], ["text", "textarea", "Ответ"]], "saveTrigger()") : writeLocked("triggers.add")) + list(overview.triggers, item => item.trigger, item => item.text, canWrite("triggers.delete") ? item => `deleteTrigger('${encodeURIComponent(item.trigger)}')` : null);
       if (id === "participants") return participantsForm();
       if (id === "checkAccess") return canWrite(id) ? `<button onclick="checkAccess()">Проверить доступ</button><div id="checkAccessResult" class="item" style="margin-top:12px"><div><div class="text">Нажми кнопку, чтобы проверить права бота в выбранной группе.</div></div></div>` : writeLocked(id);
@@ -1933,17 +2000,17 @@ ADMIN_PANEL_HTML = r"""
 
     function appSettingsForm() {
       const settings = loadAppSettings();
+      const theme = normalizedAdminTheme(settings.theme);
       return `
         <div class="app-settings-form">
         <label>Тема
           <select id="themeSelect">
-            <option value="light" ${settings.theme === "light" ? "selected" : ""}>Светлая</option>
-            <option value="dark" ${settings.theme === "dark" ? "selected" : ""}>Темная</option>
-            <option value="oled" ${settings.theme === "oled" ? "selected" : ""}>OLED</option>
-            <option value="green" ${settings.theme === "green" ? "selected" : ""}>Зеленая</option>
-            <option value="glass" ${settings.theme === "glass" ? "selected" : ""}>Liquid Glass</option>
-            <option value="expressive" ${settings.theme === "expressive" ? "selected" : ""}>M3 Expressive</option>
-            <option value="classic" ${settings.theme === "classic" ? "selected" : ""}>Сапёр Classic</option>
+            <option value="light" ${theme === "light" ? "selected" : ""}>Светлая</option>
+            <option value="dark" ${theme === "dark" ? "selected" : ""}>Темная</option>
+            <option value="oled" ${theme === "oled" ? "selected" : ""}>OLED</option>
+            <option value="glass" ${theme === "glass" ? "selected" : ""}>Liquid Glass</option>
+            <option value="expressive" ${theme === "expressive" ? "selected" : ""}>M3 Expressive</option>
+            <option value="classic" ${theme === "classic" ? "selected" : ""}>Сапёр Classic</option>
           </select>
         </label>
         <label>Город для погоды
@@ -2289,6 +2356,12 @@ ADMIN_PANEL_HTML = r"""
       document.getElementById("actionCard").classList.add("hidden");
     }
 
+    async function afterReplyAction(message) {
+      toast(message);
+      await selectChat(selectedChatId);
+      showAction("replies", "Автоответы");
+    }
+
     function afterSendAction(message) {
       toast(message);
     }
@@ -2404,11 +2477,11 @@ ADMIN_PANEL_HTML = r"""
     }
     async function saveReply() {
       await api(`/admin/chats/${selectedChatId}/replies`, { method: "POST", body: JSON.stringify({ username: val("username"), text: val("text") }) });
-      afterAction("Ответ сохранен");
+      await afterReplyAction("Ответ сохранён");
     }
     async function deleteReply(username) {
       await api(`/admin/chats/${selectedChatId}/replies/${username}`, { method: "DELETE" });
-      afterAction("Ответ удален");
+      await afterReplyAction("Ответ удалён");
     }
     async function saveTrigger() {
       await api(`/admin/chats/${selectedChatId}/triggers`, { method: "POST", body: JSON.stringify({ trigger: val("trigger"), text: val("text") }) });
@@ -2681,21 +2754,30 @@ ADMIN_PANEL_HTML = r"""
       }
     }
 
+    function normalizedAdminTheme(theme) {
+      if (theme === "green") return "expressive";
+      return ["light", "dark", "oled", "glass", "expressive", "classic"].includes(theme) ? theme : "light";
+    }
+
     function applyAppSettings() {
       const settings = loadAppSettings();
-      const theme = settings.theme || "light";
+      const theme = normalizedAdminTheme(settings.theme);
+      if (settings.theme !== theme) {
+        settings.theme = theme;
+        localStorage.setItem("appSettings", JSON.stringify(settings));
+      }
       const themeColors = {
         light: "#f6f8fb",
         dark: "#111827",
-        green: "#f3faf6",
         oled: "#000000",
-        glass: "#142039",
-        expressive: "#f6f1fb",
-        classic: "#c1c1c1"
+        glass: "#050b13",
+        expressive: "#111423",
+        classic: "#008080"
       };
-      ["dark", "green", "oled", "glass", "expressive", "classic"].forEach(name => {
+      ["dark", "oled", "glass", "expressive", "classic"].forEach(name => {
         document.body.classList.toggle(`theme-${name}`, theme === name);
       });
+      document.documentElement.style.colorScheme = ["dark", "oled", "glass", "expressive"].includes(theme) ? "dark" : "light";
       document.documentElement.style.backgroundColor = themeColors[theme] || themeColors.light;
       const themeColorMeta = document.querySelector('meta[name="theme-color"]');
       if (themeColorMeta) {
@@ -2710,7 +2792,7 @@ ADMIN_PANEL_HTML = r"""
       }
       if (settings.background) {
         document.body.style.setProperty("--bg-image", `url("${settings.background}")`);
-        const scrim = settings.theme === "oled" ? "0.78" : settings.theme === "dark" ? "0.68" : settings.theme === "glass" ? "0.65" : settings.theme === "green" ? "0.74" : "0.76";
+        const scrim = theme === "oled" ? "0.78" : theme === "dark" ? "0.68" : theme === "glass" ? "0.35" : theme === "expressive" ? "0.55" : theme === "classic" ? "0.25" : "0.76";
         document.body.style.setProperty("--bg-scrim", scrim);
       } else {
         document.body.style.removeProperty("--bg-image");
