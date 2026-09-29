@@ -1915,6 +1915,7 @@ HELP_SECTIONS = {
         "<code>косяк @ник причина</code> — записать нарушение\n"
         "<code>затихни @ник</code> — мут на 1 час\n"
         "<code>затихни @ник 30м - причина</code> — мут на свой срок\n"
+        "Если нет @ника, в действии макроса укажи ID: <code>затихни 123456789 30м - причина</code>\n"
         "<code>трещи @ник</code> — снять мут\n"
         "<code>ударить словарём</code> — мут на 1 минуту\n"
         "Сроки мута: <code>30м</code>, <code>2ч</code>, <code>3д</code>. "
@@ -1929,7 +1930,8 @@ HELP_SECTIONS = {
         "<code>черный список</code> — показать людей и причины\n"
         "Ответом: <code>добавить в черный список</code>, следующей строкой причина\n"
         "<code>@ник в чс</code> — добавить; причину можно написать следующей строкой\n"
-        "Ответом: <code>удалить из чс</code> или <code>@ник из чс</code>\n"
+        "Без @ника: <code>123456789 в чс</code> или <code>добавить в чс 123456789</code>; причина следующей строкой\n"
+        "Удалить: ответом <code>удалить из чс</code>, <code>@ник из чс</code> или <code>123456789 из чс</code>\n"
         "Добавлять и удалять могут админы и модераторы. Список не банит автоматически.\n\n"
         "<b>Чёрный список слов</b> · только админы бота (владелец)\n"
         "<code>запрет слово</code> — добавить выражение\n"
@@ -14094,7 +14096,7 @@ async def manage_chat_blacklisted_user(message: Message) -> None:
         return
     parsed = parse_chat_blacklist_action(message.text or "")
     if not parsed:
-        await safe_reply(message, "Ответь на сообщение командой «добавить в черный список» или напиши «@ник в чс». Для удаления: «удалить из чс» ответом либо «@ник из чс».")
+        await safe_reply(message, "Ответь на сообщение командой «добавить в черный список» или напиши «@ник в чс» / «123456789 в чс». Для удаления: «удалить из чс» ответом либо «@ник из чс» / «123456789 из чс».")
         return
     action, target, reason = parsed
     if len(reason) > 500:
@@ -14111,8 +14113,21 @@ async def manage_chat_blacklisted_user(message: Message) -> None:
         if target_id > 2**63 - 1:
             await safe_reply(message, "Некорректный Telegram ID пользователя.")
             return
-        known = db.get_known_user(target_id)
+        existing = db.get_chat_blacklisted_user(message.chat.id, target_id)
+        known = existing or db.get_known_user(target_id)
         target_name = f"@{known.username}" if known and known.username else (known.full_name if known else f"ID {target_id}")
+        if action == "add":
+            try:
+                member = await message.bot.get_chat_member(message.chat.id, target_id)
+            except (TelegramBadRequest, TelegramForbiddenError, TelegramNotFound):
+                member = None
+            if member is not None:
+                person = member.user
+                if person.is_bot:
+                    await safe_reply(message, "Бота нельзя добавить в чёрный список пользователей.")
+                    return
+                db.upsert_seen_user(message.chat.id, person.id, person.username, person.full_name, False)
+                target_name = f"@{person.username}" if person.username else person.full_name
     else:
         target_id, target_name, error = await resolve_command_target(message, target.lstrip("@") if target else None)
         if error:

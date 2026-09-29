@@ -20,6 +20,8 @@ def test_chat_user_blacklist_is_separate_per_chat_and_upserts_reason(tmp_path) -
     assert len(first) == 1
     assert (first[0].user_id, first[0].username, first[0].reason) == (9, "new_vika", "повторное нарушение")
     assert service.get_chat_blacklisted_user_by_username(-100, "@NEW_VIKA") == first[0]
+    assert service.get_chat_blacklisted_user(-100, 9) == first[0]
+    assert service.get_chat_blacklisted_user(-100, 99) is None
     assert service.get_chat_blacklisted_user_by_username(-100, "@Vika") is None
     assert service.delete_chat_blacklisted_user(-100, 9) is True
     assert service.delete_chat_blacklisted_user(-100, 9) is False
@@ -41,6 +43,10 @@ def test_chat_user_blacklist_parses_reply_and_username_forms() -> None:
     assert parse("удалить из чс") == ("remove", None, "")
     assert parse("@vika123 из чс") == ("remove", "@vika123", "")
     assert parse("удалить из черного списка @vika123") == ("remove", "@vika123", "")
+    assert parse("123456789 в чс\nзаметка") == ("add", "123456789", "заметка")
+    assert parse("добавить в чс 123456789\nзаметка") == ("add", "123456789", "заметка")
+    assert parse("123456789 из чс") == ("remove", "123456789", "")
+    assert parse("удалить из чс 123456789") == ("remove", "123456789", "")
     assert parse("удалить из чс\nнеожиданный текст") is None
     assert parse("") is None
 
@@ -105,4 +111,49 @@ def test_chat_user_blacklist_handlers_check_role_and_escape_reason(tmp_path, mon
     message.text = "удалить из чс"
     asyncio.run(bot_module.manage_chat_blacklisted_user(message))
     assert service.list_chat_blacklisted_users(-100) == []
+    service.close()
+
+
+def test_chat_user_blacklist_numeric_id_without_username(tmp_path, monkeypatch) -> None:
+    service = Database(str(tmp_path / "bot.sqlite3"))
+    service.init()
+    service.upsert_chat(-100, "Chat", "supergroup", None)
+    replies: list[str] = []
+
+    async def allowed(*_args):
+        return "moderator"
+
+    async def remember(*_args):
+        return None
+
+    async def reply(_message, text, **_kwargs):
+        replies.append(text)
+
+    async def reply_chunks(_message, lines, **_kwargs):
+        replies.append("\n".join(lines))
+
+    class FakeBot:
+        async def get_chat_member(self, _chat_id, user_id):
+            assert user_id == 123456789
+            return SimpleNamespace(user=SimpleNamespace(
+                id=user_id, username=None, full_name="Вика", is_bot=False,
+            ))
+
+    monkeypatch.setattr(bot_module, "db", service, raising=False)
+    monkeypatch.setattr(bot_module, "actor_moderation_role", allowed)
+    monkeypatch.setattr(bot_module, "remember_sender", remember)
+    monkeypatch.setattr(bot_module, "safe_reply", reply)
+    monkeypatch.setattr(bot_module, "safe_reply_chunks", reply_chunks)
+    message = SimpleNamespace(
+        text="123456789 в чс\nспам", chat=SimpleNamespace(id=-100, type="supergroup"),
+        from_user=SimpleNamespace(id=7), reply_to_message=None, bot=FakeBot(),
+    )
+    asyncio.run(bot_module.manage_chat_blacklisted_user(message))
+    assert service.get_chat_blacklisted_user(-100, 123456789).full_name == "Вика"
+    asyncio.run(bot_module.list_chat_blacklisted_users(message))
+    assert "Вика (ID 123456789) — спам" in replies[-1]
+    message.text = "123456789 из чс"
+    asyncio.run(bot_module.manage_chat_blacklisted_user(message))
+    assert service.get_chat_blacklisted_user(-100, 123456789) is None
+    assert "Вика удалён" in replies[-1]
     service.close()

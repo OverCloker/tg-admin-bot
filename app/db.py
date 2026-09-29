@@ -5565,6 +5565,16 @@ class Database:
         ).fetchall()
         return [ChatBlacklistedUser(**dict(row)) for row in rows]
 
+    def get_chat_blacklisted_user(self, chat_id: int, user_id: int) -> ChatBlacklistedUser | None:
+        row = self._conn.execute(
+            """
+            select chat_id, user_id, username, full_name, reason, added_by, created_at, updated_at
+            from chat_blacklisted_users where chat_id = ? and user_id = ?
+            """,
+            (chat_id, user_id),
+        ).fetchone()
+        return ChatBlacklistedUser(**dict(row)) if row else None
+
     def get_chat_blacklisted_user_by_username(
         self, chat_id: int, username: str,
     ) -> ChatBlacklistedUser | None:

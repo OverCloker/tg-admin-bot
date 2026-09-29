@@ -3420,8 +3420,10 @@ MINI_APP_HTML = r"""<!doctype html>
         <label class="wide" for="macroPhrase">Фраза запуска</label>
         <input id="macroPhrase" class="wide" maxlength="120" placeholder="Например: вика тихо" value="${escapeHtml(item.phrase || "")}">
         <label class="wide" for="macroAction">Что сделать</label>
-        <textarea id="macroAction" class="wide" maxlength="4000" placeholder="затихни @username 30м - причина&#10;или: сообщение: Привет!">${escapeHtml(item.action || "")}</textarea>
-        <p class="muted wide">Разрешены «затихни @ник 30м - причина» (можно указать ID вместо ника), «сообщение: текст» либо только вложение. Макрос запускается точным сообщением в выбранной группе и проверяет права отправителя.</p>
+        <textarea id="macroAction" class="wide" maxlength="4000" placeholder="затихни 123456789 30м - причина&#10;или: затихни @username 30м - причина&#10;или: сообщение: Привет!">${escapeHtml(item.action || "")}</textarea>
+        <label class="wide" for="macroTargetId">Telegram ID цели, если нет @ника</label>
+        <div class="mini-row wide"><input id="macroTargetId" type="text" inputmode="numeric" maxlength="19" placeholder="Например: 123456789" value="${escapeHtml((item.action || "").match(/^затихни\s+([1-9]\d{0,18})\b/i)?.[1] || "")}"><button class="btn secondary" type="button" onclick="insertMacroTargetId()">Подставить ID</button></div>
+        <p class="muted wide">Для мута укажи @ник или Telegram ID: «затихни 123456789 30м - причина». Также разрешены «сообщение: текст» и вложение. Макрос проверяет права отправителя и действует только в выбранной группе.</p>
         <div id="macroMediaBox" class="trigger-media-box wide" data-media-type="${escapeHtml(item.mediaType || "")}" data-media-file-id="${escapeHtml(item.mediaBroken ? "" : (item.mediaFileId || ""))}">
           <b>Фото, GIF, музыка или видео — необязательно</b>
           <input id="macroMediaFile" type="file" accept="image/jpeg,image/png,image/webp,image/gif,audio/*,video/*">
@@ -3439,6 +3441,19 @@ MINI_APP_HTML = r"""<!doctype html>
         <button class="btn secondary" onclick="showMacroManager(${Number(chatId)})">Отмена</button>
       </div>
     </section>`;
+  }
+
+  function insertMacroTargetId() {
+    const input = document.getElementById("macroTargetId");
+    const action = document.getElementById("macroAction");
+    const id = (input?.value || "").trim();
+    if (!action || !/^[1-9]\d{0,18}$/.test(id) || (id.length === 19 && id > "9223372036854775807")) {
+      alert("Укажи корректный числовой Telegram ID пользователя.");
+      return;
+    }
+    const previous = action.value.trim().match(/^затихни\s+(?:@[A-Za-z0-9_]{5,32}|[1-9]\d{0,18})(.*)$/i);
+    action.value = previous ? `затихни ${id}${previous[1]}` : `затихни ${id} 30м - причина`;
+    action.focus();
   }
 
   function clearMacroMedia() {

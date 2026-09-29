@@ -43,10 +43,12 @@ def parse_macro_action(action: str, *, has_media: bool = False) -> MacroAction:
         match = _QUIET.fullmatch(value)
         if not match:
             raise ValueError("Формат мута: затихни @username 30м - причина (можно указать ID вместо ника).")
+        if match.group(1).isdigit() and int(match.group(1)) > 2**63 - 1:
+            raise ValueError("Некорректный Telegram ID пользователя.")
         return MacroAction("quiet", target=match.group(1), duration=(match.group(2) or "1ч").replace(" ", ""), reason=match.group(3) or "")
     if value.casefold().startswith("сообщение:"):
         text = value.split(":", 1)[1].strip()
         if not text:
             raise ValueError("После «сообщение:» нужен текст.")
         return MacroAction("message", text=text)
-    raise ValueError("Разрешены действия «затихни @ник [срок]» и «сообщение: текст»; либо одно вложение.")
+    raise ValueError("Разрешены действия «затихни @ник или ID [срок]» и «сообщение: текст»; либо одно вложение.")

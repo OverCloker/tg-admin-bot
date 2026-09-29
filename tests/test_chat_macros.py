@@ -22,6 +22,8 @@ def test_macro_action_language() -> None:
     with pytest.raises(ValueError):
         parse_macro_action("затихни @bad 30м")
     with pytest.raises(ValueError):
+        parse_macro_action("затихни 9223372036854775808 30м")
+    with pytest.raises(ValueError):
         parse_macro_action("/shell rm -rf /tmp")
 
 
@@ -30,6 +32,9 @@ def test_macro_editor_uses_full_group_picker_and_styled_switch() -> None:
     assert 'class="macro-selected-chat"' in MINI_APP_HTML
     assert 'class="switch" aria-label="Включить макрос"' in MINI_APP_HTML
     assert '<span class="slider round"></span>' in MINI_APP_HTML
+    assert 'id="macroTargetId"' in MINI_APP_HTML
+    assert 'onclick="insertMacroTargetId()"' in MINI_APP_HTML
+    assert 'затихни 123456789 30м - причина' in MINI_APP_HTML
 
 
 def test_macro_save_list_rename_and_delete(tmp_path, monkeypatch) -> None:
