@@ -386,6 +386,7 @@ class BlacklistWord:
 @dataclass(frozen=True)
 class ChatBlacklistedUser:
     chat_id: int
+    owner_id: int
     user_id: int
     username: str | None
     full_name: str
@@ -1132,6 +1133,7 @@ class Database:
 
             create table if not exists chat_blacklisted_users (
                 chat_id integer not null,
+                owner_id integer not null,
                 user_id integer not null,
                 username text,
                 full_name text not null,
@@ -1139,12 +1141,9 @@ class Database:
                 added_by integer,
                 created_at text not null,
                 updated_at text not null,
-                primary key (chat_id, user_id),
+                primary key (chat_id, owner_id, user_id),
                 foreign key (chat_id) references chats(chat_id) on delete cascade
             );
-
-            create index if not exists idx_chat_blacklisted_users_chat_time
-                on chat_blacklisted_users(chat_id, created_at, user_id);
 
             create table if not exists blacklist_reply_variants (
                 id integer primary key autoincrement,
@@ -1460,6 +1459,7 @@ class Database:
         self._migrate_alarm_settings()
         self._migrate_alarm_api_settings()
         self._migrate_blacklist_words()
+        self._migrate_chat_blacklisted_users()
         self._migrate_advertisements()
         self._migrate_global_dig_game()
         self._migrate_global_dig_foreign_key()
@@ -1588,6 +1588,45 @@ class Database:
         }
         if "mute_minutes" not in columns:
             self._conn.execute("alter table blacklist_words add column mute_minutes integer not null default 0")
+
+    def _migrate_chat_blacklisted_users(self) -> None:
+        columns = {row["name"] for row in self._conn.execute("pragma table_info(chat_blacklisted_users)")}
+        if "owner_id" in columns:
+            self._conn.execute(
+                "create index if not exists idx_chat_blacklisted_users_chat_time "
+                "on chat_blacklisted_users(chat_id, owner_id, created_at, user_id)"
+            )
+            return
+        # The previous group-wide list recorded the last editor in added_by.
+        # Keep every row, assigning it to that editor; unknown owners remain under ID 0.
+        with self.atomic():
+            self._conn.execute(
+                """create table chat_blacklisted_users_personal (
+                    chat_id integer not null,
+                    owner_id integer not null,
+                    user_id integer not null,
+                    username text,
+                    full_name text not null,
+                    reason text not null default '',
+                    added_by integer,
+                    created_at text not null,
+                    updated_at text not null,
+                    primary key (chat_id, owner_id, user_id),
+                    foreign key (chat_id) references chats(chat_id) on delete cascade
+                )"""
+            )
+            self._conn.execute(
+                """insert into chat_blacklisted_users_personal
+                   (chat_id, owner_id, user_id, username, full_name, reason, added_by, created_at, updated_at)
+                   select chat_id, coalesce(added_by, 0), user_id, username, full_name, reason,
+                          added_by, created_at, updated_at from chat_blacklisted_users"""
+            )
+            self._conn.execute("drop table chat_blacklisted_users")
+            self._conn.execute("alter table chat_blacklisted_users_personal rename to chat_blacklisted_users")
+            self._conn.execute(
+                "create index idx_chat_blacklisted_users_chat_time "
+                "on chat_blacklisted_users(chat_id, owner_id, created_at, user_id)"
+            )
 
     def _migrate_advertisements(self) -> None:
         columns = {
@@ -5524,69 +5563,69 @@ class Database:
         self._conn.commit()
 
     def save_chat_blacklisted_user(
-        self, chat_id: int, user_id: int, username: str | None,
-        full_name: str, reason: str, added_by: int | None,
+        self, chat_id: int, owner_id: int, user_id: int, username: str | None,
+        full_name: str, reason: str,
     ) -> None:
         now = utc_now()
         self._conn.execute(
             """
             insert into chat_blacklisted_users
-                (chat_id, user_id, username, full_name, reason, added_by, created_at, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?)
-            on conflict(chat_id, user_id) do update set
+                (chat_id, owner_id, user_id, username, full_name, reason, added_by, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(chat_id, owner_id, user_id) do update set
                 username = excluded.username,
                 full_name = excluded.full_name,
                 reason = excluded.reason,
                 added_by = excluded.added_by,
                 updated_at = excluded.updated_at
             """,
-            (chat_id, user_id, normalize_username(username) if username else None,
-             full_name, reason, added_by, now, now),
+            (chat_id, owner_id, user_id, normalize_username(username) if username else None,
+             full_name, reason, owner_id, now, now),
         )
         self._conn.commit()
 
-    def delete_chat_blacklisted_user(self, chat_id: int, user_id: int) -> bool:
+    def delete_chat_blacklisted_user(self, chat_id: int, owner_id: int, user_id: int) -> bool:
         cursor = self._conn.execute(
-            "delete from chat_blacklisted_users where chat_id = ? and user_id = ?",
-            (chat_id, user_id),
+            "delete from chat_blacklisted_users where chat_id = ? and owner_id = ? and user_id = ?",
+            (chat_id, owner_id, user_id),
         )
         self._conn.commit()
         return cursor.rowcount > 0
 
-    def list_chat_blacklisted_users(self, chat_id: int) -> list[ChatBlacklistedUser]:
+    def list_chat_blacklisted_users(self, chat_id: int, owner_id: int) -> list[ChatBlacklistedUser]:
         rows = self._conn.execute(
             """
-            select chat_id, user_id, username, full_name, reason, added_by, created_at, updated_at
+            select chat_id, owner_id, user_id, username, full_name, reason, added_by, created_at, updated_at
             from chat_blacklisted_users
-            where chat_id = ?
+            where chat_id = ? and owner_id = ?
             order by created_at, user_id
             """,
-            (chat_id,),
+            (chat_id, owner_id),
         ).fetchall()
         return [ChatBlacklistedUser(**dict(row)) for row in rows]
 
-    def get_chat_blacklisted_user(self, chat_id: int, user_id: int) -> ChatBlacklistedUser | None:
+    def get_chat_blacklisted_user(self, chat_id: int, owner_id: int, user_id: int) -> ChatBlacklistedUser | None:
         row = self._conn.execute(
             """
-            select chat_id, user_id, username, full_name, reason, added_by, created_at, updated_at
-            from chat_blacklisted_users where chat_id = ? and user_id = ?
+            select chat_id, owner_id, user_id, username, full_name, reason, added_by, created_at, updated_at
+            from chat_blacklisted_users where chat_id = ? and owner_id = ? and user_id = ?
             """,
-            (chat_id, user_id),
+            (chat_id, owner_id, user_id),
         ).fetchone()
         return ChatBlacklistedUser(**dict(row)) if row else None
 
     def get_chat_blacklisted_user_by_username(
-        self, chat_id: int, username: str,
+        self, chat_id: int, owner_id: int, username: str,
     ) -> ChatBlacklistedUser | None:
         row = self._conn.execute(
             """
-            select chat_id, user_id, username, full_name, reason, added_by, created_at, updated_at
+            select chat_id, owner_id, user_id, username, full_name, reason, added_by, created_at, updated_at
             from chat_blacklisted_users
-            where chat_id = ? and username = ? collate nocase
+            where chat_id = ? and owner_id = ? and username = ? collate nocase
             order by updated_at desc
             limit 1
             """,
-            (chat_id, normalize_username(username)),
+            (chat_id, owner_id, normalize_username(username)),
         ).fetchone()
         return ChatBlacklistedUser(**dict(row)) if row else None
 

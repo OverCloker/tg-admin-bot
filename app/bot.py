@@ -1859,6 +1859,7 @@ HELP_SECTIONS = {
         "<code>профиль</code> — твоя карточка\n"
         "<code>профиль @ник</code> — карточка участника\n"
         "<code>важное</code> — открыть правила текущей группы\n"
+        "<code>черный список</code> — твой личный список пользователей в этой группе\n"
         "<code>напоминание</code> — личный планировщик\n"
         "<code>напомни через 30м текст</code> — создать напоминание\n"
         "<code>др 25.12 Имя</code> — добавить день рождения\n"
@@ -1926,13 +1927,13 @@ HELP_SECTIONS = {
         "<code>чат старт</code> — вернуть прежние права на текст; только админ\n"
         "<code>подтвердить комментарий</code> — подтвердить действие помощника; старший/админ\n"
         "<code>затихни админ @ник 2ч - причина</code> — тихий режим администратора; нужен доступ Telegram к удалению\n\n"
-        "<b>Чёрный список пользователей</b>\n"
-        "<code>черный список</code> — показать людей и причины\n"
+        "<b>Личный чёрный список пользователей</b> · доступен каждому, отдельно в каждой группе\n"
+        "<code>черный список</code> — показать свой список с именем владельца и причинами\n"
         "Ответом: <code>добавить в черный список</code>, следующей строкой причина\n"
         "<code>@ник в чс</code> — добавить; причину можно написать следующей строкой\n"
         "Без @ника: <code>123456789 в чс</code> или <code>добавить в чс 123456789</code>; причина следующей строкой\n"
         "Удалить: ответом <code>удалить из чс</code>, <code>@ник из чс</code> или <code>123456789 из чс</code>\n"
-        "Добавлять и удалять могут админы и модераторы. Список не банит автоматически.\n\n"
+        "Каждый меняет только свой список. Запись не банит пользователя автоматически.\n\n"
         "<b>Чёрный список слов</b> · только админы бота (владелец)\n"
         "<code>запрет слово</code> — добавить выражение\n"
         "<code>разрешить слово</code> — удалить выражение\n"
@@ -14091,9 +14092,7 @@ def parse_chat_blacklist_action(text: str) -> tuple[str, str | None, str] | None
 async def manage_chat_blacklisted_user(message: Message) -> None:
     if not message.from_user:
         return
-    if await actor_moderation_role(message.bot, message.chat.id, message.from_user.id) is None:
-        await safe_reply(message, "Добавлять и удалять пользователей из чёрного списка могут админы и модераторы.")
-        return
+    owner_id = message.from_user.id
     parsed = parse_chat_blacklist_action(message.text or "")
     if not parsed:
         await safe_reply(message, "Ответь на сообщение командой «добавить в черный список» или напиши «@ник в чс» / «123456789 в чс». Для удаления: «удалить из чс» ответом либо «@ник из чс» / «123456789 из чс».")
@@ -14105,7 +14104,7 @@ async def manage_chat_blacklisted_user(message: Message) -> None:
     await remember_sender(message)
     existing = None
     if target and target.startswith("@") and action == "remove":
-        existing = db.get_chat_blacklisted_user_by_username(message.chat.id, target)
+        existing = db.get_chat_blacklisted_user_by_username(message.chat.id, owner_id, target)
     if existing:
         target_id, target_name = existing.user_id, f"@{existing.username}"
     elif target and target.isdigit():
@@ -14113,7 +14112,7 @@ async def manage_chat_blacklisted_user(message: Message) -> None:
         if target_id > 2**63 - 1:
             await safe_reply(message, "Некорректный Telegram ID пользователя.")
             return
-        existing = db.get_chat_blacklisted_user(message.chat.id, target_id)
+        existing = db.get_chat_blacklisted_user(message.chat.id, owner_id, target_id)
         known = existing or db.get_known_user(target_id)
         target_name = f"@{known.username}" if known and known.username else (known.full_name if known else f"ID {target_id}")
         if action == "add":
@@ -14136,7 +14135,7 @@ async def manage_chat_blacklisted_user(message: Message) -> None:
     if not target_id or not target_name:
         return
     if action == "remove":
-        deleted = db.delete_chat_blacklisted_user(message.chat.id, target_id)
+        deleted = db.delete_chat_blacklisted_user(message.chat.id, owner_id, target_id)
         await safe_reply(message, f"{escape(target_name)} удалён из чёрного списка." if deleted else f"{escape(target_name)} в чёрном списке нет.")
         return
     if message.reply_to_message and not target and message.reply_to_message.from_user:
@@ -14146,17 +14145,21 @@ async def manage_chat_blacklisted_user(message: Message) -> None:
         person = db.get_seen_user_by_username(message.chat.id, target) if target and target.startswith("@") else db.get_known_user(target_id)
         username = person.username if person else target_name.lstrip("@") if target_name.startswith("@") else None
         full_name = person.full_name if person else target_name
-    db.save_chat_blacklisted_user(message.chat.id, target_id, username, full_name, reason, message.from_user.id)
+    db.save_chat_blacklisted_user(message.chat.id, owner_id, target_id, username, full_name, reason)
     await safe_reply(message, f"{escape(target_name)} добавлен в чёрный список. Причина: {escape(reason or 'не указана')}.")
 
 
 @router.message(F.chat.type.in_(SUPPORTED_CHAT_TYPES), F.text.regexp(re.compile(r"^/?ч[её]рный\s+список[?!.]?$", re.IGNORECASE)))
 async def list_chat_blacklisted_users(message: Message) -> None:
-    rows = db.list_chat_blacklisted_users(message.chat.id)
-    if not rows:
-        await safe_reply(message, "Чёрный список пользователей пуст.")
+    if not message.from_user:
         return
-    lines = ["<b>Чёрный список пользователей:</b>"]
+    owner = message.from_user
+    owner_name = f"@{owner.username}" if owner.username else (owner.full_name or f"ID {owner.id}")
+    rows = db.list_chat_blacklisted_users(message.chat.id, owner.id)
+    if not rows:
+        await safe_reply(message, f"Чёрный список {escape(owner_name)} в этой группе пуст.")
+        return
+    lines = [f"<b>Чёрный список {escape(owner_name)} в этой группе:</b>"]
     for index, item in enumerate(rows, start=1):
         label = f"@{item.username}" if item.username else f"{item.full_name} (ID {item.user_id})"
         lines.append(f"{index}. {escape(label)} — {escape(item.reason or 'без причины')}")

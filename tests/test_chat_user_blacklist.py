@@ -1,38 +1,75 @@
 import asyncio
+import sqlite3
 from types import SimpleNamespace
 
 from app import bot as bot_module
 from app.db import Database
 
 
-def test_chat_user_blacklist_is_separate_per_chat_and_upserts_reason(tmp_path) -> None:
+def test_chat_user_blacklist_is_separate_per_chat_and_owner(tmp_path) -> None:
     path = tmp_path / "bot.sqlite3"
     service = Database(str(path))
     service.init()
     service.upsert_chat(-100, "First", "supergroup", None)
     service.upsert_chat(-200, "Second", "supergroup", None)
     service.add_blacklist_word(-100, "spam", 1)
-    service.save_chat_blacklisted_user(-100, 9, "Vika", "Вика", "первое нарушение", 1)
-    service.save_chat_blacklisted_user(-200, 9, "Vika", "Вика", "другая группа", 2)
-    service.save_chat_blacklisted_user(-100, 9, "new_vika", "Вика", "повторное нарушение", 3)
+    service.save_chat_blacklisted_user(-100, 1, 9, "Vika", "Вика", "первое нарушение")
+    service.save_chat_blacklisted_user(-200, 1, 9, "Vika", "Вика", "другая группа")
+    service.save_chat_blacklisted_user(-100, 2, 9, "Vika", "Вика", "личная заметка")
+    service.save_chat_blacklisted_user(-100, 1, 9, "new_vika", "Вика", "повторное нарушение")
 
-    first = service.list_chat_blacklisted_users(-100)
+    first = service.list_chat_blacklisted_users(-100, 1)
     assert len(first) == 1
     assert (first[0].user_id, first[0].username, first[0].reason) == (9, "new_vika", "повторное нарушение")
-    assert service.get_chat_blacklisted_user_by_username(-100, "@NEW_VIKA") == first[0]
-    assert service.get_chat_blacklisted_user(-100, 9) == first[0]
-    assert service.get_chat_blacklisted_user(-100, 99) is None
-    assert service.get_chat_blacklisted_user_by_username(-100, "@Vika") is None
-    assert service.delete_chat_blacklisted_user(-100, 9) is True
-    assert service.delete_chat_blacklisted_user(-100, 9) is False
-    assert len(service.list_chat_blacklisted_users(-200)) == 1
+    assert service.get_chat_blacklisted_user_by_username(-100, 1, "@NEW_VIKA") == first[0]
+    assert service.get_chat_blacklisted_user(-100, 1, 9) == first[0]
+    assert service.get_chat_blacklisted_user(-100, 1, 99) is None
+    assert service.get_chat_blacklisted_user_by_username(-100, 1, "@Vika") is None
+    assert service.delete_chat_blacklisted_user(-100, 1, 9) is True
+    assert service.delete_chat_blacklisted_user(-100, 1, 9) is False
+    assert service.get_chat_blacklisted_user(-100, 2, 9).reason == "личная заметка"
+    assert len(service.list_chat_blacklisted_users(-200, 1)) == 1
     assert [word.word for word in service.list_blacklist_words(-100)] == ["spam"]
     service.close()
 
     reopened = Database(str(path))
     reopened.init()
-    assert len(reopened.list_chat_blacklisted_users(-200)) == 1
+    assert len(reopened.list_chat_blacklisted_users(-200, 1)) == 1
     reopened.close()
+
+
+def test_existing_group_blacklist_migrates_to_editor_personal_list(tmp_path) -> None:
+    path = tmp_path / "old.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "create table chats (chat_id integer primary key, title text not null, "
+            "type text not null, username text, updated_at text not null)"
+        )
+        connection.execute("insert into chats values (-100, 'Chat', 'supergroup', null, 'old')")
+        connection.execute(
+            """create table chat_blacklisted_users (
+                chat_id integer not null, user_id integer not null, username text,
+                full_name text not null, reason text not null default '', added_by integer,
+                created_at text not null, updated_at text not null,
+                primary key (chat_id, user_id),
+                foreign key (chat_id) references chats(chat_id) on delete cascade
+            )"""
+        )
+        connection.execute(
+            "insert into chat_blacklisted_users values (-100, 9, null, 'Вика', 'спам', 7, 'old', 'old')"
+        )
+        connection.execute(
+            "create index idx_chat_blacklisted_users_chat_time "
+            "on chat_blacklisted_users(chat_id, created_at, user_id)"
+        )
+    service = Database(str(path))
+    service.init()
+    assert service.get_chat_blacklisted_user(-100, 7, 9).reason == "спам"
+    assert service.list_chat_blacklisted_users(-100, 8) == []
+    assert service._conn.execute("pragma foreign_key_check").fetchall() == []
+    service.init()
+    assert len(service.list_chat_blacklisted_users(-100, 7)) == 1
+    service.close()
 
 
 def test_chat_user_blacklist_parses_reply_and_username_forms() -> None:
@@ -51,18 +88,12 @@ def test_chat_user_blacklist_parses_reply_and_username_forms() -> None:
     assert parse("") is None
 
 
-def test_chat_user_blacklist_handlers_check_role_and_escape_reason(tmp_path, monkeypatch) -> None:
+def test_chat_user_blacklist_handlers_are_personal_and_escape_reason(tmp_path, monkeypatch) -> None:
     service = Database(str(tmp_path / "bot.sqlite3"))
     service.init()
     service.upsert_chat(-100, "Chat", "supergroup", None)
     service.upsert_seen_user(-100, 9, "vika123", "Вика", False)
     replies: list[str] = []
-
-    async def allowed(*_args):
-        return "moderator"
-
-    async def denied(*_args):
-        return None
 
     async def remember(*_args):
         return None
@@ -74,43 +105,50 @@ def test_chat_user_blacklist_handlers_check_role_and_escape_reason(tmp_path, mon
         replies.append("\n".join(lines))
 
     monkeypatch.setattr(bot_module, "db", service, raising=False)
-    monkeypatch.setattr(bot_module, "actor_moderation_role", allowed)
     monkeypatch.setattr(bot_module, "remember_sender", remember)
     monkeypatch.setattr(bot_module, "safe_reply", reply)
     monkeypatch.setattr(bot_module, "safe_reply_chunks", reply_chunks)
     message = SimpleNamespace(
         text="@vika123 в чс\nСпам <script>",
         chat=SimpleNamespace(id=-100, type="supergroup"),
-        from_user=SimpleNamespace(id=7),
+        from_user=SimpleNamespace(id=7, username="editor7", full_name="Редактор"),
         reply_to_message=None,
         bot=SimpleNamespace(),
     )
 
     asyncio.run(bot_module.manage_chat_blacklisted_user(message))
-    assert service.list_chat_blacklisted_users(-100)[0].reason == "Спам <script>"
+    assert service.list_chat_blacklisted_users(-100, 7)[0].reason == "Спам <script>"
     assert "&lt;script&gt;" in replies[-1]
     asyncio.run(bot_module.list_chat_blacklisted_users(message))
+    assert "Чёрный список @editor7" in replies[-1]
     assert "1. @vika123 — Спам &lt;script&gt;" in replies[-1]
 
-    monkeypatch.setattr(bot_module, "actor_moderation_role", denied)
+    message.from_user = SimpleNamespace(id=8, username=None, full_name="Сосед")
+    asyncio.run(bot_module.list_chat_blacklisted_users(message))
+    assert "Чёрный список Сосед в этой группе пуст" in replies[-1]
     message.text = "@vika123 из чс"
     asyncio.run(bot_module.manage_chat_blacklisted_user(message))
-    assert len(service.list_chat_blacklisted_users(-100)) == 1
-    assert "могут админы и модераторы" in replies[-1]
-
-    monkeypatch.setattr(bot_module, "actor_moderation_role", allowed)
+    assert len(service.list_chat_blacklisted_users(-100, 7)) == 1
+    assert "в чёрном списке нет" in replies[-1]
+    message.text = "@vika123 в чс\nсвоя причина"
     asyncio.run(bot_module.manage_chat_blacklisted_user(message))
-    assert service.list_chat_blacklisted_users(-100) == []
+    assert service.get_chat_blacklisted_user(-100, 8, 9).reason == "своя причина"
+    assert service.get_chat_blacklisted_user(-100, 7, 9).reason == "Спам <script>"
+
+    message.from_user = SimpleNamespace(id=7, username="editor7", full_name="Редактор")
+    message.text = "@vika123 из чс"
+    asyncio.run(bot_module.manage_chat_blacklisted_user(message))
+    assert service.list_chat_blacklisted_users(-100, 7) == []
 
     message.text = "добавить в черный список\nОтветом: повторный спам"
     message.reply_to_message = SimpleNamespace(from_user=SimpleNamespace(
         id=11, username="other_user", full_name="Другой", is_bot=False,
     ))
     asyncio.run(bot_module.manage_chat_blacklisted_user(message))
-    assert service.list_chat_blacklisted_users(-100)[0].reason == "Ответом: повторный спам"
+    assert service.list_chat_blacklisted_users(-100, 7)[0].reason == "Ответом: повторный спам"
     message.text = "удалить из чс"
     asyncio.run(bot_module.manage_chat_blacklisted_user(message))
-    assert service.list_chat_blacklisted_users(-100) == []
+    assert service.list_chat_blacklisted_users(-100, 7) == []
     service.close()
 
 
@@ -119,9 +157,6 @@ def test_chat_user_blacklist_numeric_id_without_username(tmp_path, monkeypatch) 
     service.init()
     service.upsert_chat(-100, "Chat", "supergroup", None)
     replies: list[str] = []
-
-    async def allowed(*_args):
-        return "moderator"
 
     async def remember(*_args):
         return None
@@ -140,20 +175,20 @@ def test_chat_user_blacklist_numeric_id_without_username(tmp_path, monkeypatch) 
             ))
 
     monkeypatch.setattr(bot_module, "db", service, raising=False)
-    monkeypatch.setattr(bot_module, "actor_moderation_role", allowed)
     monkeypatch.setattr(bot_module, "remember_sender", remember)
     monkeypatch.setattr(bot_module, "safe_reply", reply)
     monkeypatch.setattr(bot_module, "safe_reply_chunks", reply_chunks)
     message = SimpleNamespace(
         text="123456789 в чс\nспам", chat=SimpleNamespace(id=-100, type="supergroup"),
-        from_user=SimpleNamespace(id=7), reply_to_message=None, bot=FakeBot(),
+        from_user=SimpleNamespace(id=7, username=None, full_name="Участник"),
+        reply_to_message=None, bot=FakeBot(),
     )
     asyncio.run(bot_module.manage_chat_blacklisted_user(message))
-    assert service.get_chat_blacklisted_user(-100, 123456789).full_name == "Вика"
+    assert service.get_chat_blacklisted_user(-100, 7, 123456789).full_name == "Вика"
     asyncio.run(bot_module.list_chat_blacklisted_users(message))
     assert "Вика (ID 123456789) — спам" in replies[-1]
     message.text = "123456789 из чс"
     asyncio.run(bot_module.manage_chat_blacklisted_user(message))
-    assert service.get_chat_blacklisted_user(-100, 123456789) is None
+    assert service.get_chat_blacklisted_user(-100, 7, 123456789) is None
     assert "Вика удалён" in replies[-1]
     service.close()
