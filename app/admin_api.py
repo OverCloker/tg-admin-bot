@@ -18,6 +18,7 @@ from contextvars import ContextVar
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta, timezone
 from html import escape, unescape
+from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlparse
 from typing import Annotated, Any
 
@@ -56,6 +57,31 @@ async def lifespan(application: FastAPI):
 app = FastAPI(title="Telegram Autoreply Bot Admin API", lifespan=lifespan)
 app.include_router(miniapp_router)
 YOUTUBE_WORKER_TASK: asyncio.Task | None = None
+
+ADMIN_THEME_ASSETS = Path(__file__).resolve().parent / "assets"
+ADMIN_WARM_ICON_NAMES = frozenset({
+    "ban", "bell", "chart", "chevron", "crown", "gift", "house", "key", "logs",
+    "megaphone", "message", "mine", "mute", "quote", "radio", "reply", "restart",
+    "send", "settings", "shield", "star", "users", "volume", "zap",
+})
+
+
+@app.get("/admin/theme-assets/{filename}", include_in_schema=False)
+def admin_theme_asset(filename: str) -> FileResponse:
+    if filename == "abstergo-copper-mark.png" or filename == "warm-paper-texture.png":
+        path = ADMIN_THEME_ASSETS / filename
+        media_type = "image/png"
+    elif filename.endswith(".svg") and filename[:-4] in ADMIN_WARM_ICON_NAMES:
+        path = ADMIN_THEME_ASSETS / "abstergo-warm-icons" / filename
+        media_type = "image/svg+xml"
+    else:
+        raise HTTPException(status_code=404, detail="Theme asset not found")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Theme asset not found")
+    return FileResponse(path, media_type=media_type, headers={
+        "Cache-Control": "public, max-age=86400",
+        "X-Content-Type-Options": "nosniff",
+    })
 
 
 @app.get("/inline-media/{filename}", include_in_schema=False)
@@ -534,6 +560,129 @@ ADMIN_PANEL_HTML = r"""
       border-color: #808080 #fff #fff #808080;
       transform: translate(1px, 1px);
     }
+    .warm-only { display: none !important; }
+    body.theme-warm {
+      --bg: #fbf8f3;
+      --card: #fffaf6;
+      --control: #fffaf6;
+      --menu-bg: #fffaf6;
+      --menu-text: #171413;
+      --button-bg: #b7664b;
+      --button-text: #ffffff;
+      --secondary-bg: #f4e9e1;
+      --secondary-text: #66483d;
+      --field-bg: #fffcf8;
+      --field-text: #171413;
+      --field-muted: #8b7770;
+      --file-button-bg: #f4e9e1;
+      --file-button-text: #66483d;
+      --text: #171413;
+      --muted: #8b7770;
+      --line: #e5d8cf;
+      --primary: #b7664b;
+      --primary-soft: #f8e8df;
+      --danger: #a23e35;
+      --danger-text: #ffffff;
+      --bg-scrim-color: 251, 248, 243;
+      --bg-scrim: 0.04;
+      --theme-bg-image: url("/admin/theme-assets/warm-paper-texture.png");
+      font-family: Arial, system-ui, sans-serif;
+    }
+    body.theme-warm .warm-only { display: initial !important; }
+    body.theme-warm header {
+      position: relative;
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 27px 20px 12px;
+      border: 0;
+      background: transparent;
+    }
+    body.theme-warm header h1 {
+      font: 400 clamp(34px, 10vw, 55px)/0.95 Georgia, "Times New Roman", serif;
+      letter-spacing: -2.5px;
+    }
+    body.theme-warm header .muted { margin-top: 5px; font-size: 10px; letter-spacing: 3px; }
+    body.theme-warm .warm-brand-mark { width: 47px; height: 47px; object-fit: contain; }
+    body.theme-warm header .row { gap: 5px; }
+    body.theme-warm header .icon-button { width: 35px; height: 35px; background: transparent; color: #a45b43; }
+    .warm-header-icon { display: none; }
+    body.theme-warm .warm-header-icon { display: block; width: 22px; height: 22px; }
+    body.theme-warm .legacy-header-glyph { display: none; }
+    body.theme-warm main {
+      max-width: 640px;
+      padding: 8px 20px calc(106px + env(safe-area-inset-bottom));
+      gap: 16px;
+    }
+    body.theme-warm .warm-group-select {
+      width: 100%; min-height: 65px; display: flex !important; align-items: center;
+      gap: 12px; padding: 9px 14px; border: 1px solid #dfc8ba;
+      border-radius: 18px; background: #faf4ede8; color: var(--text);
+      box-shadow: 0 5px 14px #986d5212; text-align: left;
+    }
+    body.theme-warm .warm-group-badge { width: 40px; height: 40px; flex: none; display: grid; place-items: center; border-radius: 50%; background: #d98a69; }
+    body.theme-warm .warm-group-badge img { width: 22px; height: 22px; filter: brightness(0) invert(1); }
+    body.theme-warm .warm-group-select > .warm-group-label { flex: 1; min-width: 0; display: grid; gap: 2px; }
+    body.theme-warm .warm-group-select strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
+    body.theme-warm .warm-group-select small { color: var(--muted); font-size: 12px; }
+    body.theme-warm .warm-group-select > img:last-child { width: 19px; height: 19px; transform: rotate(90deg); }
+    body.theme-warm .card { border-radius: 18px; box-shadow: 0 6px 18px #a8785810; }
+    body.theme-warm #statusCard { display: none; }
+    body.theme-warm #warmSettingsStatus { display: block !important; margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    body.theme-warm #globalPremiumCard { display: none; }
+    body.theme-warm #adminCard { padding: 12px 0 0; border: 0; background: transparent; box-shadow: none; }
+    body.theme-warm #chatTitle { display: none; }
+    body.theme-warm .admin-sections { gap: 28px; }
+    body.theme-warm .admin-section { padding: 0; border: 0; background: transparent; box-shadow: none; }
+    body.theme-warm .admin-section h3 { margin: 0 0 9px; font: 400 27px Georgia, "Times New Roman", serif; }
+    body.theme-warm .warm-section-subtitle { display: block !important; margin: -3px 0 14px; color: var(--muted); font-size: 14px; line-height: 1.35; }
+    body.theme-warm .admin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; }
+    body.theme-warm button.menu { min-height: 66px; gap: 12px; padding: 9px 8px; justify-content: flex-start; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--text); text-align: left; font-size: 15px; font-weight: 500; transition: transform 180ms ease, background-color 180ms ease, box-shadow 180ms ease; }
+    body.theme-warm button.menu.small { grid-column: span 1; }
+    body.theme-warm button.menu.normal, body.theme-warm button.menu.large { grid-column: 1 / -1; }
+    body.theme-warm button.menu .warm-action-icon { display: block; width: 27px; height: 27px; flex: none; }
+    body.theme-warm button.menu .warm-action-title { flex: 1; min-width: 0; display: grid; gap: 2px; }
+    body.theme-warm button.menu .warm-action-title strong { font-size: 15px; font-weight: 600; line-height: 1.2; }
+    body.theme-warm button.menu .warm-action-subtitle { display: block; color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.3; }
+    body.theme-warm button.menu .warm-count { min-width: 27px; height: 27px; display: grid; place-items: center; border-radius: 50%; background: #b7664b; color: white; font-size: 12px; }
+    body.theme-warm button.menu .warm-action-chevron { display: block; width: 19px; height: 19px; flex: none; }
+    body.theme-warm button.menu.warm-featured { min-height: 72px; margin-bottom: 4px; padding: 10px 12px; border: 1px solid #efd1c0; border-radius: 17px; background: linear-gradient(110deg, #fff1e8, #f8e8e0); box-shadow: 0 8px 18px #b9694d1c; }
+    body.theme-warm button.menu:hover { background: #f8ede8; color: var(--text); }
+    body.theme-warm button.menu.warm-featured:hover { background: #f9e8df; }
+    body.theme-warm :is(button, .chat):active { transform: scale(0.985); }
+    body.theme-warm #chatsCard { padding: 12px 0; border: 0; background: transparent; box-shadow: none; }
+    body.theme-warm #chatsCard h2 { margin-bottom: 4px; font: 400 27px Georgia, "Times New Roman", serif; }
+    body.theme-warm .warm-groups-hint { display: block !important; margin: 0 0 18px; color: var(--muted); font-size: 12px; }
+    body.theme-warm #chats { grid-template-columns: 1fr; gap: 0; }
+    body.theme-warm .chat { min-height: 66px; display: flex; align-items: center; gap: 12px; padding: 10px 4px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--text); box-shadow: none; }
+    body.theme-warm .chat .warm-chat-badge { width: 36px; height: 36px; flex: none; display: grid !important; place-items: center; border-radius: 50%; background: #d98a69; }
+    body.theme-warm .chat .warm-chat-badge img { width: 18px; height: 18px; filter: brightness(0) invert(1); }
+    body.theme-warm .chat .title { flex: 1; min-width: 0; }
+    body.theme-warm .chat .warm-chat-chevron { width: 18px; height: 18px; flex: none; }
+    body.theme-warm .chat.active { color: #9f523b; }
+    body.theme-warm #actionCard { border-radius: 18px; }
+    body.theme-warm .action-header h2, body.theme-warm .modal h2 { font: 400 27px Georgia, "Times New Roman", serif; }
+    body.theme-warm :is(button, input, textarea, select) { border-radius: 11px; }
+    body.theme-warm :is(button, input, textarea, select):focus-visible { outline: 2px solid #b7664b; outline-offset: 2px; }
+    body.theme-warm .modal { border-radius: 22px; box-shadow: 0 20px 52px #3f2d242a; }
+    body.theme-warm .warm-nav {
+      position: fixed; z-index: 3; left: 0; right: 0; bottom: 0;
+      display: grid !important; grid-template-columns: repeat(3, 1fr);
+      max-width: 640px; height: calc(72px + env(safe-area-inset-bottom));
+      margin: 0 auto; padding: 7px 10px env(safe-area-inset-bottom);
+      border-top: 1px solid var(--line); background: #fcf9f5f2;
+      backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    }
+    body.theme-warm .warm-nav button { display: grid; justify-items: center; align-content: center; gap: 2px; padding: 4px; border: 0; background: transparent; color: #8b7770; font-size: 11px; font-weight: 400; }
+    body.theme-warm .warm-nav button img { width: 24px; height: 24px; opacity: .68; }
+    body.theme-warm .warm-nav button.active { color: #a6543b; font-weight: 700; }
+    body.theme-warm .warm-nav button.active img { opacity: 1; }
+    body.theme-warm .warm-nav button.active::after { content: ""; width: 33px; height: 2px; border-radius: 2px; background: #b7664b; }
+    body.theme-warm.warm-view-panel #chatsCard { display: none; }
+    body.theme-warm.warm-view-groups :is(#warmGroupSelect, #statusCard, #weatherCard, #globalPremiumCard, #adminCard, #actionCard) { display: none !important; }
+    body.theme-warm.warm-view-groups #chatsCard { display: block; }
+    @media (prefers-reduced-motion: reduce) {
+      body.theme-warm :is(button, .card) { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    }
     .row {
       display: flex;
       gap: 10px;
@@ -672,6 +821,7 @@ ADMIN_PANEL_HTML = r"""
       box-shadow: inset 0 0 0 3px var(--primary);
     }
     button.menu:hover, button.secondary:hover { background: var(--primary-soft); color: var(--menu-text); }
+    button.menu .warm-action-icon, button.menu .warm-action-chevron, button.menu .warm-action-subtitle, button.menu .warm-count { display: none; }
     .modal-backdrop {
       position: fixed;
       inset: 0;
@@ -777,15 +927,21 @@ ADMIN_PANEL_HTML = r"""
 <body>
   <header>
     <div>
-      <h1>Abstergo Control</h1>
-      <div class="muted">Панель управления OtvetO4ka</div>
+      <h1 id="brandTitle">Abstergo Control</h1>
+      <div class="muted" id="brandSubtitle">Панель управления OtvetO4ka</div>
     </div>
     <div class="row">
-      <button class="icon-button secondary" onclick="openRadio()" aria-label="radio">&#128251;</button>
-      <button class="icon-button secondary" onclick="openSettings()" aria-label="settings">&#9881;</button>
+      <img class="warm-brand-mark warm-only" src="/admin/theme-assets/abstergo-copper-mark.png" alt="Знак Abstergo">
+      <button class="icon-button secondary" onclick="openRadio()" aria-label="Радио"><span class="legacy-header-glyph">&#128251;</span><img class="warm-header-icon" src="/admin/theme-assets/radio.svg" alt=""></button>
+      <button class="icon-button secondary" onclick="openSettings()" aria-label="Настройки"><span class="legacy-header-glyph">&#9881;</span><img class="warm-header-icon" src="/admin/theme-assets/settings.svg" alt=""></button>
     </div>
   </header>
   <main>
+    <button class="warm-group-select warm-only" id="warmGroupSelect" onclick="warmNavigate('groups')" aria-label="Выбрать группу">
+      <span class="warm-group-badge"><img src="/admin/theme-assets/send.svg" alt=""></span>
+      <span class="warm-group-label"><strong id="warmGroupName">Выбрать группу</strong><small>Выбранная группа</small></span>
+      <img src="/admin/theme-assets/chevron.svg" alt="">
+    </button>
     <section class="card hidden" id="legacyConnectionCard">
       <h2>Подключение</h2>
       <div class="row">
@@ -811,8 +967,9 @@ ADMIN_PANEL_HTML = r"""
       <button style="margin-top:12px" onclick="showAction('premium', 'Premium')">Открыть Premium</button>
     </section>
 
-    <section class="card">
-      <h2>Выбор группы</h2>
+    <section class="card" id="chatsCard">
+      <h2 id="chatsTitle">Выбор группы</h2>
+      <p class="warm-groups-hint warm-only">Выбери группу для настроек.</p>
       <div id="chats" class="grid"></div>
     </section>
 
@@ -832,6 +989,11 @@ ADMIN_PANEL_HTML = r"""
       <div id="actionBody" class="action-body"></div>
     </section>
   </main>
+  <nav class="warm-nav warm-only" id="warmNav" aria-label="Разделы Abstergo">
+    <button id="warmNavPanel" class="active" onclick="warmNavigate('panel')"><img src="/admin/theme-assets/house.svg" alt=""><span>Панель</span></button>
+    <button id="warmNavGroups" onclick="warmNavigate('groups')"><img src="/admin/theme-assets/users.svg" alt=""><span>Группы</span></button>
+    <button id="warmNavSettings" onclick="warmNavigate('settings')"><img src="/admin/theme-assets/settings.svg" alt=""><span>Настройки</span></button>
+  </nav>
   <div id="toast" class="hidden"></div>
   <div id="buttonModal" class="modal-backdrop hidden">
     <div class="modal">
@@ -868,6 +1030,7 @@ ADMIN_PANEL_HTML = r"""
       </div>
       <div class="settings-block">
         <h2>Подключение</h2>
+        <p class="warm-only" id="warmSettingsStatus"></p>
         <div class="row">
           <input id="settingsApiKey" type="password" placeholder="Ключ доступа">
           <button onclick="saveKey()">Сохранить</button>
@@ -943,6 +1106,24 @@ ADMIN_PANEL_HTML = r"""
     let nativeVoiceFilename = "voice.m4a";
     let lockedScrollY = 0;
     let weatherTimer = null;
+    let knownChats = [];
+    let warmView = "panel";
+
+    const warmActionIcons = {
+      replies: "reply", triggers: "zap", blacklist: "ban", quotes: "quote",
+      ads: "megaphone", send: "send", alarm: "bell", rollMute: "volume",
+      quiet: "mute", giveaway: "gift", participants: "users", checkAccess: "shield",
+      access: "key", mine: "mine", premium: "crown", stars: "star",
+      analytics: "chart", logs: "logs", feedback: "message", restart: "restart",
+      appSettings: "settings"
+    };
+    const warmActionSubtitles = {
+      replies: "Готовые ответы и реакции бота",
+      triggers: "Ключевые слова и действия",
+      blacklist: "Запрещённые слова и правила",
+      alarm: "Уведомления и важные события",
+      checkAccess: "Роли, разрешения и возможности"
+    };
 
     const defaultActions = [
       { id: "replies", title: "Автоответы" },
@@ -968,10 +1149,21 @@ ADMIN_PANEL_HTML = r"""
       { id: "appSettings", title: "Настройки приложения" },
     ];
     const adminSections = [
-      { title: "Ответы и контент", actions: ["replies", "triggers", "blacklist", "quotes", "ads", "send"] },
-      { title: "Группа и модерация", actions: ["alarm", "rollMute", "quiet", "giveaway", "participants", "checkAccess"] },
-      { title: "Управление", actions: ["access", "mine", "premium", "stars", "analytics", "logs", "feedback", "restart"] },
+      { title: "Ответы и контент", subtitle: "Настройка автоответов, триггеров и фильтров", actions: ["replies", "triggers", "blacklist", "quotes", "ads", "send"] },
+      { title: "Группа и модерация", subtitle: "Управление участниками и безопасностью", actions: ["alarm", "rollMute", "quiet", "giveaway", "participants", "checkAccess"] },
+      { title: "Управление", subtitle: "Дополнительные инструменты", actions: ["access", "mine", "premium", "stars", "analytics", "logs", "feedback", "restart"] },
     ];
+    const warmAdminSections = [
+      { title: "Ответы и контент", subtitle: "Настройка автоответов, триггеров и фильтров", actions: ["replies", "triggers", "blacklist"] },
+      { title: "Группа и модерация", subtitle: "Управление участниками и безопасностью", actions: ["alarm", "checkAccess"] },
+      { title: "Дополнительный контент", subtitle: "Цитаты, реклама и сообщения", actions: ["quotes", "ads", "send"] },
+      { title: "Инструменты группы", subtitle: "Игры и особые действия", actions: ["rollMute", "quiet", "giveaway", "participants"] },
+      { title: "Управление", subtitle: "Дополнительные инструменты", actions: ["access", "mine", "premium", "stars", "analytics", "logs", "feedback", "restart"] },
+    ];
+
+    function activeAdminSections() {
+      return document.body.classList.contains("theme-warm") ? warmAdminSections : adminSections;
+    }
     let buttonSettings = loadButtonSettings();
 
     function key() {
@@ -1167,9 +1359,15 @@ ADMIN_PANEL_HTML = r"""
 
     function openSettings() {
       syncKeyFields();
+      document.getElementById("warmSettingsStatus").textContent = document.getElementById("status").textContent;
       document.getElementById("settingsAppBody").innerHTML = appSettingsForm();
       renderAccessKeysBlock();
       updateReorderHint();
+      if (document.body.classList.contains("theme-warm")) {
+        document.getElementById("warmNavPanel").classList.remove("active");
+        document.getElementById("warmNavGroups").classList.remove("active");
+        document.getElementById("warmNavSettings").classList.add("active");
+      }
       lockPageScroll();
       document.getElementById("settingsModal").classList.remove("hidden");
     }
@@ -1184,6 +1382,7 @@ ADMIN_PANEL_HTML = r"""
     function closeSettings() {
       document.getElementById("settingsModal").classList.add("hidden");
       unlockPageScroll();
+      if (document.body.classList.contains("theme-warm")) setWarmView(warmView);
     }
 
     function openRadio() {
@@ -1590,15 +1789,34 @@ ADMIN_PANEL_HTML = r"""
     }
 
     function renderChats(chats) {
+      knownChats = chats;
       const box = document.getElementById("chats");
       box.innerHTML = "";
       chats.forEach(chat => {
         const button = document.createElement("button");
         button.className = "chat" + (chat.chat_id === selectedChatId ? " active" : "");
-        button.innerHTML = `<div class="title">${escapeHtml(chat.title)}</div>`;
+        button.innerHTML = `<span class="warm-chat-badge warm-only"><img src="/admin/theme-assets/send.svg" alt=""></span><span class="title">${escapeHtml(chat.title)}</span><img class="warm-chat-chevron warm-only" src="/admin/theme-assets/chevron.svg" alt="">`;
         button.onclick = () => selectChat(chat.chat_id);
         box.appendChild(button);
       });
+    }
+
+    function setWarmView(view) {
+      warmView = view === "groups" ? "groups" : "panel";
+      document.body.classList.toggle("warm-view-groups", warmView === "groups");
+      document.body.classList.toggle("warm-view-panel", warmView === "panel");
+      document.getElementById("warmNavPanel").classList.toggle("active", warmView === "panel");
+      document.getElementById("warmNavGroups").classList.toggle("active", warmView === "groups");
+      document.getElementById("warmNavSettings").classList.remove("active");
+    }
+
+    function warmNavigate(view) {
+      if (view === "settings") {
+        openSettings();
+        return;
+      }
+      setWarmView(view);
+      window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     }
 
     async function selectChat(chatId) {
@@ -1607,8 +1825,11 @@ ADMIN_PANEL_HTML = r"""
       adminPermissions = overview.permissions || adminPermissions || {};
       adminFeaturePermissions = overview.featurePermissions || adminFeaturePermissions || {};
       document.getElementById("chatTitle").textContent = overview.chat.title;
+      document.getElementById("warmGroupName").textContent = overview.chat.title;
+      renderChats(knownChats);
       document.getElementById("adminCard").classList.remove("hidden");
       showMenu();
+      if (document.body.classList.contains("theme-warm")) warmNavigate("panel");
     }
 
     function showMenu() {
@@ -1622,22 +1843,29 @@ ADMIN_PANEL_HTML = r"""
       menu.innerHTML = "";
       updateReorderHint();
       const actions = orderedActions();
-      adminSections.forEach(section => {
+      activeAdminSections().forEach(section => {
         const sectionActions = actions.filter(action => section.actions.includes(action.id));
         if (!sectionActions.length) return;
         const sectionElement = document.createElement("section");
         sectionElement.className = "admin-section";
         const heading = document.createElement("h3");
         heading.textContent = section.title;
+        const subtitle = document.createElement("p");
+        subtitle.className = "warm-section-subtitle warm-only";
+        subtitle.textContent = section.subtitle || "";
         const sectionGrid = document.createElement("div");
         sectionGrid.className = "grid admin-grid";
-        sectionElement.append(heading, sectionGrid);
+        sectionElement.append(heading, subtitle, sectionGrid);
         sectionActions.forEach(({ id, title }) => {
           const button = document.createElement("button");
         const style = buttonSettings.styles[id] || {};
         button.className = `menu ${normalizedButtonSize(style.size)}`;
         if (reorderMode && pickedButtonId === id) button.classList.add("drag-picked");
-        button.textContent = title;
+        const warmIcon = warmActionIcons[id] || "message";
+        const warmSubtitle = warmActionSubtitles[id] || "";
+        const warmCount = id === "replies" && Array.isArray(overview.replies) ? overview.replies.length : null;
+        button.innerHTML = `<img class="warm-action-icon" src="/admin/theme-assets/${warmIcon}.svg" alt=""><span class="warm-action-title"><strong>${escapeHtml(title)}</strong>${warmSubtitle ? `<small class="warm-action-subtitle">${escapeHtml(warmSubtitle)}</small>` : ""}</span>${warmCount === null ? "" : `<b class="warm-count">${warmCount}</b>`}<img class="warm-action-chevron" src="/admin/theme-assets/chevron.svg" alt="">`;
+        if (id === "replies") button.classList.add("warm-featured");
         button.draggable = true;
         if (style.color) {
           button.style.backgroundColor = style.color;
@@ -1726,7 +1954,7 @@ ADMIN_PANEL_HTML = r"""
     }
 
     function actionSection(id) {
-      return adminSections.find(section => section.actions.includes(id));
+      return activeAdminSections().find(section => section.actions.includes(id));
     }
 
     function startButtonHold(event, id, title) {
@@ -2010,6 +2238,7 @@ ADMIN_PANEL_HTML = r"""
             <option value="oled" ${theme === "oled" ? "selected" : ""}>OLED</option>
             <option value="glass" ${theme === "glass" ? "selected" : ""}>Liquid Glass</option>
             <option value="expressive" ${theme === "expressive" ? "selected" : ""}>M3 Expressive</option>
+            <option value="warm" ${theme === "warm" ? "selected" : ""}>Abstergo · тёплая</option>
             <option value="classic" ${theme === "classic" ? "selected" : ""}>Сапёр Classic</option>
           </select>
         </label>
@@ -2756,7 +2985,7 @@ ADMIN_PANEL_HTML = r"""
 
     function normalizedAdminTheme(theme) {
       if (theme === "green") return "expressive";
-      return ["light", "dark", "oled", "glass", "expressive", "classic"].includes(theme) ? theme : "light";
+      return ["light", "dark", "oled", "glass", "expressive", "warm", "classic"].includes(theme) ? theme : "light";
     }
 
     function applyAppSettings() {
@@ -2772,11 +3001,18 @@ ADMIN_PANEL_HTML = r"""
         oled: "#000000",
         glass: "#050b13",
         expressive: "#111423",
+        warm: "#fbf8f3",
         classic: "#008080"
       };
-      ["dark", "oled", "glass", "expressive", "classic"].forEach(name => {
+      ["dark", "oled", "glass", "expressive", "warm", "classic"].forEach(name => {
         document.body.classList.toggle(`theme-${name}`, theme === name);
       });
+      document.getElementById("brandTitle").textContent = theme === "warm" ? "Abstergo" : "Abstergo Control";
+      document.getElementById("brandSubtitle").textContent = theme === "warm" ? "АДМИН-ПАНЕЛЬ" : "Панель управления OtvetO4ka";
+      document.getElementById("chatsTitle").textContent = theme === "warm" ? "Группы" : "Выбор группы";
+      if (theme === "warm") setWarmView(warmView);
+      const visibleMenu = document.getElementById("adminCard");
+      if (overview && visibleMenu && !visibleMenu.classList.contains("hidden")) showMenu();
       document.documentElement.style.colorScheme = ["dark", "oled", "glass", "expressive"].includes(theme) ? "dark" : "light";
       document.documentElement.style.backgroundColor = themeColors[theme] || themeColors.light;
       const themeColorMeta = document.querySelector('meta[name="theme-color"]');
@@ -2792,7 +3028,7 @@ ADMIN_PANEL_HTML = r"""
       }
       if (settings.background) {
         document.body.style.setProperty("--bg-image", `url("${settings.background}")`);
-        const scrim = theme === "oled" ? "0.78" : theme === "dark" ? "0.68" : theme === "glass" ? "0.35" : theme === "expressive" ? "0.55" : theme === "classic" ? "0.25" : "0.76";
+        const scrim = theme === "oled" ? "0.78" : theme === "dark" ? "0.68" : theme === "glass" ? "0.35" : theme === "expressive" ? "0.55" : theme === "warm" ? "0.68" : theme === "classic" ? "0.25" : "0.76";
         document.body.style.setProperty("--bg-scrim", scrim);
       } else {
         document.body.style.removeProperty("--bg-image");
