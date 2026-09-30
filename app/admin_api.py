@@ -648,7 +648,24 @@ ADMIN_PANEL_HTML = r"""
     body.theme-warm button.menu.warm-featured { min-height: 72px; margin-bottom: 4px; padding: 10px 12px; border: 1px solid #efd1c0; border-radius: 17px; background: linear-gradient(110deg, #fff1e8, #f8e8e0); box-shadow: 0 8px 18px #b9694d1c; }
     body.theme-warm button.menu:hover { background: #f8ede8; color: var(--text); }
     body.theme-warm button.menu.warm-featured:hover { background: #f9e8df; }
-    body.theme-warm :is(button, .chat):active { transform: scale(0.985); }
+    body.theme-warm :is(button, a, input, select, textarea, .chat) {
+      -webkit-tap-highlight-color: transparent;
+    }
+    body.theme-warm :is(button, .chat):focus:not(:focus-visible) { outline: none; }
+    body.theme-warm :is(button, .chat) {
+      transform-origin: center;
+      transition: transform 380ms cubic-bezier(.22, 1.6, .36, 1), box-shadow 260ms ease, background-color 180ms ease;
+    }
+    body.theme-warm button.menu {
+      transition: transform 380ms cubic-bezier(.22, 1.6, .36, 1), box-shadow 260ms ease, background-color 180ms ease;
+    }
+    body.theme-warm :is(button, .chat):active {
+      transform: translateY(2px) scale(.965, .93);
+      transition-duration: 75ms;
+    }
+    body.theme-warm :is(button.menu, .warm-group-select, .chat):active {
+      box-shadow: inset 0 3px 9px #70483730;
+    }
     body.theme-warm #chatsCard { padding: 12px 0; border: 0; background: transparent; box-shadow: none; }
     body.theme-warm #chatsCard h2 { margin-bottom: 4px; font: 400 27px Georgia, "Times New Roman", serif; }
     body.theme-warm .warm-groups-hint { display: block !important; margin: 0 0 18px; color: var(--muted); font-size: 12px; }
@@ -681,7 +698,7 @@ ADMIN_PANEL_HTML = r"""
     body.theme-warm.warm-view-groups :is(#warmGroupSelect, #statusCard, #weatherCard, #globalPremiumCard, #adminCard, #actionCard) { display: none !important; }
     body.theme-warm.warm-view-groups #chatsCard { display: block; }
     @media (prefers-reduced-motion: reduce) {
-      body.theme-warm :is(button, .card) { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+      body.theme-warm :is(button, .card) { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; transform: none !important; }
     }
     .row {
       display: flex;
@@ -1423,6 +1440,13 @@ ADMIN_PANEL_HTML = r"""
       if (actionCard && !actionCard.classList.contains("hidden")) {
         showMenu();
         return true;
+      }
+      if (document.body.classList.contains("theme-warm")) {
+        if (warmView === "groups") {
+          setWarmView("panel");
+          return true;
+        }
+        return false;
       }
       if (adminCard && !adminCard.classList.contains("hidden")) {
         adminCard.classList.add("hidden");

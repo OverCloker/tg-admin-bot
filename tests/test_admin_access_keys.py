@@ -135,6 +135,22 @@ def test_warm_sections_keep_every_action_and_show_moderation_early():
     assert 'if (overview && visibleMenu && !visibleMenu.classList.contains("hidden")) showMenu();' in page
 
 
+def test_warm_buttons_have_touch_feedback_without_blue_tap_flash():
+    page = admin_api.ADMIN_PANEL_HTML
+    assert '-webkit-tap-highlight-color: transparent;' in page
+    assert 'transform: translateY(2px) scale(.965, .93);' in page
+    assert 'body.theme-warm :is(button, .chat):focus:not(:focus-visible) { outline: none; }' in page
+    assert 'transform: none !important;' in page  # reduced-motion path
+
+
+def test_warm_back_returns_from_groups_without_clearing_selected_chat():
+    page = admin_api.ADMIN_PANEL_HTML
+    handler = page.split('function handleAndroidBack() {', 1)[1].split('window.handleAndroidBack', 1)[0]
+    assert 'if (warmView === "groups")' in handler
+    assert 'setWarmView("panel");' in handler
+    assert 'return false;' in handler  # native shell handles exit from the warm root
+
+
 @pytest.mark.parametrize("filename", ["../admin_api.py", "missing.svg", "unknown.png"])
 def test_abstergo_warm_asset_rejects_unknown_filename(filename):
     with pytest.raises(HTTPException) as error:
