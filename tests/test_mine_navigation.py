@@ -380,6 +380,10 @@ def test_miniapp_has_interface_themes() -> None:
     assert 'id="themeWarm" value="warm"' in MINI_APP_HTML
     assert 'setMiniTheme(\'warm\')' in MINI_APP_HTML
     assert 'theme-warm-label' in MINI_APP_HTML
+    switch_css = MINI_APP_HTML.split('.theme-switch-track {', 1)[1].split('}', 1)[0]
+    assert 'grid-template-columns: repeat(4, minmax(0, 1fr));' in switch_css
+    assert 'input:not([name="miniAppTheme"])' in MINI_APP_HTML
+    assert '.theme-platform-switch input:focus-visible ~ .theme-switch-track' in MINI_APP_HTML
     assert "setMiniTheme('expressive')" in MINI_APP_HTML
     assert "setMiniTheme('classic')" in MINI_APP_HTML
     assert 'grid-template-columns: repeat(3, 1fr);' in MINI_APP_HTML

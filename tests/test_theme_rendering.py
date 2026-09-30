@@ -86,6 +86,59 @@ def test_shop_and_owned_backgrounds_follow_theme(tmp_path):
     assert themes['warm']['price'] == 'rgb(159, 82, 59)'
 
 
+def test_four_theme_switch_positions_and_classic_radio_styling(tmp_path):
+    chrome = shutil.which('chromium') or shutil.which('google-chrome')
+    if not chrome:
+        candidate = Path('C:/Program Files/Google/Chrome/Application/chrome.exe')
+        chrome = str(candidate) if candidate.exists() else None
+    if not chrome:
+        pytest.skip('Headless Chromium not installed')
+    css = re.search(r'<style>(.*?)</style>', MINI_APP_HTML, re.S).group(1)
+    fixture = '''<div class="theme-platform-switch" style="width:340px">
+      <input type="radio" name="miniAppTheme" id="themeApple" checked>
+      <input type="radio" name="miniAppTheme" id="themeExpressive">
+      <input type="radio" name="miniAppTheme" id="themeClassic">
+      <input type="radio" name="miniAppTheme" id="themeWarm">
+      <div class="theme-switch-icons"></div>
+      <div class="theme-switch-track"><span class="theme-switch-knob"></span>
+        <label for="themeApple"></label><label for="themeExpressive"></label>
+        <label for="themeClassic"></label><label for="themeWarm"></label>
+      </div><div class="theme-switch-labels"></div>
+    </div><pre id="result"></pre><script>
+    const inputs = [...document.querySelectorAll('input[name="miniAppTheme"]')];
+    const knob = document.querySelector('.theme-switch-knob');
+    knob.style.transition = 'none';
+    const labels = [...document.querySelectorAll('.theme-switch-track label')];
+    const results = [];
+    for (let i = 0; i < inputs.length; i++) {
+      inputs[i].checked = true;
+      const knobRect = knob.getBoundingClientRect();
+      const labelRect = labels[i].getBoundingClientRect();
+      results.push({offset: Math.abs((knobRect.left + knobRect.width / 2) -
+        (labelRect.left + labelRect.width / 2)), opacity: getComputedStyle(inputs[i]).opacity});
+    }
+    document.getElementById('result').textContent = JSON.stringify({count: labels.length, results});
+    </script>'''
+    page = tmp_path / 'theme-switch.html'
+    page.write_text(
+        f'<html><head><meta charset="utf-8"><style>{css}</style></head><body data-theme="classic">{fixture}</body></html>',
+        encoding='utf-8',
+    )
+    returncode, output, errors = run_chrome(chrome, [
+        '--headless=new', '--in-process-gpu', '--disable-gpu',
+        '--disable-features=Vulkan,SkiaGraphite,UseDawn', '--no-sandbox',
+        '--no-first-run', '--no-default-browser-check', '--no-proxy-server',
+        '--user-data-dir=' + str(tmp_path / 'switch-browser'), '--dump-dom', page.as_uri(),
+    ], tmp_path, 'switch')
+    match = re.search(r'<pre id="result">(.*?)</pre>', output, re.S)
+    assert returncode == 0, errors[-1000:]
+    assert match, errors[-1000:]
+    result = json.loads(match.group(1))
+    assert result['count'] == 4
+    assert all(item['offset'] < 5 for item in result['results'])
+    assert all(item['opacity'] == '0' for item in result['results'])
+
+
 def test_responsive_layout_for_tablet_orientations_and_desktop(tmp_path):
     chrome = shutil.which('chromium') or shutil.which('google-chrome')
     if not chrome:

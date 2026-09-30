@@ -241,7 +241,7 @@ MINI_APP_HTML = r"""<!doctype html>
       border-color: #808080 #fff #fff #808080 !important;
       transform: translate(1px, 1px);
     }
-    body[data-theme="classic"] :is(input, textarea, select, .persistent-radio) {
+    body[data-theme="classic"] :is(input:not([name="miniAppTheme"]), textarea, select, .persistent-radio) {
       border: 3px solid !important;
       border-color: #808080 #fff #fff #808080 !important;
       border-radius: 0 !important;
@@ -984,7 +984,7 @@ MINI_APP_HTML = r"""<!doctype html>
     .theme-switch-track {
       position: relative;
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       height: 30px;
       overflow: hidden;
       border: 1px solid color-mix(in srgb, var(--line) 72%, #ffffff);
@@ -1053,7 +1053,7 @@ MINI_APP_HTML = r"""<!doctype html>
       color: var(--text);
       opacity: 1;
     }
-    .theme-platform-switch:focus-within .theme-switch-track {
+    .theme-platform-switch input:focus-visible ~ .theme-switch-track {
       outline: 3px solid color-mix(in srgb, var(--accent) 24%, transparent);
       outline-offset: 4px;
     }
