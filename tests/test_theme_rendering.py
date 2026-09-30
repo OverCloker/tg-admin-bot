@@ -39,7 +39,7 @@ def test_shop_and_owned_backgrounds_follow_theme(tmp_path):
     <div class="profile-avatar frame-crystal"></div>
     <pre id="result"></pre><script>
     const results={};
-    for(const theme of ['classic','glass','expressive']) {
+    for(const theme of ['classic','glass','expressive','warm']) {
       document.body.dataset.theme=theme;
       const style=s=>getComputedStyle(document.querySelector(s));
       results[theme]={name:style('.product-name').color,coins:style('.shop-coins').color,
@@ -81,6 +81,9 @@ def test_shop_and_owned_backgrounds_follow_theme(tmp_path):
     assert themes['classic']['frame'] == themes['expressive']['frame']
     assert themes['glass']['name'] == themes['glass']['coins'] == 'rgb(251, 253, 255)'
     assert themes['expressive']['name'] == themes['expressive']['coins'] == 'rgb(251, 252, 255)'
+    assert themes['warm']['surface'] == 'rgb(255, 250, 246)'
+    assert themes['warm']['name'] == themes['warm']['coins'] == 'rgb(23, 20, 19)'
+    assert themes['warm']['price'] == 'rgb(159, 82, 59)'
 
 
 def test_responsive_layout_for_tablet_orientations_and_desktop(tmp_path):

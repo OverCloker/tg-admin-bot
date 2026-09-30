@@ -110,6 +110,27 @@ MINI_APP_HTML = r"""<!doctype html>
       --surface-blur: none;
       --app-bg-layer: #008080;
     }
+    body[data-theme="warm"] {
+      --bg: #fbf8f3;
+      --panel: #fffaf6;
+      --panel-color: #fffaf6;
+      --panel-2: #f4e9e1;
+      --line: #e5d8cf;
+      --text: #171413;
+      --muted: #8b7770;
+      --accent: #b7664b;
+      --accent-2: #9f523b;
+      --ok: #39775a;
+      --danger: #a23e35;
+      --radius: 18px;
+      --radius-sm: 12px;
+      --button-radius: 11px;
+      --input-bg: #fffcf8;
+      --input-placeholder: #8b7770;
+      --panel-shadow: 0 6px 18px #a8785810;
+      --surface-blur: none;
+      --app-bg-layer: linear-gradient(#fbf8f3d9, #fbf8f3d9), url("/admin/theme-assets/warm-paper-texture.png"), #fbf8f3;
+    }
     * { box-sizing: border-box; }
     html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
     body {
@@ -258,6 +279,49 @@ MINI_APP_HTML = r"""<!doctype html>
       background: #000080;
       box-shadow: none;
     }
+    body[data-theme="warm"] { font-family: Arial, system-ui, sans-serif; }
+    body[data-theme="warm"] :is(h1, h2) {
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 400;
+      letter-spacing: -.025em;
+    }
+    body[data-theme="warm"] h1 { font-size: 38px; }
+    body[data-theme="warm"] .panel { border-color: var(--line); }
+    body[data-theme="warm"] :is(.btn, .top-profile, .shop-tab, .role-tab, .mine-cell, .ticket-cell, .super-cell) {
+      transition: transform 180ms cubic-bezier(.2,.8,.2,1), box-shadow 180ms ease, background-color 180ms ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body[data-theme="warm"] :is(.btn, .top-profile, .shop-tab, .role-tab, .mine-cell, .ticket-cell, .super-cell):active {
+      transform: translateY(2px) scale(.985);
+      box-shadow: inset 0 2px 5px #744b3426;
+    }
+    body[data-theme="warm"] :is(.btn, .top-profile, .shop-tab, .role-tab, .mine-cell, .ticket-cell, .super-cell):focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    body[data-theme="warm"] :is(.btn, .top-profile):focus:not(:focus-visible) { outline: none; }
+    body[data-theme="warm"] .btn { color: #fff; background: var(--accent); }
+    body[data-theme="warm"] :is(.btn.secondary, .top-profile) { color: #66483d; background: var(--panel-2); border: 1px solid var(--line); }
+    body[data-theme="warm"] .btn.danger { color: #fff; background: var(--danger); }
+    body[data-theme="warm"] :is(.mini-form input, .mini-form textarea, .role-manager-form input, .mine-admin-form input, .mine-admin-form textarea, .mine-admin-form select, .persistent-radio) {
+      background: var(--input-bg);
+      color: var(--text);
+    }
+    body[data-theme="warm"] :is(.rules-chat-picker, .setting-switch-row, .access-group, .access-feature-row, .mine-admin-card, .mine-admin-row, .role-row, .admin-list-row) {
+      background: var(--panel-2);
+      color: var(--text);
+    }
+    body[data-theme="warm"] :is(.mine-cell, .ticket-cell, .super-cell) {
+      border-color: #d4af9e;
+      background: linear-gradient(145deg, #fffaf6, #f4e9e1);
+      color: var(--text);
+      box-shadow: 0 4px 10px #a878581a, inset 0 1px 0 #fff;
+    }
+    body[data-theme="warm"] :is(.inventory-row b, .inventory-chip) { color: var(--text); }
+    body[data-theme="warm"] .error { color: var(--danger); }
+    body[data-theme="warm"] .shop-hero { background: #f8e8df; }
+    body[data-theme="warm"] .shop-tab.active { background: #f8e8df; }
+    body[data-theme="warm"] .theme-switch-knob::after { background: var(--accent); box-shadow: none; }
     h1, h2, p { margin-top: 0; }
     h1 { margin-bottom: 2px; font-size: 34px; letter-spacing: 0; }
     h2 { margin-bottom: 10px; font-size: 23px; letter-spacing: 0; }
@@ -879,7 +943,7 @@ MINI_APP_HTML = r"""<!doctype html>
     .theme-switcher { display:grid; gap:8px; margin-top:14px; }
     .theme-platform-switch {
       position: relative;
-      width: min(100%, 330px);
+      width: min(100%, 420px);
       margin: 0 auto;
       padding-top: 62px;
     }
@@ -891,7 +955,7 @@ MINI_APP_HTML = r"""<!doctype html>
     .theme-switch-icons,
     .theme-switch-labels {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(4, 1fr);
       text-align: center;
     }
     .theme-switch-icons {
@@ -916,6 +980,7 @@ MINI_APP_HTML = r"""<!doctype html>
       fill: currentColor;
       filter: drop-shadow(0 1px 0 rgba(255,255,255,.22));
     }
+    .theme-platform-icon img { width: 34px; height: 34px; object-fit: contain; }
     .theme-switch-track {
       position: relative;
       display: grid;
@@ -941,7 +1006,7 @@ MINI_APP_HTML = r"""<!doctype html>
       position: absolute;
       top: 3px;
       left: 3px;
-      width: calc(33.333% - 6px);
+      width: calc(25% - 6px);
       height: 22px;
       border: 1px solid #777;
       border-radius: 999px;
@@ -966,7 +1031,7 @@ MINI_APP_HTML = r"""<!doctype html>
     .theme-switch-labels {
       margin-top: 11px;
       color: var(--muted);
-      font-size: 16px;
+      font-size: clamp(11px, 3vw, 14px);
       font-weight: 850;
     }
     .theme-switch-labels label {
@@ -976,12 +1041,15 @@ MINI_APP_HTML = r"""<!doctype html>
     #themeApple:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(0); }
     #themeExpressive:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(calc(100% + 6px)); }
     #themeClassic:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(calc(200% + 12px)); }
+    #themeWarm:checked ~ .theme-switch-track .theme-switch-knob { transform: translateX(calc(300% + 18px)); }
     #themeApple:checked ~ .theme-switch-icons .theme-apple-icon,
     #themeApple:checked ~ .theme-switch-labels .theme-apple-label,
     #themeExpressive:checked ~ .theme-switch-icons .theme-expressive-icon,
     #themeExpressive:checked ~ .theme-switch-labels .theme-expressive-label,
     #themeClassic:checked ~ .theme-switch-icons .theme-classic-icon,
-    #themeClassic:checked ~ .theme-switch-labels .theme-classic-label {
+    #themeClassic:checked ~ .theme-switch-labels .theme-classic-label,
+    #themeWarm:checked ~ .theme-switch-icons .theme-warm-icon,
+    #themeWarm:checked ~ .theme-switch-labels .theme-warm-label {
       color: var(--text);
       opacity: 1;
     }
@@ -2268,6 +2336,7 @@ MINI_APP_HTML = r"""<!doctype html>
     expressive: "Material 3 Expressive",
     glass: "Liquid Glass",
     classic: "Classic Minesweeper",
+    warm: "Abstergo",
   };
 
   function currentMiniTheme() {
@@ -2279,7 +2348,7 @@ MINI_APP_HTML = r"""<!doctype html>
   function applyMiniTheme(theme) {
     const safeTheme = Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "expressive";
     document.documentElement.dataset.theme = safeTheme;
-    document.documentElement.style.colorScheme = safeTheme === "classic" ? "light" : "dark";
+    document.documentElement.style.colorScheme = ["classic", "warm"].includes(safeTheme) ? "light" : "dark";
     document.body.dataset.theme = safeTheme;
   }
 
@@ -2304,6 +2373,7 @@ MINI_APP_HTML = r"""<!doctype html>
         <input type="radio" name="miniAppTheme" id="themeApple" value="glass" ${theme === "glass" ? "checked" : ""} onchange="setMiniTheme('glass')">
         <input type="radio" name="miniAppTheme" id="themeExpressive" value="expressive" ${theme === "expressive" ? "checked" : ""} onchange="setMiniTheme('expressive')">
         <input type="radio" name="miniAppTheme" id="themeClassic" value="classic" ${theme === "classic" ? "checked" : ""} onchange="setMiniTheme('classic')">
+        <input type="radio" name="miniAppTheme" id="themeWarm" value="warm" ${theme === "warm" ? "checked" : ""} onchange="setMiniTheme('warm')">
         <div class="theme-switch-icons">
           <label class="theme-platform-icon theme-apple-icon" for="themeApple" aria-label="Liquid Glass">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2320,17 +2390,22 @@ MINI_APP_HTML = r"""<!doctype html>
               <path d="M13 2v2.1a7.5 7.5 0 1 1-2 0V2h2zm-1 5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zm0 2 1 2 2 .3-1.5 1.5.4 2.2-1.9-1-1.9 1 .4-2.2L9 11.3l2-.3 1-2zm4.7-5.7 1.4-1.4 2 2-1.4 1.4-2-2z"/>
             </svg>
           </label>
+          <label class="theme-platform-icon theme-warm-icon" for="themeWarm" aria-label="Abstergo">
+            <img src="/admin/theme-assets/abstergo-copper-mark.png" alt="">
+          </label>
         </div>
         <div class="theme-switch-track">
           <span class="theme-switch-knob"></span>
           <label for="themeApple"></label>
           <label for="themeExpressive"></label>
           <label for="themeClassic"></label>
+          <label for="themeWarm"></label>
         </div>
         <div class="theme-switch-labels">
           <label class="theme-apple-label" for="themeApple">Liquid Glass</label>
           <label class="theme-expressive-label" for="themeExpressive">M3 Expressive</label>
           <label class="theme-classic-label" for="themeClassic">Сапёр Classic</label>
+          <label class="theme-warm-label" for="themeWarm">Abstergo</label>
         </div>
       </div>
     </div>`;
@@ -3413,6 +3488,10 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function macroEditorHtml(chatId, item) {
     if (!item) return "";
+    const savedAction = item.action || "";
+    const savedTargetId = savedAction.includes("\n")
+      ? savedAction.split(/\r?\n/).slice(1).map(line => line.trim()).find(line => /^[1-9]\d{0,18}$/.test(line)) || ""
+      : savedAction.match(/^затихни\s+([1-9]\d{0,18})\b/i)?.[1] || "";
     return `<section class="panel">
       <h2>${item.phrase ? "Изменить макрос" : "Новый макрос"}</h2>
       <div class="mine-admin-form">
@@ -3420,10 +3499,10 @@ MINI_APP_HTML = r"""<!doctype html>
         <label class="wide" for="macroPhrase">Фраза запуска</label>
         <input id="macroPhrase" class="wide" maxlength="120" placeholder="Например: вика тихо" value="${escapeHtml(item.phrase || "")}">
         <label class="wide" for="macroAction">Что сделать</label>
-        <textarea id="macroAction" class="wide" maxlength="4000" placeholder="затихни 123456789 30м - причина&#10;или: затихни @username 30м - причина&#10;или: сообщение: Привет!">${escapeHtml(item.action || "")}</textarea>
+        <textarea id="macroAction" class="wide" maxlength="4000" placeholder="затихни 10 - причина&#10;@username1&#10;123456789&#10;@username3">${escapeHtml(item.action || "")}</textarea>
         <label class="wide" for="macroTargetId">Telegram ID цели, если нет @ника</label>
-        <div class="mini-row wide"><input id="macroTargetId" type="text" inputmode="numeric" maxlength="19" placeholder="Например: 123456789" value="${escapeHtml((item.action || "").match(/^затихни\s+([1-9]\d{0,18})\b/i)?.[1] || "")}"><button class="btn secondary" type="button" onclick="insertMacroTargetId()">Подставить ID</button></div>
-        <p class="muted wide">Для мута укажи @ник или Telegram ID: «затихни 123456789 30м - причина». Также разрешены «сообщение: текст» и вложение. Макрос проверяет права отправителя и действует только в выбранной группе.</p>
+        <div class="mini-row wide"><input id="macroTargetId" type="text" inputmode="numeric" maxlength="19" placeholder="Например: 123456789" value="${escapeHtml(savedTargetId)}"><button class="btn secondary" type="button" onclick="insertMacroTargetId()">Подставить ID</button></div>
+        <p class="muted wide">Массовый мут: первая строка «затихни 10 - причина» (10 минут), затем от 1 до 10 @ников или Telegram ID, каждый с новой строки. Бот выполнит мут для каждого и ответит одним сообщением со всеми результатами. Старый формат «затихни 123456789 30м - причина», «сообщение: текст» и вложения тоже работают. Права отправителя проверяются при запуске.</p>
         <div id="macroMediaBox" class="trigger-media-box wide" data-media-type="${escapeHtml(item.mediaType || "")}" data-media-file-id="${escapeHtml(item.mediaBroken ? "" : (item.mediaFileId || ""))}">
           <b>Фото, GIF, музыка или видео — необязательно</b>
           <input id="macroMediaFile" type="file" accept="image/jpeg,image/png,image/webp,image/gif,audio/*,video/*">
@@ -3451,8 +3530,26 @@ MINI_APP_HTML = r"""<!doctype html>
       alert("Укажи корректный числовой Telegram ID пользователя.");
       return;
     }
-    const previous = action.value.trim().match(/^затихни\s+(?:@[A-Za-z0-9_]{5,32}|[1-9]\d{0,18})(.*)$/i);
-    action.value = previous ? `затихни ${id}${previous[1]}` : `затихни ${id} 30м - причина`;
+    const lines = action.value.trim().split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    const first = lines[0] || "";
+    if (!first || /^затихни(?:\s+\d{1,5}\s*(?:м|мин|ч|час|д|день|m|h|d)?)?(?:\s*-\s*.*)?$/i.test(first)) {
+      if (lines.length > 10) {
+        alert("В одном массовом макросе не больше 10 человек.");
+        return;
+      }
+      if (lines.slice(1).includes(id)) {
+        alert("Этот ID уже указан в макросе.");
+        return;
+      }
+      action.value = `${first || "затихни 10 - причина"}${lines.length > 1 ? "\n" + lines.slice(1).join("\n") : ""}\n${id}`;
+    } else {
+      const previous = first.match(/^затихни\s+(?:@[A-Za-z0-9_]{5,32}|[1-9]\d{0,18})(.*)$/i);
+      if (!previous || lines.length > 1) {
+        alert("ID можно подставить только в макрос «затихни».");
+        return;
+      }
+      action.value = `затихни ${id}${previous[1]}`;
+    }
     action.focus();
   }
 

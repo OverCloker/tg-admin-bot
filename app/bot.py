@@ -18,6 +18,7 @@ from datetime import timedelta
 from html import escape, unescape
 from ipaddress import ip_address
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -1917,6 +1918,8 @@ HELP_SECTIONS = {
         "<code>затихни @ник</code> — мут на 1 час\n"
         "<code>затихни @ник 30м - причина</code> — мут на свой срок\n"
         "Если нет @ника, в действии макроса укажи ID: <code>затихни 123456789 30м - причина</code>\n"
+        "Массовый макрос: первая строка <code>затихни 10 - причина</code>, ниже по одному <code>@нику</code> "
+        "или ID на строку (до 10 человек). Один итоговый ответ покажет, кто затих и кого ограничить не удалось.\n"
         "<code>трещи @ник</code> — снять мут\n"
         "<code>ударить словарём</code> — мут на 1 минуту\n"
         "Сроки мута: <code>30м</code>, <code>2ч</code>, <code>3д</code>. "
@@ -14253,13 +14256,6 @@ async def handle_chat_macro(message: Message) -> bool:
         logging.warning("Invalid stored chat macro: chat=%s phrase=%s", message.chat.id, macro.phrase)
         return True
     if action.kind == "quiet":
-        target_id, target_name, error = await resolve_quiet_panel_target(message.bot, message.chat.id, action.target)
-        if error:
-            await safe_reply(message, error)
-            return True
-        if not target_id or not target_name or await is_chat_admin(message.bot, message.chat.id, target_id):
-            await safe_reply(message, "Администратора этой командой ограничивать нельзя.")
-            return True
         requested = parse_quiet_duration(action.duration)
         if not requested:
             await safe_reply(message, "Некорректный срок мута в макросе.")
@@ -14272,6 +14268,65 @@ async def handle_chat_macro(message: Message) -> bool:
             can_send_voice_notes=False, can_send_polls=False, can_send_other_messages=False,
             can_add_web_page_previews=False, can_react_to_messages=False,
         )
+        if action.targets:
+            muted: list[str] = []
+            failed: list[str] = []
+            seen_ids: set[int] = set()
+            until_date = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+            for target in action.targets:
+                target_id, target_name, error = await resolve_quiet_panel_target(message.bot, message.chat.id, target)
+                if error or not target_id or not target_name:
+                    failed.append(f"{escape(target)} — не найден в группе")
+                    continue
+                if target_id in seen_ids:
+                    failed.append(f"{escape(target)} — повтор адресата")
+                    continue
+                seen_ids.add(target_id)
+                if await is_chat_admin(message.bot, message.chat.id, target_id):
+                    failed.append(f"{escape(target)} — администратор")
+                    continue
+                try:
+                    await message.bot.restrict_chat_member(
+                        chat_id=message.chat.id, user_id=target_id, permissions=permissions,
+                        until_date=until_date, use_independent_chat_permissions=True,
+                    )
+                except (TelegramBadRequest, TelegramForbiddenError) as exc:
+                    logging.warning("Batch macro mute failed: chat=%s target=%s: %s", message.chat.id, target_id, exc)
+                    failed.append(f"{escape(target)} — не удалось ограничить")
+                    continue
+                muted.append(escape(target_name[:48]))
+                db.add_moderator_action(message.chat.id, message.from_user.id, target_id, "mute", minutes, action.reason)
+            if muted:
+                summary = f"🔇 Затихли на <b>{format_quiet_duration(minutes)}</b>: {', '.join(muted)}."
+                if action.reason:
+                    summary += f"\nПричина: {escape(action.reason)}"
+            else:
+                summary = "🔇 Никого не удалось ограничить."
+            if failed:
+                summary += "\nНе удалось: " + "; ".join(failed) + "."
+            # Telegram video notes cannot carry a caption; keep the batch result to one reply.
+            if muted and macro.media_type and macro.media_type != "video_note" and macro.media_file_id:
+                await send_auto_reply_item(message, SimpleNamespace(
+                    text=summary, media_type=macro.media_type, media_file_id=macro.media_file_id,
+                    trigger=macro.phrase,
+                ))
+            else:
+                await safe_reply(message, summary)
+            if muted:
+                await notify_staff_moderation(
+                    message.bot,
+                    "🔇 <b>Массовый мут через макрос</b>\n"
+                    f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
+                    f"Кому: {', '.join(muted)}\nСрок: <b>{format_quiet_duration(minutes)}</b>",
+                )
+            return True
+        target_id, target_name, error = await resolve_quiet_panel_target(message.bot, message.chat.id, action.target)
+        if error:
+            await safe_reply(message, error)
+            return True
+        if not target_id or not target_name or await is_chat_admin(message.bot, message.chat.id, target_id):
+            await safe_reply(message, "Администратора этой командой ограничивать нельзя.")
+            return True
         try:
             await message.bot.restrict_chat_member(
                 chat_id=message.chat.id, user_id=target_id, permissions=permissions,

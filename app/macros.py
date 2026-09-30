@@ -11,6 +11,7 @@ from .db import normalize_trigger
 class MacroAction:
     kind: str
     target: str = ""
+    targets: tuple[str, ...] = ()
     duration: str = ""
     reason: str = ""
     text: str = ""
@@ -19,6 +20,12 @@ class MacroAction:
 _QUIET = re.compile(
     r"^затихни\s+(@[A-Za-z0-9_]{5,32}|[1-9]\d{0,18})"
     r"(?:\s+(\d{1,5}\s*(?:м|мин|ч|час|д|день|m|h|d)?))?"
+    r"(?:\s*-\s*(.{1,200}))?$",
+    re.IGNORECASE,
+)
+_TARGET = re.compile(r"(?:@[A-Za-z0-9_]{5,32}|[1-9]\d{0,18})\Z")
+_BATCH_QUIET = re.compile(
+    r"^затихни(?:\s+(\d{1,5}\s*(?:м|мин|ч|час|д|день|m|h|d)?))?"
     r"(?:\s*-\s*(.{1,200}))?$",
     re.IGNORECASE,
 )
@@ -40,6 +47,17 @@ def parse_macro_action(action: str, *, has_media: bool = False) -> MacroAction:
             return MacroAction("media")
         raise ValueError("Добавь действие или вложение.")
     if value.casefold().startswith("затихни"):
+        if "\n" in value:
+            lines = [line.strip() for line in value.splitlines() if line.strip()]
+            match = _BATCH_QUIET.fullmatch(lines[0])
+            if not match or not 1 <= len(lines) - 1 <= 10:
+                raise ValueError("Массовый мут: первая строка «затихни 10 - причина», затем от 1 до 10 @ников или ID, каждый с новой строки.")
+            targets = tuple(lines[1:])
+            if any(not _TARGET.fullmatch(target) or (target.isdigit() and int(target) > 2**63 - 1) for target in targets):
+                raise ValueError("Каждая цель макроса должна быть @ником или корректным Telegram ID.")
+            if len({target.casefold() for target in targets}) != len(targets):
+                raise ValueError("Не повторяй одного адресата в массовом макросе.")
+            return MacroAction("quiet", targets=targets, duration=(match.group(1) or "1ч").replace(" ", ""), reason=match.group(2) or "")
         match = _QUIET.fullmatch(value)
         if not match:
             raise ValueError("Формат мута: затихни @username 30м - причина (можно указать ID вместо ника).")

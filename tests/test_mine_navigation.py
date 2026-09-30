@@ -358,6 +358,8 @@ def test_miniapp_has_interface_themes() -> None:
     assert 'body[data-theme="expressive"]' in MINI_APP_HTML
     assert 'body[data-theme="glass"]' in MINI_APP_HTML
     assert 'body[data-theme="classic"]' in MINI_APP_HTML
+    assert 'body[data-theme="warm"]' in MINI_APP_HTML
+    assert '/admin/theme-assets/warm-paper-texture.png' in MINI_APP_HTML
     assert "--app-bg-layer:" in MINI_APP_HTML
     assert 'class="app-bg" aria-hidden="true"' in MINI_APP_HTML
     assert ".app-bg {" in MINI_APP_HTML
@@ -375,6 +377,9 @@ def test_miniapp_has_interface_themes() -> None:
     assert 'id="themeAndroid" value="material"' not in MINI_APP_HTML
     assert 'id="themeExpressive" value="expressive"' in MINI_APP_HTML
     assert 'id="themeClassic" value="classic"' in MINI_APP_HTML
+    assert 'id="themeWarm" value="warm"' in MINI_APP_HTML
+    assert 'setMiniTheme(\'warm\')' in MINI_APP_HTML
+    assert 'theme-warm-label' in MINI_APP_HTML
     assert "setMiniTheme('expressive')" in MINI_APP_HTML
     assert "setMiniTheme('classic')" in MINI_APP_HTML
     assert 'grid-template-columns: repeat(3, 1fr);' in MINI_APP_HTML
