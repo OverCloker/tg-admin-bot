@@ -38,6 +38,17 @@ def test_macro_action_language() -> None:
         parse_macro_action("затихни 10\n@bad")
     with pytest.raises(ValueError):
         parse_macro_action("затихни 10\n9223372036854775808")
+    call = parse_macro_action("позвать - в шахту\n@user_one\n313842282")
+    assert (call.kind, call.text, call.targets) == ("call", "в шахту", ("@user_one", "313842282"))
+    notice = parse_macro_action("оповестить - о встрече\n@user_one")
+    assert (notice.kind, notice.text, notice.targets) == ("notify", "о встрече", ("@user_one",))
+    for invalid in (
+        "позвать - в шахту", "оповестить - \n@user_one", "позвать - в шахту\n@bad",
+        "оповестить - встреча\n@user_one\n@USER_ONE",
+        "позвать - в шахту\n" + "\n".join(f"@user_{i:02d}" for i in range(11)),
+    ):
+        with pytest.raises(ValueError):
+            parse_macro_action(invalid)
 
 
 def test_macro_editor_uses_full_group_picker_and_styled_switch() -> None:
@@ -48,8 +59,11 @@ def test_macro_editor_uses_full_group_picker_and_styled_switch() -> None:
     assert 'id="macroTargetId"' in MINI_APP_HTML
     assert 'onclick="insertMacroTargetId()"' in MINI_APP_HTML
     assert 'затихни 123456789 30м - причина' in MINI_APP_HTML
-    assert 'затихни 10 - причина&#10;@username1' in MINI_APP_HTML
-    assert 'от 1 до 10 @ников' in MINI_APP_HTML
+    assert 'позвать - в шахту&#10;@username1' in MINI_APP_HTML
+    assert 'оповестить - о встрече' in MINI_APP_HTML
+    assert 'id="macroScope"' in MINI_APP_HTML
+    assert 'Добавить общий' in MINI_APP_HTML and 'Добавить личный' in MINI_APP_HTML
+    assert 'Мои личные макросы' in MINI_APP_HTML
 
 
 def test_macro_save_list_rename_and_delete(tmp_path, monkeypatch) -> None:
@@ -84,6 +98,38 @@ def test_macro_save_list_rename_and_delete(tmp_path, monkeypatch) -> None:
         )
     assert exc.value.status_code == 400
     assert miniapp.miniapp_profile_macro_delete(MiniAppMacroDelete(chatId=-100, phrase="вика спать"), x_telegram_init_data="test")["deleted"]
+
+
+def test_personal_macros_are_private_and_do_not_replace_group_macros(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "bot.sqlite3"
+    db = Database(str(path))
+    db.init()
+    db.upsert_chat(-100, "Группа", "supergroup", None)
+    db.close()
+    actor = {"id": 42}
+    monkeypatch.setattr(miniapp, "_telegram_user", lambda _: actor)
+    monkeypatch.setattr(miniapp, "_db", lambda: Database(str(path)))
+    monkeypatch.setattr(miniapp, "_miniapp_can_admin_chat", lambda _db, chat_id, user_id: chat_id == -100 and user_id in {42, 43})
+    monkeypatch.setattr(miniapp, "_miniapp_admin_chat_ids", lambda _db, user_id: {-100} if user_id in {42, 43} else set())
+    miniapp.miniapp_profile_macro_save(MiniAppMacroSave(chatId=-100, phrase="сбор", action="сообщение: общий"), "test")
+    miniapp.miniapp_profile_macro_save(MiniAppMacroSave(chatId=-100, scope="personal", phrase="сбор", action="позвать - в шахту\n@user_one"), "test")
+    mine = miniapp.miniapp_profile_macros(chat_id=-100, x_telegram_init_data="test")["macros"]
+    assert [(row["scope"], row["phrase"]) for row in mine] == [("chat", "сбор"), ("personal", "сбор")]
+    actor["id"] = 43
+    theirs = miniapp.miniapp_profile_macros(chat_id=-100, x_telegram_init_data="test")["macros"]
+    assert [(row["scope"], row["phrase"]) for row in theirs] == [("chat", "сбор")]
+    miniapp.miniapp_profile_macro_save(MiniAppMacroSave(chatId=-100, scope="personal", phrase="сбор", action="оповестить - о встрече\n@user_two"), "test")
+    actor["id"] = 42
+    mine = miniapp.miniapp_profile_macros(chat_id=-100, x_telegram_init_data="test")["macros"]
+    assert mine[1]["action"].startswith("позвать")
+    assert miniapp.miniapp_profile_macro_delete(MiniAppMacroDelete(chatId=-100, scope="personal", phrase="сбор"), "test")["deleted"]
+    check = Database(str(path))
+    try:
+        assert check.get_chat_macro(-100, "сбор") is not None
+        assert check.get_chat_macro(-100, "сбор", owner_user_id=42) is None
+        assert check.get_chat_macro(-100, "сбор", owner_user_id=43) is not None
+    finally:
+        check.close()
 
 
 def test_macro_quiet_rechecks_roles_and_sends_media(tmp_path, monkeypatch) -> None:
@@ -250,6 +296,75 @@ def test_batch_macro_with_media_sends_one_captioned_message(tmp_path, monkeypatc
         assert [name for name, *_ in calls] == ["mute", "mute", "media"]
         assert "@user_one" in calls[-1][1] and "@user_two" in calls[-1][1]
         assert calls[-1][2] == "file-id"
+    finally:
+        db.close()
+
+
+def test_call_and_notify_macros_send_one_named_message(tmp_path, monkeypatch) -> None:
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.upsert_chat(-100, "Группа", "supergroup", None)
+    db.save_chat_macro(-100, "в шахту", "позвать - в шахту <сейчас>\n@user_one\n22", 42)
+    db.save_chat_macro(-100, "внимание", "оповестить - о встрече\n@user_two", 42)
+    monkeypatch.setattr(bot, "db", db, raising=False)
+    replies = []
+
+    class FakeBot:
+        async def get_chat_member(self, chat_id, user_id):
+            assert (chat_id, user_id) == (-100, 22)
+            return SimpleNamespace(user=SimpleNamespace(id=22, full_name="Участник без ника", is_bot=False))
+
+    async def role(*_args):
+        return "admin"
+
+    async def reply(_message, value, **_kwargs):
+        replies.append(value)
+
+    monkeypatch.setattr(bot, "actor_moderation_role", role)
+    monkeypatch.setattr(bot, "safe_reply", reply)
+    fake_bot = FakeBot()
+    actor = SimpleNamespace(id=42, username="admin_one", full_name="Админ")
+    try:
+        for phrase in ("в шахту", "внимание"):
+            message = SimpleNamespace(text=phrase, chat=SimpleNamespace(id=-100), from_user=actor, bot=fake_bot)
+            assert asyncio.run(bot.handle_chat_macro(message)) is True
+        assert len(replies) == 2
+        assert "Админ" in replies[0] and "@user_one" in replies[0]
+        assert 'tg://user?id=22' in replies[0] and "Куда: <b>в шахту &lt;сейчас&gt;</b>" in replies[0]
+        assert "Админ" in replies[1] and "@user_two" in replies[1]
+        assert "О чём: <b>о встрече</b>" in replies[1]
+    finally:
+        db.close()
+
+
+def test_personal_macro_overrides_group_only_for_its_owner(tmp_path, monkeypatch) -> None:
+    db = Database(str(tmp_path / "bot.sqlite3"))
+    db.init()
+    db.upsert_chat(-100, "Группа", "supergroup", None)
+    db.save_chat_macro(-100, "сбор", "сообщение: общий", 42)
+    db.save_chat_macro(-100, "сбор", "сообщение: личный 42", 42, owner_user_id=42)
+    db.save_chat_macro(-100, "сбор", "сообщение: личный 43", 43, owner_user_id=43)
+    monkeypatch.setattr(bot, "db", db, raising=False)
+    replies = []
+    roles = {42: "admin", 43: "admin", 44: "admin"}
+
+    async def role(_bot, _chat_id, user_id):
+        return roles.get(user_id)
+
+    async def reply(_message, value, **_kwargs):
+        replies.append(value)
+
+    monkeypatch.setattr(bot, "actor_moderation_role", role)
+    monkeypatch.setattr(bot, "safe_reply", reply)
+    try:
+        for user_id in (42, 43, 44):
+            message = SimpleNamespace(text="сбор", chat=SimpleNamespace(id=-100), from_user=SimpleNamespace(id=user_id), bot=object())
+            assert asyncio.run(bot.handle_chat_macro(message)) is True
+        roles[42] = "moderator"
+        assert asyncio.run(bot.handle_chat_macro(SimpleNamespace(
+            text="сбор", chat=SimpleNamespace(id=-100), from_user=SimpleNamespace(id=42), bot=object(),
+        ))) is True
+        assert replies == ["личный 42", "личный 43", "общий", "общий"]
     finally:
         db.close()
 

@@ -1832,38 +1832,23 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     @media (min-width: 960px) {
       body { padding-inline: 28px; }
-      main { width: min(100%, 1120px); }
-      body[data-view="weather"] main,
-      body[data-view="reminders"] main,
-      body[data-view="radio"] main { width: min(100%, 820px); }
-      body[data-view="mine"] main { width: min(100%, 1100px); }
-      body[data-view="profile"] main { width: min(100%, 1020px); }
+      main { width: 100%; }
       body[data-view="profile"] #content,
       body[data-view="adminPanel"] #content,
       .mine-admin-screen {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: minmax(0, 1fr);
         gap: 16px;
-        align-items: stretch;
+        align-items: start;
         margin-top: 16px;
       }
-      .mine-admin-screen { align-items: start; }
+      #content > * { min-width: 0; }
       body[data-view="profile"] #content > .panel,
       body[data-view="adminPanel"] #content > .panel,
       .mine-admin-screen > .panel { margin-top: 0; }
-      body[data-view="profile"] #content > .panel:first-child,
-      body[data-view="profile"] #content > .panel:nth-child(2),
-      body[data-view="profile"] #content > .panel:last-child,
-      body[data-view="profile"] #content > .panel:nth-last-child(2),
-      body[data-view="adminPanel"] #content > .panel:first-child,
-      body[data-view="adminPanel"] #content > .panel:last-child,
-      .mine-admin-screen > .panel:first-child,
-      .mine-admin-screen > .panel:nth-last-child(2),
-      .mine-admin-screen > .panel:last-child { grid-column: 1 / -1; }
-      body[data-view="profile"] #content > .panel,
-      body[data-view="adminPanel"] #content > .panel { height: 100%; }
-      body[data-view="adminPanel"] #content > .panel:nth-child(2):nth-last-child(2) {
-        grid-column: 1 / -1;
+      .admin-panel-compact > .panel:first-child { margin-top: 0; }
+      .admin-panel-compact .role-list {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
       }
       body[data-view="adminPanel"] #content > .panel > .role-list {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1909,9 +1894,6 @@ MINI_APP_HTML = r"""<!doctype html>
       .persistent-radio { width: min(calc(100% - 56px), 820px); }
     }
     @media (min-width: 1280px) {
-      main { width: min(100%, 1220px); }
-      body[data-view="mine"] main { width: min(100%, 1180px); }
-      body[data-view="profile"] main { width: min(100%, 1060px); }
       .panel { padding: 22px; }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -3480,29 +3462,32 @@ MINI_APP_HTML = r"""<!doctype html>
         <span class="muted">${item.enabled ? "Включён" : "Выключен"} · ${escapeHtml(item.action || "Только вложение")}${item.mediaType ? " · " + escapeHtml(item.mediaType) : ""}${item.mediaBroken ? " · ⚠️ вложение недоступно" : ""}</span>
       </span>
       <span class="utility-actions" style="margin:0">
-        <button class="btn secondary" style="margin:0" onclick="editMiniAppMacro(${Number(item.chatId)}, ${jsAttrString(item.phrase)})">Изменить</button>
-        <button class="btn danger" style="margin:0" onclick="deleteMiniAppMacro(${Number(item.chatId)}, ${jsAttrString(item.phrase)})">Удалить</button>
+        <button class="btn secondary" style="margin:0" onclick="editMiniAppMacro(${Number(item.chatId)}, ${jsAttrString(item.phrase)}, ${jsAttrString(item.scope || "chat")})">Изменить</button>
+        <button class="btn danger" style="margin:0" onclick="deleteMiniAppMacro(${Number(item.chatId)}, ${jsAttrString(item.phrase)}, ${jsAttrString(item.scope || "chat")})">Удалить</button>
       </span>
     </div>`;
   }
 
   function macroEditorHtml(chatId, item) {
     if (!item) return "";
+    const scope = item.scope === "personal" ? "personal" : "chat";
     const savedAction = item.action || "";
     const savedTargetId = savedAction.includes("\n")
       ? savedAction.split(/\r?\n/).slice(1).map(line => line.trim()).find(line => /^[1-9]\d{0,18}$/.test(line)) || ""
       : savedAction.match(/^затихни\s+([1-9]\d{0,18})\b/i)?.[1] || "";
     return `<section class="panel">
-      <h2>${item.phrase ? "Изменить макрос" : "Новый макрос"}</h2>
+      <h2>${item.phrase ? "Изменить" : "Новый"} ${scope === "personal" ? "личный" : "общий"} макрос</h2>
+      <p class="muted">${scope === "personal" ? "Срабатывает только на твою фразу, пока у тебя есть права администратора в этой группе. Другие админы его не видят и не запускают." : "Доступен администраторам и модераторам этой группы в пределах их прав. Существующие макросы остаются общими."}</p>
       <div class="mine-admin-form">
+        <input id="macroScope" type="hidden" value="${scope}">
         <input id="macroOriginalPhrase" type="hidden" value="${escapeHtml(item.phrase || "")}">
         <label class="wide" for="macroPhrase">Фраза запуска</label>
         <input id="macroPhrase" class="wide" maxlength="120" placeholder="Например: вика тихо" value="${escapeHtml(item.phrase || "")}">
         <label class="wide" for="macroAction">Что сделать</label>
-        <textarea id="macroAction" class="wide" maxlength="4000" placeholder="затихни 10 - причина&#10;@username1&#10;123456789&#10;@username3">${escapeHtml(item.action || "")}</textarea>
+        <textarea id="macroAction" class="wide" maxlength="4000" placeholder="позвать - в шахту&#10;@username1&#10;123456789">${escapeHtml(item.action || "")}</textarea>
         <label class="wide" for="macroTargetId">Telegram ID цели, если нет @ника</label>
         <div class="mini-row wide"><input id="macroTargetId" type="text" inputmode="numeric" maxlength="19" placeholder="Например: 123456789" value="${escapeHtml(savedTargetId)}"><button class="btn secondary" type="button" onclick="insertMacroTargetId()">Подставить ID</button></div>
-        <p class="muted wide">Массовый мут: первая строка «затихни 10 - причина» (10 минут), затем от 1 до 10 @ников или Telegram ID, каждый с новой строки. Бот выполнит мут для каждого и ответит одним сообщением со всеми результатами. Старый формат «затихни 123456789 30м - причина», «сообщение: текст» и вложения тоже работают. Права отправителя проверяются при запуске.</p>
+        <p class="muted wide">«Позвать - в шахту» или «оповестить - о встрече»: ниже от 1 до 10 @ников или Telegram ID, каждый с новой строки. Бот укажет автора, адресатов и место или тему одним сообщением. Также работают массовый мут «затихни 10 - причина» с таким же списком, одиночный «затихни 123456789 30м - причина», «сообщение: текст» и вложения. Права отправителя проверяются при запуске.</p>
         <div id="macroMediaBox" class="trigger-media-box wide" data-media-type="${escapeHtml(item.mediaType || "")}" data-media-file-id="${escapeHtml(item.mediaBroken ? "" : (item.mediaFileId || ""))}">
           <b>Фото, GIF, музыка или видео — необязательно</b>
           <input id="macroMediaFile" type="file" accept="image/jpeg,image/png,image/webp,image/gif,audio/*,video/*">
@@ -3532,9 +3517,9 @@ MINI_APP_HTML = r"""<!doctype html>
     }
     const lines = action.value.trim().split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     const first = lines[0] || "";
-    if (!first || /^затихни(?:\s+\d{1,5}\s*(?:м|мин|ч|час|д|день|m|h|d)?)?(?:\s*-\s*.*)?$/i.test(first)) {
+    if (!first || /^затихни(?:\s+\d{1,5}\s*(?:м|мин|ч|час|д|день|m|h|d)?)?(?:\s*-\s*.*)?$/i.test(first) || /^(?:позвать|оповестить)\s*-\s*.+$/i.test(first)) {
       if (lines.length > 10) {
-        alert("В одном массовом макросе не больше 10 человек.");
+        alert("В одном макросе не больше 10 человек.");
         return;
       }
       if (lines.slice(1).includes(id)) {
@@ -3545,7 +3530,7 @@ MINI_APP_HTML = r"""<!doctype html>
     } else {
       const previous = first.match(/^затихни\s+(?:@[A-Za-z0-9_]{5,32}|[1-9]\d{0,18})(.*)$/i);
       if (!previous || lines.length > 1) {
-        alert("ID можно подставить только в макрос «затихни».");
+        alert("ID можно подставить только в макрос «затихни», «позвать» или «оповестить».");
         return;
       }
       action.value = `затихни ${id}${previous[1]}`;
@@ -3562,9 +3547,9 @@ MINI_APP_HTML = r"""<!doctype html>
     document.getElementById("macroMediaStatus").textContent = "Вложение убрано.";
   }
 
-  function editMiniAppMacro(chatId, phrase) {
-    const item = (window.currentMiniAppMacros || []).find(row => row.phrase === phrase);
-    showMacroManager(chatId, item || { phrase, action: "" });
+  function editMiniAppMacro(chatId, phrase, scope) {
+    const item = (window.currentMiniAppMacros || []).find(row => row.phrase === phrase && row.scope === scope);
+    showMacroManager(chatId, item || { phrase, action: "", scope });
   }
 
   async function showMacroManager(chatId = null, editor = null) {
@@ -3578,7 +3563,7 @@ MINI_APP_HTML = r"""<!doctype html>
       window.currentMiniAppMacros = data.macros || [];
       content.innerHTML = `<section class="panel">
         <h2>Макросы</h2>
-        <p class="muted">Фраза срабатывает только при полном совпадении. Изменение прав администратора или модератора действует сразу.</p>
+        <p class="muted">Фраза срабатывает только при полном совпадении. Личный макрос с той же фразой имеет приоритет для своего автора. Изменение прав действует сразу.</p>
         <div class="mine-admin-form">
           <label class="rules-chat-picker" for="macroChatSelect">
             <span>Группа</span>
@@ -3586,10 +3571,11 @@ MINI_APP_HTML = r"""<!doctype html>
           </label>
         </div>
         ${selectedChat ? `<p class="macro-selected-chat"><b>${escapeHtml(selectedChat.title || String(selected))}</b><br><span class="muted">ID ${selected}</span></p>` : ""}
-        ${selected ? `<button class="btn" style="margin-top:10px" onclick="showMacroManager(${selected}, { phrase: '', action: '', enabled: true })">Добавить макрос</button>` : ""}
+        ${selected ? `<div class="mini-row"><button class="btn" onclick="showMacroManager(${selected}, { phrase: '', action: '', enabled: true, scope: 'chat' })">Добавить общий</button><button class="btn secondary" onclick="showMacroManager(${selected}, { phrase: '', action: '', enabled: true, scope: 'personal' })">Добавить личный</button></div>` : ""}
       </section>
       ${selected ? macroEditorHtml(selected, editor) : ""}
-      <section class="panel"><h2>Макросы группы</h2><div class="role-list">${(data.macros || []).map(macroRowHtml).join("") || `<p class="muted">Макросов пока нет.</p>`}</div></section>
+      <section class="panel"><h2>Общие макросы группы</h2><div class="role-list">${(data.macros || []).filter(item => item.scope !== "personal").map(macroRowHtml).join("") || `<p class="muted">Общих макросов пока нет.</p>`}</div></section>
+      <section class="panel"><h2>Мои личные макросы</h2><div class="role-list">${(data.macros || []).filter(item => item.scope === "personal").map(macroRowHtml).join("") || `<p class="muted">Личных макросов пока нет.</p>`}</div></section>
       <section class="panel"><button class="btn secondary" style="margin:0" onclick="showAdminPanel()">Назад в админ-панель</button></section>`;
       scrollToTop();
     } catch (error) { showError(error); }
@@ -3619,6 +3605,7 @@ MINI_APP_HTML = r"""<!doctype html>
       }
       await api("/miniapp/profile/macros", { method: "POST", body: JSON.stringify({
         chatId: Number(chatId), phrase, originalPhrase: document.getElementById("macroOriginalPhrase")?.value || "",
+        scope: document.getElementById("macroScope")?.value || "chat",
         action, mediaType: mediaType || null, mediaFileId: mediaFileId || null,
         enabled: Boolean(document.getElementById("macroEnabled")?.checked)
       }) });
@@ -3627,10 +3614,10 @@ MINI_APP_HTML = r"""<!doctype html>
     } catch (error) { alert(error.message); }
   }
 
-  async function deleteMiniAppMacro(chatId, phrase) {
+  async function deleteMiniAppMacro(chatId, phrase, scope) {
     if (!confirm(`Удалить макрос «${phrase}»?`)) return;
     try {
-      await api("/miniapp/profile/macros/delete", { method: "POST", body: JSON.stringify({ chatId: Number(chatId), phrase }) });
+      await api("/miniapp/profile/macros/delete", { method: "POST", body: JSON.stringify({ chatId: Number(chatId), phrase, scope }) });
       showNotice("Макрос удалён.");
       showMacroManager(chatId);
     } catch (error) { alert(error.message); }

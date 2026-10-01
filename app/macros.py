@@ -29,6 +29,18 @@ _BATCH_QUIET = re.compile(
     r"(?:\s*-\s*(.{1,200}))?$",
     re.IGNORECASE,
 )
+_ANNOUNCE = re.compile(r"^(позвать|оповестить)\s*-\s*(.{1,200})$", re.IGNORECASE)
+
+
+def _macro_targets(lines: list[str]) -> tuple[str, ...]:
+    targets = tuple(lines)
+    if not 1 <= len(targets) <= 10:
+        raise ValueError("Укажи от 1 до 10 человек, по одному @нику или Telegram ID на строку.")
+    if any(not _TARGET.fullmatch(target) or (target.isdigit() and int(target) > 2**63 - 1) for target in targets):
+        raise ValueError("Каждая цель макроса должна быть @ником или корректным Telegram ID.")
+    if len({target.casefold() for target in targets}) != len(targets):
+        raise ValueError("Не повторяй одного адресата в макросе.")
+    return targets
 
 
 def validate_macro_phrase(phrase: str) -> str:
@@ -50,13 +62,9 @@ def parse_macro_action(action: str, *, has_media: bool = False) -> MacroAction:
         if "\n" in value:
             lines = [line.strip() for line in value.splitlines() if line.strip()]
             match = _BATCH_QUIET.fullmatch(lines[0])
-            if not match or not 1 <= len(lines) - 1 <= 10:
+            if not match:
                 raise ValueError("Массовый мут: первая строка «затихни 10 - причина», затем от 1 до 10 @ников или ID, каждый с новой строки.")
-            targets = tuple(lines[1:])
-            if any(not _TARGET.fullmatch(target) or (target.isdigit() and int(target) > 2**63 - 1) for target in targets):
-                raise ValueError("Каждая цель макроса должна быть @ником или корректным Telegram ID.")
-            if len({target.casefold() for target in targets}) != len(targets):
-                raise ValueError("Не повторяй одного адресата в массовом макросе.")
+            targets = _macro_targets(lines[1:])
             return MacroAction("quiet", targets=targets, duration=(match.group(1) or "1ч").replace(" ", ""), reason=match.group(2) or "")
         match = _QUIET.fullmatch(value)
         if not match:
@@ -64,9 +72,18 @@ def parse_macro_action(action: str, *, has_media: bool = False) -> MacroAction:
         if match.group(1).isdigit() and int(match.group(1)) > 2**63 - 1:
             raise ValueError("Некорректный Telegram ID пользователя.")
         return MacroAction("quiet", target=match.group(1), duration=(match.group(2) or "1ч").replace(" ", ""), reason=match.group(3) or "")
+    if value.casefold().startswith(("позвать", "оповестить")):
+        lines = [line.strip() for line in value.splitlines() if line.strip()]
+        match = _ANNOUNCE.fullmatch(lines[0])
+        if not match:
+            raise ValueError("Формат: «позвать - куда» или «оповестить - о чём», затем @ники или ID с новой строки.")
+        return MacroAction(
+            "call" if match.group(1).casefold() == "позвать" else "notify",
+            targets=_macro_targets(lines[1:]), text=match.group(2).strip(),
+        )
     if value.casefold().startswith("сообщение:"):
         text = value.split(":", 1)[1].strip()
         if not text:
             raise ValueError("После «сообщение:» нужен текст.")
         return MacroAction("message", text=text)
-    raise ValueError("Разрешены действия «затихни @ник или ID [срок]» и «сообщение: текст»; либо одно вложение.")
+    raise ValueError("Разрешены действия «затихни», «позвать - куда», «оповестить - о чём», «сообщение: текст»; либо одно вложение.")

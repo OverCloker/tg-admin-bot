@@ -160,7 +160,7 @@ def test_responsive_layout_for_tablet_orientations_and_desktop(tmp_path):
     source.className = 'alarm-source-track';
     source.innerHTML = '<label>Alerts.in.ua</label><label>NEPTUN</label><label>UkraineAlarm</label>';
     document.querySelector('.panel').appendChild(source);
-    document.getElementById('result').textContent=JSON.stringify({
+    const result = {
       viewport: innerWidth,
       mainWidth: document.querySelector('main').getBoundingClientRect().width,
       contentDisplay: style(document.getElementById('content')).display,
@@ -171,10 +171,34 @@ def test_responsive_layout_for_tablet_orientations_and_desktop(tmp_path):
       mineFooterColumns: columns(style(document.querySelector('.mine-footer-grid')).gridTemplateColumns),
       shopColumns: columns(style(document.querySelector('.shop-products')).gridTemplateColumns),
       inventoryColumns: columns(style(document.querySelector('.inventory')).gridTemplateColumns),
-      lastContentSpan: style(document.querySelector('#content > .panel:nth-last-child(2)')).gridColumnEnd,
       overflow: document.documentElement.scrollWidth > innerWidth,
       labelOverflow: style(source.querySelector('label:last-child')).overflow
-    });
+    };
+    result.screenWidths = {};
+    const screens = {
+      adminPanel: '<div class="admin-panel-compact"><section class="panel">Сводка</section><section class="panel"><div class="role-list"><div class="admin-list-row">Роли</div><div class="admin-list-row">Доступ</div></div></section></div>',
+      roles: '<section class="panel">Роли</section><details class="panel" open><summary>Администраторы</summary></details>',
+      access: '<section class="panel">Доступ</section><section class="panel"><div class="access-group">Права</div></section>',
+      macros: '<section class="panel">Макросы</section><section class="panel"><div class="mine-admin-form">Редактор</div></section><section class="panel">Личные макросы</section>',
+      mineAdmin: '<div class="mine-admin-screen"><section class="panel">Настройки</section><section class="panel">Игроки</section></div>',
+      profile: '<section class="panel">Профиль</section><section class="panel">Друзья</section>',
+      weather: '<section class="panel">Погода</section>',
+      radio: '<section class="panel">Радио</section>',
+      reminders: '<section class="panel">Напоминания</section>',
+      rules: '<section class="panel">Правила</section>',
+      shop: '<div class="shop-screen">Магазин</div>',
+      bag: '<section class="panel">Сумка</section>'
+    };
+    for (const [screen, html] of Object.entries(screens)) {
+      document.body.dataset.view = ['roles','access','macros'].includes(screen) ? 'adminPanel' : screen;
+      document.getElementById('content').innerHTML = html;
+      result.screenWidths[screen] = {
+        main: document.querySelector('main').getBoundingClientRect().width,
+        blocks: [...document.querySelectorAll('#content > *')].map(node => node.getBoundingClientRect().width),
+        overflow: document.documentElement.scrollWidth > innerWidth
+      };
+    }
+    document.getElementById('result').textContent = JSON.stringify(result);
     </script>'''
 
     def render(width, height):
@@ -205,14 +229,17 @@ def test_responsive_layout_for_tablet_orientations_and_desktop(tmp_path):
     assert portrait['mineColumns'] == portrait['mineFooterColumns'] == 1
     for layout in (landscape, desktop):
         assert layout['contentDisplay'] == 'grid'
-        assert layout['contentColumns'] == 2
-        assert layout['contentAlign'] == 'stretch'
+        assert layout['contentColumns'] == 1
+        assert layout['contentAlign'] == 'start'
         assert layout['profileColumns'] == 3
         assert layout['mineColumns'] == 2
         assert layout['mineFooterColumns'] == 2
         assert layout['shopColumns'] == 2
         assert layout['inventoryColumns'] == 2
-        assert layout['lastContentSpan'] == '-1'
         assert layout['overflow'] is False
         assert layout['labelOverflow'] == 'hidden'
-    assert 1000 <= desktop['mainWidth'] <= 1060
+        for screen in layout['screenWidths'].values():
+            assert screen['main'] > layout['viewport'] * .9
+            assert all(abs(width - screen['main']) < 2 for width in screen['blocks'])
+            assert screen['overflow'] is False
+    assert desktop['mainWidth'] >= desktop['viewport'] - 80

@@ -13,7 +13,7 @@ from contextlib import suppress
 from pathlib import Path
 from threading import Lock
 from datetime import datetime, timezone, timedelta
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qsl
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import aiohttp
@@ -208,6 +208,7 @@ class MiniAppTriggerDelete(BaseModel):
 
 class MiniAppMacroSave(BaseModel):
     chatId: int
+    scope: Literal["chat", "personal"] = "chat"
     phrase: str = Field(min_length=1, max_length=120)
     originalPhrase: str | None = Field(default=None, max_length=120)
     action: str = Field(default="", max_length=4000)
@@ -218,6 +219,7 @@ class MiniAppMacroSave(BaseModel):
 
 class MiniAppMacroDelete(BaseModel):
     chatId: int
+    scope: Literal["chat", "personal"] = "chat"
     phrase: str = Field(min_length=1, max_length=120)
 
 
@@ -3037,7 +3039,7 @@ def miniapp_profile_admin_panel(
                 {"key": "rules", "title": "Правила", "enabled": _miniapp_can_manage_rules(db, user["id"]), "description": "Текст правил и периодическое напоминание в группах."},
                 {"key": "blacklist", "title": "Чёрный список", "enabled": _miniapp_can_manage_blacklist(db, user["id"]), "description": "Запрещённые слова, формы и синонимы."},
                 {"key": "triggers", "title": "Триггеры", "enabled": _miniapp_can_manage_triggers(db, user["id"]), "description": "Слова и фразы, на которые бот отвечает в чатах."},
-                {"key": "macros", "title": "Макросы", "enabled": bool(admin_chat_ids), "description": "Точная фраза запуска, действие и вложение для выбранной группы."},
+                {"key": "macros", "title": "Макросы", "enabled": bool(admin_chat_ids), "description": "Общие и личные макросы: точная фраза, действие и вложение."},
                 {"key": "inline-stats", "title": "Inline-статистика", "enabled": _miniapp_has_global_admin_access(db, user["id"]), "description": "Глобальные вызовы погоды и карт тревог за день, неделю и месяц."},
             ],
         }
@@ -3505,6 +3507,7 @@ def _miniapp_macro_public(item: Any) -> dict[str, Any]:
         "mediaFileId": media_id,
         "mediaBroken": media_id.startswith("local:") and not Path(media_id[6:]).exists(),
         "enabled": bool(item.enabled),
+        "scope": item.scope,
     }
 
 
@@ -3527,7 +3530,10 @@ def miniapp_profile_macros(
             "ok": True,
             "chats": [_miniapp_chat_public(chat) for chat in chats],
             "selectedChatId": selected,
-            "macros": [_miniapp_macro_public(item) for item in db.list_chat_macros(selected)] if selected else [],
+            "macros": (
+                [_miniapp_macro_public(item) for item in db.list_chat_macros(selected)]
+                + [_miniapp_macro_public(item) for item in db.list_chat_macros(selected, owner_user_id=user["id"])]
+            ) if selected else [],
         }
     finally:
         db.close()
@@ -3560,15 +3566,17 @@ def miniapp_profile_macro_save(
             if not local.is_relative_to(_trigger_media_dir().resolve()) or not local.is_file():
                 raise HTTPException(400, "Локальное вложение недоступно.")
         original = normalize_trigger(payload.originalPhrase or "")
+        owner_user_id = user["id"] if payload.scope == "personal" else None
         if original and original != phrase:
-            if db.get_chat_macro(payload.chatId, phrase):
+            if db.get_chat_macro(payload.chatId, phrase, owner_user_id=owner_user_id):
                 raise HTTPException(409, "Макрос с этой фразой уже существует.")
-            if not db.delete_chat_macro(payload.chatId, original):
+            if not db.delete_chat_macro(payload.chatId, original, owner_user_id=owner_user_id):
                 raise HTTPException(409, "Исходный макрос уже удалён или изменён.")
         if any(item.trigger == phrase for item in db.list_triggers(payload.chatId)):
             raise HTTPException(409, "Такая фраза уже используется триггером.")
-        db.save_chat_macro(payload.chatId, phrase, payload.action, user["id"], media_type, media_id, payload.enabled)
-        return {"ok": True, "macro": _miniapp_macro_public(db.get_chat_macro(payload.chatId, phrase))}
+        db.save_chat_macro(payload.chatId, phrase, payload.action, user["id"], media_type, media_id, payload.enabled,
+                           owner_user_id=owner_user_id)
+        return {"ok": True, "macro": _miniapp_macro_public(db.get_chat_macro(payload.chatId, phrase, owner_user_id=owner_user_id))}
     finally:
         db.close()
 
@@ -3583,7 +3591,8 @@ def miniapp_profile_macro_delete(
     try:
         if not _miniapp_can_admin_chat(db, payload.chatId, user["id"]):
             raise HTTPException(403, "Вы не являетесь администратором этой группы.")
-        return {"ok": True, "deleted": db.delete_chat_macro(payload.chatId, payload.phrase)}
+        owner_user_id = user["id"] if payload.scope == "personal" else None
+        return {"ok": True, "deleted": db.delete_chat_macro(payload.chatId, payload.phrase, owner_user_id=owner_user_id)}
     finally:
         db.close()
 

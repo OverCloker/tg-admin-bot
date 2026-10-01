@@ -1920,6 +1920,10 @@ HELP_SECTIONS = {
         "Если нет @ника, в действии макроса укажи ID: <code>затихни 123456789 30м - причина</code>\n"
         "Массовый макрос: первая строка <code>затихни 10 - причина</code>, ниже по одному <code>@нику</code> "
         "или ID на строку (до 10 человек). Один итоговый ответ покажет, кто затих и кого ограничить не удалось.\n"
+        "Макрос <code>позвать - в шахту</code> или <code>оповестить - о встрече</code>: ниже по одному "
+        "<code>@нику</code> или ID (до 10 человек). Бот отправит одно сообщение с именем вызывающего, адресатами и местом или темой. "
+        "В мини‑аппе макрос можно сделать общим для группы либо личным для одного администратора; "
+        "личный с той же фразой имеет приоритет для своего автора.\n"
         "<code>трещи @ник</code> — снять мут\n"
         "<code>ударить словарём</code> — мут на 1 минуту\n"
         "Сроки мута: <code>30м</code>, <code>2ч</code>, <code>3д</code>. "
@@ -14244,11 +14248,15 @@ async def weather(message: Message) -> None:
 async def handle_chat_macro(message: Message) -> bool:
     if not message.text or not message.from_user:
         return False
-    macro = db.get_chat_macro(message.chat.id, message.text)
-    if not macro or not macro.enabled:
+    personal = db.get_chat_macro(message.chat.id, message.text, owner_user_id=message.from_user.id)
+    shared = db.get_chat_macro(message.chat.id, message.text)
+    if not any(item and item.enabled for item in (personal, shared)):
         return False
     actor_role = await actor_moderation_role(message.bot, message.chat.id, message.from_user.id)
     if actor_role is None:
+        return True
+    macro = personal if actor_role == "admin" and personal and personal.enabled else shared
+    if not macro or not macro.enabled:
         return True
     try:
         action = parse_macro_action(macro.action, has_media=bool(macro.media_file_id))
@@ -14345,6 +14353,42 @@ async def handle_chat_macro(message: Message) -> bool:
             f"Кто: {escape(render_moderation_actor(message, actor_role))}\n"
             f"Кому: {escape(target_name)}\nСрок: <b>{format_quiet_duration(minutes)}</b>",
         )
+    elif action.kind in {"call", "notify"}:
+        recipients: list[str] = []
+        missing: list[str] = []
+        for target in action.targets:
+            if target.startswith("@"):
+                recipients.append(escape(target))
+                continue
+            try:
+                member = await message.bot.get_chat_member(message.chat.id, int(target))
+            except (TelegramBadRequest, TelegramForbiddenError):
+                missing.append(escape(target))
+                continue
+            if member.user.is_bot:
+                missing.append(escape(target))
+                continue
+            name = escape((member.user.full_name or str(member.user.id))[:48])
+            recipients.append(f'<a href="tg://user?id={member.user.id}">{name}</a>')
+        if not recipients:
+            summary = "Не удалось найти адресатов этого макроса в группе."
+        else:
+            actor_name = escape((message.from_user.full_name or str(message.from_user.id))[:48])
+            actor = f'<a href="tg://user?id={message.from_user.id}">{actor_name}</a>'
+            verb = "зовёт" if action.kind == "call" else "оповещает"
+            detail = "Куда" if action.kind == "call" else "О чём"
+            icon = "📣" if action.kind == "call" else "📢"
+            summary = f"{icon} {actor} {verb} {', '.join(recipients)}.\n{detail}: <b>{escape(action.text)}</b>"
+        if missing:
+            summary += "\nНе найдены: " + ", ".join(missing) + "."
+        if recipients and macro.media_type and macro.media_type != "video_note" and macro.media_file_id:
+            await send_auto_reply_item(message, SimpleNamespace(
+                text=summary, media_type=macro.media_type, media_file_id=macro.media_file_id,
+                trigger=macro.phrase,
+            ))
+        else:
+            await safe_reply(message, summary, disable_web_page_preview=True)
+        return True
     elif action.kind == "message":
         await safe_reply(message, action.text, parse_mode=None, disable_web_page_preview=True)
     if macro.media_type and macro.media_file_id:
