@@ -674,6 +674,8 @@ DIG_ACHIEVEMENTS = {
 }
 
 router = Router()
+rules_agreement_lock = asyncio.Lock()
+RULES_AGREEMENT_TIMEOUT = timedelta(minutes=30)
 db: Database
 BOT_ADMIN_IDS: set[int] = set()
 ALERTS_API_TOKEN: str | None = None
@@ -1860,6 +1862,7 @@ HELP_SECTIONS = {
         "<code>профиль</code> — твоя карточка\n"
         "<code>профиль @ник</code> — карточка участника\n"
         "<code>важное</code> — открыть правила текущей группы\n"
+        "Новичкам даётся 30 минут на принятие обязательных правил, затем — блокировка в группе.\n"
         "<code>черный список</code> — твой личный список пользователей в этой группе\n"
         "<code>напоминание</code> — личный планировщик\n"
         "<code>напомни через 30м текст</code> — создать напоминание\n"
@@ -5363,6 +5366,11 @@ async def bot_membership_changed(event: ChatMemberUpdated) -> None:
 
 @router.chat_member()
 async def participant_membership_changed(event: ChatMemberUpdated) -> None:
+    async with rules_agreement_lock:
+        await _participant_membership_changed(event)
+
+
+async def _participant_membership_changed(event: ChatMemberUpdated) -> None:
     if event.chat.type not in SUPPORTED_CHAT_TYPES:
         return
     member = event.new_chat_member
@@ -5425,7 +5433,8 @@ async def participant_membership_changed(event: ChatMemberUpdated) -> None:
     try:
         prompt = await event.bot.send_message(
             event.chat.id,
-            f"{mention}, прочитай правила чата и подтверди согласие.",
+            f"{mention}, прочитай правила чата и подтверди согласие в течение 30 минут. "
+            "Иначе ты будешь заблокирован в этой группе за непрочтение правил.",
             reply_markup=rules_agreement_keyboard(event.chat.id, telegram_user.id),
             disable_web_page_preview=True,
         )
@@ -12152,6 +12161,11 @@ async def important_rules_command(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("rules:agree:"))
 async def accept_rules_callback(callback: CallbackQuery) -> None:
+    async with rules_agreement_lock:
+        await _accept_rules_callback(callback)
+
+
+async def _accept_rules_callback(callback: CallbackQuery) -> None:
     try:
         _, _, raw_chat_id, raw_user_id = (callback.data or "").split(":", 3)
         chat_id = int(raw_chat_id)
@@ -12163,6 +12177,12 @@ async def accept_rules_callback(callback: CallbackQuery) -> None:
         await callback.answer("Эта кнопка предназначена другому участнику.", show_alert=True)
         return
     agreement = db.get_chat_rule_agreement(chat_id, user_id)
+    if agreement and (agreement.get("expired_at") or (
+        not agreement.get("agreed_at") and datetime.now(timezone.utc)
+        >= datetime.fromisoformat(agreement["created_at"]) + RULES_AGREEMENT_TIMEOUT
+    )):
+        await callback.answer("Время на принятие правил истекло. Обратись к администратору.", show_alert=True)
+        return
     if not agreement or agreement.get("agreed_at"):
         await callback.answer("Правила уже подтверждены.")
         return
@@ -14553,9 +14573,55 @@ async def publish_scheduled_chat_rules(bot: Bot, settings, now: datetime) -> Mes
     return sent
 
 
+async def enforce_rules_deadlines(bot: Bot, now: datetime) -> None:
+    cutoff = (now - RULES_AGREEMENT_TIMEOUT).isoformat(timespec="seconds")
+    for pending in db.list_overdue_rule_agreements(cutoff):
+        chat_id, user_id = pending["chat_id"], pending["user_id"]
+        try:
+            async with rules_agreement_lock:
+                agreement = db.get_chat_rule_agreement(chat_id, user_id)
+                if not agreement or agreement.get("agreed_at") or agreement.get("expired_at"):
+                    continue
+                # A member may have rejoined while the preceding request was awaiting Telegram.
+                if datetime.fromisoformat(agreement["created_at"]) + RULES_AGREEMENT_TIMEOUT > now:
+                    continue
+                settings = db.get_chat_rules_settings(chat_id)
+                member = await bot.get_chat_member(chat_id, user_id)
+                status = member_status_text(member.status)
+                if status in ADMIN_STATUS_TEXTS or status in {"left", "kicked"}:
+                    db.complete_chat_rule_agreement(chat_id, user_id)
+                    continue
+                if not settings.require_agreement or not settings.rules_text.strip():
+                    if agreement.get("restricted"):
+                        await bot.restrict_chat_member(
+                            chat_id=chat_id, user_id=user_id, permissions=default_open_permissions(),
+                            use_independent_chat_permissions=True,
+                        )
+                    db.complete_chat_rule_agreement(chat_id, user_id)
+                    continue
+                await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+                db.expire_chat_rule_agreement(chat_id, user_id)
+                mention = f'<a href="tg://user?id={user_id}">{escape(member.user.full_name)}</a>'
+                with suppress(TelegramBadRequest, TelegramForbiddenError):
+                    await bot.send_message(
+                        chat_id, f"🚫 {mention} заблокирован.\n"
+                        "Причина: не прочитал и не принял правила за 30 минут.",
+                    )
+                if agreement.get("prompt_message_id"):
+                    with suppress(TelegramBadRequest, TelegramForbiddenError):
+                        await bot.edit_message_reply_markup(
+                            chat_id=chat_id, message_id=agreement["prompt_message_id"], reply_markup=None,
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception("Could not enforce rules deadline for %s in %s", user_id, chat_id)
+
+
 async def chat_rules_loop(bot: Bot) -> None:
     while True:
         now = datetime.now(timezone.utc)
+        await enforce_rules_deadlines(bot, now)
         for settings in db.list_enabled_chat_rules():
             if not chat_rules_due(settings, now):
                 continue

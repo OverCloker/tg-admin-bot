@@ -230,3 +230,85 @@ def test_other_user_cannot_accept_rules_button(tmp_path, monkeypatch) -> None:
     assert database.get_chat_rule_agreement(-100, 9)["agreed_at"] is None
     assert callback.answer.await_args.kwargs["show_alert"] is True
     database.close()
+
+
+@pytest.mark.parametrize("status,accepted,required,expected_ban", [
+    ("member", False, True, True),
+    ("member", True, True, False),
+    ("administrator", False, True, False),
+    ("left", False, True, False),
+    ("member", False, False, False),
+])
+def test_rules_deadline_survives_restart(tmp_path, monkeypatch, status, accepted, required, expected_ban):
+    path, database = prepared_db(tmp_path)
+    database.set_chat_rules_settings(-100, "Правила", False, 60, required, 42)
+    database.begin_chat_rule_agreement(-100, 9, restricted=True, prompt_message_id=777)
+    now = datetime.now(timezone.utc)
+    database._conn.execute("update chat_rule_agreements set created_at = ?", (
+        (now - timedelta(minutes=30)).isoformat(timespec="seconds"),
+    ))
+    database._conn.commit()
+    if accepted:
+        database.complete_chat_rule_agreement(-100, 9)
+    database.close()
+    database = Database(str(path))
+    database.init()
+    monkeypatch.setattr(bot, "db", database, raising=False)
+    telegram_bot = SimpleNamespace(
+        get_chat_member=AsyncMock(return_value=SimpleNamespace(status=status, user=SimpleNamespace(full_name="Reader"))),
+        ban_chat_member=AsyncMock(), restrict_chat_member=AsyncMock(),
+        send_message=AsyncMock(), edit_message_reply_markup=AsyncMock(),
+    )
+    asyncio.run(bot.enforce_rules_deadlines(telegram_bot, now))
+    assert telegram_bot.ban_chat_member.await_count == int(expected_ban)
+    if expected_ban:
+        telegram_bot.ban_chat_member.assert_awaited_once_with(chat_id=-100, user_id=9)
+        assert "не прочитал" in telegram_bot.send_message.await_args.args[1]
+        assert database.get_chat_rule_agreement(-100, 9)["expired_at"]
+        assert not database.complete_chat_rule_agreement(-100, 9)
+    asyncio.run(bot.enforce_rules_deadlines(telegram_bot, now))
+    assert telegram_bot.ban_chat_member.await_count == int(expected_ban)
+    database.close()
+
+
+def test_no_early_ban_and_late_acceptance_is_rejected(tmp_path, monkeypatch):
+    _, database = prepared_db(tmp_path)
+    database.begin_chat_rule_agreement(-100, 9, restricted=True)
+    monkeypatch.setattr(bot, "db", database, raising=False)
+    telegram_bot = SimpleNamespace(ban_chat_member=AsyncMock(), restrict_chat_member=AsyncMock())
+    asyncio.run(bot.enforce_rules_deadlines(telegram_bot, datetime.now(timezone.utc)))
+    telegram_bot.ban_chat_member.assert_not_awaited()
+    database._conn.execute("update chat_rule_agreements set created_at = ?", (
+        (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat(),
+    ))
+    database._conn.commit()
+    callback = SimpleNamespace(data="rules:agree:-100:9", from_user=SimpleNamespace(id=9),
+                               answer=AsyncMock(), bot=telegram_bot)
+    asyncio.run(bot.accept_rules_callback(callback))
+    telegram_bot.restrict_chat_member.assert_not_awaited()
+    assert callback.answer.await_args.kwargs["show_alert"]
+    assert database.get_chat_rule_agreement(-100, 9)["agreed_at"] is None
+    database.close()
+
+
+def test_failed_rules_ban_is_retried(tmp_path, monkeypatch):
+    _, database = prepared_db(tmp_path)
+    database.set_chat_rules_settings(-100, "Правила", False, 60, True, 42)
+    database.begin_chat_rule_agreement(-100, 9, restricted=True)
+    now = datetime.now(timezone.utc)
+    database._conn.execute("update chat_rule_agreements set created_at = ?", (
+        (now - timedelta(minutes=31)).isoformat(),
+    ))
+    database._conn.commit()
+    monkeypatch.setattr(bot, "db", database, raising=False)
+    telegram_bot = SimpleNamespace(
+        get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member", user=SimpleNamespace(full_name="Reader"))),
+        ban_chat_member=AsyncMock(side_effect=[RuntimeError("network unavailable"), True]),
+        send_message=AsyncMock(),
+    )
+    asyncio.run(bot.enforce_rules_deadlines(telegram_bot, now))
+    assert database.get_chat_rule_agreement(-100, 9)["expired_at"] is None
+    asyncio.run(bot.enforce_rules_deadlines(telegram_bot, now))
+    assert database.get_chat_rule_agreement(-100, 9)["expired_at"]
+    assert telegram_bot.ban_chat_member.await_count == 2
+    database.close()

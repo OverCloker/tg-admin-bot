@@ -2968,7 +2968,7 @@ MINI_APP_HTML = r"""<!doctype html>
           <label class="wide" for="rulesText"><b>Текст правил</b></label>
           <textarea id="rulesText" class="wide" rows="14" maxlength="12000" placeholder="Напишите правила этой группы...">${escapeHtml(rules.rulesText || "")}</textarea>
           <div class="setting-switch-row wide">
-            <label for="rulesAgreement">Новые участники должны подтвердить правила перед отправкой сообщений и медиа</label>
+            <label for="rulesAgreement">Новые участники должны подтвердить правила в течение 30 минут. Без подтверждения — блокировка в группе</label>
             <label class="switch" aria-label="Требовать подтверждение правил">
               <input id="rulesAgreement" type="checkbox" ${rules.requireAgreement !== false ? "checked" : ""}>
               <span class="slider round"></span>

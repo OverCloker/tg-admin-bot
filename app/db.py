@@ -1483,6 +1483,9 @@ class Database:
         self._migrate_personal_weather()
         self._migrate_chat_lock_settings()
         self._migrate_chat_rules_settings()
+        columns = {row["name"] for row in self._conn.execute("pragma table_info(chat_rule_agreements)")}
+        if "expired_at" not in columns:
+            self._conn.execute("alter table chat_rule_agreements add column expired_at text")
         self._migrate_minesweeper_entry_paid()
         self._conn.execute(
             "delete from star_payments where charge_id <> '' and id not in "
@@ -5509,6 +5512,7 @@ class Database:
                 prompt_message_id = excluded.prompt_message_id,
                 restricted = excluded.restricted,
                 agreed_at = null,
+                expired_at = null,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at
             """,
@@ -5530,7 +5534,7 @@ class Database:
     def get_chat_rule_agreement(self, chat_id: int, user_id: int) -> dict | None:
         row = self._conn.execute(
             """
-            select chat_id, user_id, prompt_message_id, restricted, agreed_at, created_at, updated_at
+            select chat_id, user_id, prompt_message_id, restricted, agreed_at, expired_at, created_at, updated_at
             from chat_rule_agreements
             where chat_id = ? and user_id = ?
             """,
@@ -5544,12 +5548,26 @@ class Database:
             """
             update chat_rule_agreements
             set agreed_at = ?, restricted = 0, updated_at = ?
-            where chat_id = ? and user_id = ? and agreed_at is null
+            where chat_id = ? and user_id = ? and agreed_at is null and expired_at is null
             """,
             (now, now, int(chat_id), int(user_id)),
         )
         self._conn.commit()
         return cursor.rowcount > 0
+
+    def list_overdue_rule_agreements(self, cutoff: str) -> list[dict]:
+        return [dict(row) for row in self._conn.execute(
+            "select * from chat_rule_agreements where agreed_at is null and expired_at is null "
+            "and created_at <= ?", (cutoff,),
+        ).fetchall()]
+
+    def expire_chat_rule_agreement(self, chat_id: int, user_id: int) -> None:
+        self._conn.execute(
+            "update chat_rule_agreements set expired_at = ?, updated_at = ? "
+            "where chat_id = ? and user_id = ? and agreed_at is null and expired_at is null",
+            (utc_now(), utc_now(), chat_id, user_id),
+        )
+        self._conn.commit()
 
     def accept_chat_rules(self, chat_id: int, user_id: int, rules_updated_at: str) -> str:
         accepted_at = utc_now()
