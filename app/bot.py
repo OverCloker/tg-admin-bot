@@ -34,6 +34,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Chat, ChatMemberUpdated, ChatPermissions, ChosenInlineResult, FSInputFile, Gift, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery, InlineQueryResultArticle, InlineQueryResultPhoto, InputMediaPhoto, InputMediaVideo, InputRichBlockDetails, InputRichBlockParagraph, InputRichBlockTable, InputRichMessage, InputTextMessageContent, LabeledPrice, MenuButtonWebApp, Message, MessageReactionUpdated, PreCheckoutQuery, RichBlockTableCell, StarAmount, SuccessfulPayment, User, WebAppInfo
 
 from .config import load_config
+from .ai_chat import GeminiChat, ChatError
 from .alert_providers import (
     DEFAULT_NEPTUN_LOCATION,
     NEPTUN_LOCATIONS,
@@ -674,6 +675,7 @@ DIG_ACHIEVEMENTS = {
 }
 
 router = Router()
+ai_chat = GeminiChat()
 rules_agreement_lock = asyncio.Lock()
 RULES_AGREEMENT_TIMEOUT = timedelta(minutes=30)
 db: Database
@@ -1862,6 +1864,8 @@ HELP_SECTIONS = {
         "<code>профиль</code> — твоя карточка\n"
         "<code>профиль @ник</code> — карточка участника\n"
         "<code>важное</code> — открыть правила текущей группы\n"
+        "<code>/ai вопрос</code> — спросить ИИ (если включён); <code>/ai_clear</code> — очистить свой диалог. "
+        "Обращения к ИИ отправляются Google Gemini.\n"
         "Новичкам даётся 30 минут на принятие обязательных правил, затем — блокировка в группе.\n"
         "<code>черный список</code> — твой личный список пользователей в этой группе\n"
         "<code>напоминание</code> — личный планировщик\n"
@@ -14457,6 +14461,7 @@ async def handle_auto_reply(message: Message) -> None:
         answers.extend(replies[normalize_username(username)] for username in mentions if normalize_username(username) in replies)
 
     if not answers:
+        await handle_ai_chat(message)
         return
 
     for item in answers:
@@ -14768,8 +14773,58 @@ async def telegram_admin_sync_loop(bot: Bot) -> None:
         await asyncio.sleep(max(5.0, 300.0 - (time.monotonic() - started)))
 
 
+async def handle_ai_chat(message: Message, *, explicit: bool = False) -> bool:
+    if not message.text or not message.from_user or message.from_user.is_bot:
+        return False
+    if message.chat.type not in {*SUPPORTED_CHAT_TYPES, "private"}:
+        return False
+    if not explicit and not ai_chat.allowed(message.chat.id):
+        return False
+    text = message.text
+    if explicit:
+        text = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) == 2 else ""
+    else:
+        username = getattr(message.bot, "_ai_username", None)
+        if username is None:
+            me = await message.bot.get_me()
+            username = me.username or ""
+            message.bot._ai_username = username
+        pattern = re.compile(r"@" + re.escape(username) + r"\b", re.IGNORECASE) if username else None
+        reply = message.reply_to_message
+        replied_to_bot = bool(reply and reply.from_user and reply.from_user.id == message.bot.id)
+        if not replied_to_bot and not (pattern and pattern.search(text)):
+            return False
+        text = pattern.sub("", text).strip() if pattern else text
+    scope = (message.chat.id, message.message_thread_id or 0, message.from_user.id)
+    try:
+        answer = await ai_chat.ask(scope, text)
+    except ChatError as exc:
+        answer = str(exc)
+    await safe_reply(message, answer, parse_mode=None, disable_web_page_preview=True)
+    return True
+
+
+@router.message(Command("ai_clear"))
+async def clear_ai_chat(message: Message) -> None:
+    if not message.from_user:
+        return
+    scope = (message.chat.id, message.message_thread_id or 0, message.from_user.id)
+    if scope in ai_chat.busy:
+        await safe_reply(message, "Дождись текущего ответа, затем очисти диалог.")
+        return
+    ai_chat.clear(scope)
+    await safe_reply(message, "Память твоего ИИ-диалога в этой теме очищена.")
+
+
+@router.message(Command("ai"))
+async def ask_ai_chat(message: Message) -> None:
+    await handle_ai_chat(message, explicit=True)
+
+
 @router.message(F.chat.type == "private")
 async def private_fallback(message: Message) -> None:
+    if await handle_ai_chat(message):
+        return
     await message.answer(
         "Выбери группу и действие кнопками.\n\n" + PRIVATE_UTILITY_HINT,
         reply_markup=await main_menu_for_user(message.bot, message.from_user.id if message.from_user else None),
@@ -14784,6 +14839,8 @@ async def auto_reply_message(message: Message) -> None:
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     config = load_config()
+    global ai_chat
+    ai_chat = GeminiChat.from_env()
 
     global db
     global BOT_ADMIN_IDS
