@@ -27,6 +27,7 @@ class GeminiChat:
         self.busy = set()
         self.day: date | None = None
         self.requests = 0
+        self.storage = None
 
     @classmethod
     def from_env(cls):
@@ -39,7 +40,20 @@ class GeminiChat:
         )
 
     def allowed(self, chat_id: int) -> bool:
-        return bool(self.key) and chat_id in self.chats
+        override = self.storage.get_ai_chat_enabled(chat_id) if self.storage else None
+        return bool(self.key) and (override if override is not None else chat_id in self.chats)
+
+    def remaining(self) -> int:
+        today = datetime.now(timezone.utc).date()
+        used = self.storage.ai_requests_used(today.isoformat()) if self.storage else (
+            self.requests if self.day == today else 0
+        )
+        return max(0, self.daily_limit - used)
+
+    def clear_chat(self, chat_id: int) -> None:
+        for scope in list(self.history):
+            if scope[0] == chat_id:
+                self.clear(scope)
 
     def clear(self, scope: tuple) -> None:
         self.history.pop(scope, None)
@@ -88,7 +102,11 @@ class GeminiChat:
         today = datetime.now(timezone.utc).date()
         if today != self.day:
             self.day, self.requests = today, 0
-        if self.requests >= self.daily_limit:
+        if self.storage:
+            reserved = self.storage.reserve_ai_request(today.isoformat(), self.daily_limit)
+        else:
+            reserved = self.requests < self.daily_limit
+        if not reserved:
             raise ChatError("Дневной лимит ИИ-общения исчерпан.")
         self.requests += 1  # Failed requests count too; no automatic paid retries.
         self.last_user[user_key] = now
@@ -100,6 +118,8 @@ class GeminiChat:
         self.busy.add(scope)
         try:
             answer = await self.generate(contents)
+            if not self.allowed(scope[0]):
+                raise ChatError("ИИ-общение было выключено администратором.")
             self.history[scope] = (time.monotonic(), (contents + [{"role": "model", "parts": [{"text": answer}]}])[-12:])
             self.history.move_to_end(scope)
             if len(self.history) > 500:

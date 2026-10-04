@@ -578,6 +578,17 @@ class Database:
                 updated_at text not null
             );
 
+            create table if not exists ai_chat_settings (
+                chat_id integer primary key,
+                enabled integer not null,
+                updated_by integer not null,
+                updated_at text not null
+            );
+            create table if not exists ai_daily_usage (
+                day text primary key,
+                requests integer not null default 0
+            );
+
             create table if not exists auto_replies (
                 chat_id integer not null,
                 username text not null,
@@ -5560,6 +5571,32 @@ class Database:
             "select * from chat_rule_agreements where agreed_at is null and expired_at is null "
             "and created_at <= ?", (cutoff,),
         ).fetchall()]
+
+    def get_ai_chat_enabled(self, chat_id: int) -> bool | None:
+        row = self._conn.execute("select enabled from ai_chat_settings where chat_id = ?", (chat_id,)).fetchone()
+        return bool(row["enabled"]) if row else None
+
+    def set_ai_chat_enabled(self, chat_id: int, enabled: bool, actor_id: int) -> None:
+        self._conn.execute(
+            "insert into ai_chat_settings (chat_id, enabled, updated_by, updated_at) values (?, ?, ?, ?) "
+            "on conflict(chat_id) do update set enabled=excluded.enabled, "
+            "updated_by=excluded.updated_by, updated_at=excluded.updated_at",
+            (chat_id, int(enabled), actor_id, utc_now()),
+        )
+        self._conn.commit()
+
+    def ai_requests_used(self, day: str) -> int:
+        row = self._conn.execute("select requests from ai_daily_usage where day = ?", (day,)).fetchone()
+        return int(row["requests"]) if row else 0
+
+    def reserve_ai_request(self, day: str, limit: int) -> bool:
+        cursor = self._conn.execute(
+            "insert into ai_daily_usage (day, requests) values (?, 1) "
+            "on conflict(day) do update set requests = requests + 1 where requests < ?",
+            (day, limit),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
 
     def expire_chat_rule_agreement(self, chat_id: int, user_id: int) -> None:
         self._conn.execute(

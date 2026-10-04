@@ -1866,6 +1866,8 @@ HELP_SECTIONS = {
         "<code>важное</code> — открыть правила текущей группы\n"
         "<code>/ai вопрос</code> — спросить ИИ (если включён); <code>/ai_clear</code> — очистить свой диалог. "
         "Обращения к ИИ отправляются Google Gemini.\n"
+        "<code>ии включить</code> / <code>ии выключить</code> — управление ИИ в группе для администраторов; "
+        "<code>ии статус</code> — состояние и оставшийся общий лимит.\n"
         "Новичкам даётся 30 минут на принятие обязательных правил, затем — блокировка в группе.\n"
         "<code>черный список</code> — твой личный список пользователей в этой группе\n"
         "<code>напоминание</code> — личный планировщик\n"
@@ -14800,8 +14802,40 @@ async def handle_ai_chat(message: Message, *, explicit: bool = False) -> bool:
         answer = await ai_chat.ask(scope, text)
     except ChatError as exc:
         answer = str(exc)
+    answer += f"\n\nИИ: осталось {ai_chat.remaining()} из {ai_chat.daily_limit} запросов на сегодня (общий лимит бота, UTC)."
     await safe_reply(message, answer, parse_mode=None, disable_web_page_preview=True)
     return True
+
+
+@router.message(F.text.regexp(re.compile(r"^/?ии\s+(включить|выключить|статус)[.!?]?$", re.IGNORECASE)))
+async def ai_chat_settings_command(message: Message) -> None:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES:
+        await safe_reply(message, "Эта команда работает внутри группы.")
+        return
+    action = (message.text or "").casefold().rstrip(".!?").split()[-1]
+    if action == "статус":
+        enabled = ai_chat.allowed(message.chat.id)
+        await safe_reply(message, f"ИИ в этой группе: {'включён' if enabled else 'выключен'}.\n"
+                         f"Общий остаток бота: {ai_chat.remaining()} из {ai_chat.daily_limit} запросов. Сброс в 00:00 UTC.")
+        return
+    if (not message.from_user or message.from_user.is_bot or getattr(message, "sender_chat", None)
+        or not await is_chat_admin(message.bot, message.chat.id, message.from_user.id)):
+        await safe_reply(message, "Включать и выключать ИИ может только администратор этой группы от своего аккаунта.")
+        return
+    enabled = action == "включить"
+    if enabled and not ai_chat.key:
+        await safe_reply(message, "Сначала владелец должен настроить GEMINI_API_KEY и AI_CHAT_ENABLED на сервере.")
+        return
+    db.set_ai_chat_enabled(message.chat.id, enabled, message.from_user.id)
+    ai_chat.storage = db
+    if not enabled:
+        ai_chat.clear_chat(message.chat.id)
+    await safe_reply(message, (
+        "ИИ включён в этой группе. Обращения и история диалога с ботом отправляются Google Gemini. "
+        "На бесплатном тарифе они могут использоваться для улучшения сервисов. "
+        "Не отправляйте секретные данные. Используйте /ai вопрос, @упоминание бота или ответ на его сообщение."
+        if enabled else "ИИ выключен в этой группе. Память ИИ-диалогов группы очищена."
+    ))
 
 
 @router.message(Command("ai_clear"))
@@ -14853,6 +14887,7 @@ async def main() -> None:
     UKRAINE_ALARM_API_TOKEN = config.ukraine_alarm_api_token
     db = Database(config.db_path)
     db.init()
+    ai_chat.storage = db
     premium_service = PremiumService(config.db_path)
     staff_service = StaffService(config.db_path, config.owner_id)
     configure_staff(staff_service)

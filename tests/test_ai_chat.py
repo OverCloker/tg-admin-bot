@@ -88,6 +88,77 @@ def test_bot_requires_address_and_sends_plain_text(monkeypatch):
     assert asyncio.run(bot.handle_ai_chat(message))
     chat.ask.assert_awaited_once_with((-100, 3, 9), "Привет")
     assert message.reply.await_args.kwargs["parse_mode"] is None
+    assert "осталось 200 из 200" in message.reply.await_args.args[0]
     message.text = "/ai Вопрос"
     asyncio.run(bot.handle_ai_chat(message, explicit=True))
     assert chat.ask.await_args.args[1] == "Вопрос"
+
+
+def test_persistent_setting_and_daily_limit(tmp_path):
+    from app.db import Database
+    from datetime import datetime, timezone, timedelta
+    path = str(tmp_path / "ai.sqlite3")
+    storage = Database(path)
+    storage.init()
+    chat = GeminiChat("secret", {-100}, daily_limit=2)
+    chat.storage = storage
+    chat.generate = AsyncMock(return_value="hello")
+    storage.set_ai_chat_enabled(-100, False, 9)
+    assert not chat.allowed(-100)
+    storage.set_ai_chat_enabled(-101, True, 9)
+    assert chat.allowed(-101)
+    asyncio.run(chat.ask((-101, 0, 9), "hello"))
+    assert chat.remaining() == 1
+    storage.close()
+    storage = Database(path)
+    storage.init()
+    chat = GeminiChat("secret", daily_limit=2)
+    chat.storage = storage
+    chat.generate = AsyncMock(return_value="hello")
+    assert chat.allowed(-101) and not chat.allowed(-100)
+    assert chat.remaining() == 1
+    asyncio.run(chat.ask((-101, 0, 10), "hello"))
+    assert chat.remaining() == 0
+    with pytest.raises(ChatError, match="Дневной"):
+        asyncio.run(chat.ask((-101, 0, 11), "hello"))
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat()
+    assert storage.reserve_ai_request(tomorrow, 2)
+    assert storage.ai_requests_used(tomorrow) == 1
+    storage.close()
+
+
+@pytest.mark.parametrize("admin,action", [(False, "включить"), (True, "включить"), (True, "выключить")])
+def test_group_admin_can_toggle_ai(tmp_path, monkeypatch, admin, action):
+    from app.db import Database
+    storage = Database(str(tmp_path / "ai.sqlite3"))
+    storage.init()
+    chat = GeminiChat("secret", {-100})
+    chat.storage = storage
+    monkeypatch.setattr(bot, "ai_chat", chat)
+    monkeypatch.setattr(bot, "db", storage, raising=False)
+    monkeypatch.setattr(bot, "is_chat_admin", AsyncMock(return_value=admin))
+    message = SimpleNamespace(
+        text=f"ии {action}", chat=SimpleNamespace(id=-100, type="supergroup"),
+        from_user=SimpleNamespace(id=9, is_bot=False), bot=SimpleNamespace(), reply=AsyncMock(),
+    )
+    asyncio.run(bot.ai_chat_settings_command(message))
+    assert storage.get_ai_chat_enabled(-100) == (action == "включить" if admin else None)
+    if admin:
+        assert chat.allowed(-100) == (action == "включить")
+    storage.close()
+
+
+def test_disable_in_flight_drops_answer_and_memory(tmp_path):
+    from app.db import Database
+    storage = Database(str(tmp_path / "ai.sqlite3"))
+    storage.init()
+    chat = GeminiChat("secret", {-100})
+    chat.storage = storage
+    async def generate(_contents):
+        storage.set_ai_chat_enabled(-100, False, 9)
+        return "late answer"
+    chat.generate = generate
+    with pytest.raises(ChatError, match="выключено"):
+        asyncio.run(chat.ask((-100, 0, 9), "hello"))
+    assert not chat.history and not chat.busy
+    storage.close()
