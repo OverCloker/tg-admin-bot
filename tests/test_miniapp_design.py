@@ -1,0 +1,69 @@
+"""Guard navigation and accessibility contracts of the refreshed Mini App."""
+from app.miniapp_ui import MINI_APP_HTML
+
+
+def test_admin_entries_keep_all_existing_destinations():
+    entries = MINI_APP_HTML.split('function adminSectionHtml(section)', 1)[1].split('async function showAdminPanel()', 1)[0]
+    for action in (
+        'showRoleManager', 'showAccessManager', 'showModeratorRoleManager',
+        'showMineAdmin', 'showModerationManager', 'showBlacklistManager',
+        'showRulesManager', 'showTriggerManager', 'showMacroManager', 'showInlineStatistics',
+    ):
+        assert f'"{action}()"' in entries
+    assert 'section.enabled && !!entry' in entries
+    assert 'section.enabled && group.keys.includes(section.key)' in entries
+    assert 'escapeHtml(section.title || section.key)' in entries
+    assert 'aria-hidden="true"' in entries
+    assert '"disabled"' in entries
+
+
+def test_motion_respects_preferences_and_does_not_animate_mine_moves():
+    assert 'window.matchMedia("(prefers-reduced-motion: reduce)")' in MINI_APP_HTML
+    assert 'reducedMotion.matches || activeView === "mine"' in MINI_APP_HTML
+    assert '.observe(content, {childList: true})' in MINI_APP_HTML
+    assert 'content.getAnimations().forEach(animation => animation.cancel())' in MINI_APP_HTML
+    assert '@media (prefers-reduced-motion: reduce)' in MINI_APP_HTML
+    assert '-webkit-tap-highlight-color: transparent' in MINI_APP_HTML
+    assert 'button:focus-visible, summary:focus-visible' in MINI_APP_HTML
+
+
+def test_profile_help_is_collapsible_without_removing_content():
+    assert '<details class="panel profile-help"><summary>Команды отношений</summary>' in MINI_APP_HTML
+    assert '<b>расстаться</b>' in MINI_APP_HTML
+    assert '.top-profile { min-height: 44px; }' in MINI_APP_HTML
+    assert 'body:not([data-theme="classic"]) .theme-switch-track' in MINI_APP_HTML
+
+
+def test_all_themes_share_profile_structure_and_permission_gate():
+    profile = MINI_APP_HTML.split('function renderProfile(profile)', 1)[1].split('function showFriendsInfo()', 1)[0]
+    assert 'currentMiniTheme()' not in profile  # no theme-specific navigation branches
+    assert '${isSelf ? profileServicesHtml() : ""}' in profile
+    assert '${isSelf ? profileNavigationHtml(viewer) : ""}' in profile
+    assert profile.index('profileServicesHtml()') < profile.index('profileNavigationHtml(viewer)')
+    navigation = MINI_APP_HTML.split('function profileNavigationHtml(viewer)', 1)[1].split('function profileServicesHtml()', 1)[0]
+    assert 'viewer && viewer.canViewAdminPanel' in navigation
+    assert navigation.index('entry("showMine"') < navigation.index('entry("showAdminPanel"') < navigation.index('entry("showBag"')
+    assert 'showWardrobe()' in profile and "showShop('gifts')" in profile
+    assert 'showFriendsInfo()' in profile
+
+
+def test_seasonal_effects_are_non_interactive_bounded_and_pause():
+    assert '<canvas id="seasonalWeather" aria-hidden="true"></canvas>' in MINI_APP_HTML
+    assert '#seasonalWeather { position: fixed; inset: 0; z-index: 0; pointer-events: none;' in MINI_APP_HTML
+    assert 'Math.min(window.devicePixelRatio || 1, 1.5)' in MINI_APP_HTML
+    assert 'reducedMotion.matches || document.hidden || !seasonalContext' in MINI_APP_HTML
+    assert 'cancelAnimationFrame(seasonalFrame)' in MINI_APP_HTML
+    assert 'document.addEventListener("visibilitychange", syncSeasonalMotion)' in MINI_APP_HTML
+    assert 'reducedMotion.addEventListener("change", syncSeasonalMotion)' in MINI_APP_HTML
+    assert 'if (seasonalTheme === theme) return' in MINI_APP_HTML
+    assert '/admin/theme-assets/winter-forest.png' in MINI_APP_HTML
+    assert '/admin/theme-assets/autumn-courtyard.png' in MINI_APP_HTML
+
+
+def test_theme_picker_keeps_old_keys_but_has_clear_new_names():
+    assert 'glass: "Зимняя"' in MINI_APP_HTML
+    assert 'expressive: "Осенняя"' in MINI_APP_HTML
+    assert 'const savedTheme = loadMiniSettings().theme || "glass"' in MINI_APP_HTML
+    assert 'savedTheme === "neon" ? "classic" : savedTheme' in MINI_APP_HTML
+    assert 'role="group" aria-label="Тема интерфейса"' in MINI_APP_HTML
+    assert '.theme-option input:focus-visible + label' in MINI_APP_HTML

@@ -261,8 +261,8 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'Добавить триггер' in MINI_APP_HTML
     assert 'Редактировать</button>' in MINI_APP_HTML
     assert 'Удалить</button>' in MINI_APP_HTML
-    assert 'Открыть триггеры' in MINI_APP_HTML
-    assert '${isSelf ? adminPanelButtonHtml(viewer) : ""}' in MINI_APP_HTML
+    assert '"showTriggerManager()", "Реакции на слова и фразы"' in MINI_APP_HTML
+    assert '${isSelf ? profileNavigationHtml(viewer) : ""}' in MINI_APP_HTML
     assert 'group.assignable === false ? ""' in MINI_APP_HTML
     assert 'function roleGroupHtml(group, tab = {})' in MINI_APP_HTML
     assert 'function renderRoleManagerTab(tabKey = null)' in MINI_APP_HTML
@@ -274,7 +274,7 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert 'function setModerationRole(chatId, role)' not in MINI_APP_HTML
     assert 'data.canManageRoles' not in MINI_APP_HTML
     assert 'function showMineAdmin(page = 1)' in MINI_APP_HTML
-    assert 'onclick="showMine()">⛏️ Шахта</button>' in MINI_APP_HTML
+    assert 'entry("showMine","pickaxe","Шахта","Игра и награды")' in MINI_APP_HTML
     assert 'body[data-theme="glass"] .mine-admin-card::before' in MINI_APP_HTML
     assert 'body[data-theme="glass"] .mine-admin-row::before' in MINI_APP_HTML
     assert 'body[data-theme="glass"] .mine-admin-form input' in MINI_APP_HTML
@@ -308,7 +308,7 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert '"/miniapp/profile/mine-admin/delete"' in MINI_APP_HTML
     assert '"/miniapp/profile/mine-admin/block"' in MINI_APP_HTML
     assert '"/miniapp/profile/mine-admin/unblock"' in MINI_APP_HTML
-    assert 'onclick="showMineAdmin()">Настройки шахты</button>' in MINI_APP_HTML
+    assert 'mine: ["showMineAdmin()", "Игроки, награды и параметры игры"]' in MINI_APP_HTML
     assert '"/miniapp/profile/roles"' in MINI_APP_HTML
     assert 'function showModerationManager(chatId = null)' in MINI_APP_HTML
     assert '"/miniapp/profile/moderation/roles"' in MINI_APP_HTML
@@ -319,7 +319,7 @@ def test_miniapp_has_profile_weather_and_radio_screens() -> None:
     assert '"/miniapp/profile/blacklist"' in MINI_APP_HTML
     assert 'showBlacklistManager()' in MINI_APP_HTML
     assert 'Чёрный список' in MINI_APP_HTML
-    assert 'Открыть тревоги' in MINI_APP_HTML
+    assert 'moderation: ["showModerationManager()", "Тревоги и уведомления группы"]' in MINI_APP_HTML
     assert 'function showAccessManager(chatId = null, userId = null)' in MINI_APP_HTML
     assert 'const initialView = readStartParam() || "profile";' in MINI_APP_HTML
     assert 'id="saveAccessButton"' in MINI_APP_HTML
@@ -368,31 +368,29 @@ def test_miniapp_has_interface_themes() -> None:
     assert "background-position: center top;" in MINI_APP_HTML
     assert "background-attachment: fixed;" not in MINI_APP_HTML
     assert "Material You" not in MINI_APP_HTML
-    assert "Material 3 Expressive" in MINI_APP_HTML
-    assert "M3 Expressive" in MINI_APP_HTML
-    assert "Liquid Glass" in MINI_APP_HTML
+    assert 'expressive: "Осенняя"' in MINI_APP_HTML
+    assert 'glass: "Зимняя"' in MINI_APP_HTML
     assert "Classic Minesweeper" in MINI_APP_HTML
     assert "Сапёр Classic" in MINI_APP_HTML
-    assert 'id="themeApple" value="glass"' in MINI_APP_HTML
+    assert '["glass", "Зимняя", "snowflake"]' in MINI_APP_HTML
     assert 'id="themeAndroid" value="material"' not in MINI_APP_HTML
-    assert 'id="themeExpressive" value="expressive"' in MINI_APP_HTML
-    assert 'id="themeClassic" value="classic"' in MINI_APP_HTML
-    assert 'id="themeWarm" value="warm"' in MINI_APP_HTML
-    assert 'setMiniTheme(\'warm\')' in MINI_APP_HTML
-    assert 'theme-warm-label' in MINI_APP_HTML
+    assert '["expressive", "Осенняя", "leaf"]' in MINI_APP_HTML
+    assert '["classic", "Сапёр Classic", "mine"]' in MINI_APP_HTML
+    assert '["warm", "Abstergo", "house"]' in MINI_APP_HTML
+    assert "setMiniTheme('${key}')" in MINI_APP_HTML
+    assert 'id="theme-${key}"' in MINI_APP_HTML
     switch_css = MINI_APP_HTML.split('.theme-switch-track {', 1)[1].split('}', 1)[0]
     assert 'grid-template-columns: repeat(4, minmax(0, 1fr));' in switch_css
     assert 'input:not([name="miniAppTheme"])' in MINI_APP_HTML
     assert '.theme-platform-switch input:focus-visible ~ .theme-switch-track' in MINI_APP_HTML
-    assert "setMiniTheme('expressive')" in MINI_APP_HTML
-    assert "setMiniTheme('classic')" in MINI_APP_HTML
+    assert '.theme-option input:checked + label' in MINI_APP_HTML
+    assert '.theme-option input:focus-visible + label' in MINI_APP_HTML
     assert 'grid-template-columns: repeat(3, 1fr);' in MINI_APP_HTML
     assert '#themeExpressive:checked ~ .theme-switch-track .theme-switch-knob' in MINI_APP_HTML
     assert '#themeClassic:checked ~ .theme-switch-track .theme-switch-knob' in MINI_APP_HTML
     assert "theme-switch-knob" in MINI_APP_HTML
     assert "theme-platform-icon theme-android-icon" not in MINI_APP_HTML
-    assert "theme-platform-icon theme-expressive-icon" in MINI_APP_HTML
-    assert "theme-platform-icon theme-classic-icon" in MINI_APP_HTML
+    assert 'class="theme-options"' in MINI_APP_HTML
     assert 'body[data-theme="material"] .btn.secondary' not in MINI_APP_HTML
     assert 'body[data-theme="expressive"] .btn' in MINI_APP_HTML
     assert 'body[data-theme="classic"] :is(.btn, .top-profile' in MINI_APP_HTML
@@ -415,12 +413,11 @@ def test_miniapp_utility_actions_live_in_own_profile_not_mine() -> None:
     profile_html = MINI_APP_HTML.split("function renderProfile(profile)", 1)[1].split("function showFriendsInfo()", 1)[0]
 
     assert "${utilityActionsHtml()}" not in mine_html
-    assert '${isSelf ? `<section class="panel profile-quick-actions"><h2>Быстрый доступ</h2>${utilityActionsHtml()}</section>` : ""}' in profile_html
-    assert profile_html.index("profile-quick-actions") < profile_html.index("profile-actions")
+    assert '${isSelf ? profileServicesHtml() : ""}' in profile_html
+    assert profile_html.index("profileServicesHtml()") < profile_html.index("profile-actions")
     assert profile_html.index("profile-mine-summary") > profile_html.index("🎁 Витрина подарков")
     assert '<div class="profile-grid">' not in profile_html
-    assert 'onclick="showMine()">⛏️ Шахта</button>' in profile_html
-    assert '${isSelf ? adminPanelButtonHtml(viewer) : ""}' in profile_html
+    assert '${isSelf ? profileNavigationHtml(viewer) : ""}' in profile_html
     assert 'mineAdminButtonHtml' not in MINI_APP_HTML
     assert "${rankCosmeticHtml(false)}" not in mine_html
     assert '<button class="btn secondary" onclick="showWeather()">Погода</button>' in MINI_APP_HTML
@@ -432,7 +429,9 @@ def test_miniapp_admin_panel_is_compact_and_only_lists_enabled_sections() -> Non
     assert 'class="admin-panel-compact"' in panel_html
     assert 'class="admin-summary"' in panel_html
     assert 'class="admin-build-details"' in panel_html
-    assert 'sections.filter(section => section.enabled).map(adminSectionHtml)' in panel_html
+    assert 'adminSectionGroupsHtml(sections)' in panel_html
+    groups_html = MINI_APP_HTML.split('function adminSectionGroupsHtml(sections)', 1)[1].split('async function showAdminPanel()', 1)[0]
+    assert 'section.enabled && group.keys.includes(section.key)' in groups_html
     assert 'api("/miniapp/profile/admin")' in panel_html
 
 

@@ -107,7 +107,7 @@ def test_abstergo_warm_theme_keeps_existing_actions_and_group_selection():
     assert 'if (id !== "access" && !canUseAction(id))' in page
 
 
-@pytest.mark.parametrize("filename", ["abstergo-copper-mark.png", "warm-paper-texture.png", "users.svg"])
+@pytest.mark.parametrize("filename", ["abstergo-copper-mark.png", "warm-paper-texture.png", "users.svg", "winter-forest.png", "autumn-courtyard.png", "cloud.svg", "book-open.svg", "backpack.svg"])
 def test_abstergo_warm_asset_exists(filename):
     response = admin_api.admin_theme_asset(filename)
     assert response.path.name == filename

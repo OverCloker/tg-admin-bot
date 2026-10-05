@@ -117,7 +117,7 @@ MINI_APP_HTML = r"""<!doctype html>
       --panel-2: #f4e9e1;
       --line: #e5d8cf;
       --text: #171413;
-      --muted: #8b7770;
+      --muted: #75625a;
       --accent: #b7664b;
       --accent-2: #9f523b;
       --ok: #39775a;
@@ -126,7 +126,7 @@ MINI_APP_HTML = r"""<!doctype html>
       --radius-sm: 12px;
       --button-radius: 11px;
       --input-bg: #fffcf8;
-      --input-placeholder: #8b7770;
+      --input-placeholder: #75625a;
       --panel-shadow: 0 6px 18px #a8785810;
       --surface-blur: none;
       --app-bg-layer: linear-gradient(#fbf8f3d9, #fbf8f3d9), url("/admin/theme-assets/warm-paper-texture.png"), #fbf8f3;
@@ -1896,13 +1896,185 @@ MINI_APP_HTML = r"""<!doctype html>
     @media (min-width: 1280px) {
       .panel { padding: 22px; }
     }
+    /* Shared interaction language; Classic keeps its intentionally retro bevels. */
+    button, label, summary { -webkit-tap-highlight-color: transparent; }
+    button, input, select, textarea { touch-action: manipulation; }
+    button:focus-visible, summary:focus-visible {
+      outline: 3px solid var(--accent);
+      outline-offset: 3px;
+    }
+    .top-profile { min-height: 44px; }
+    body:not([data-theme="classic"]) :is(.btn, .top-profile, .role-tab, .shop-tab, .admin-entry) {
+      transition: transform 240ms cubic-bezier(.2,1.5,.5,1), box-shadow 180ms ease, border-color 180ms ease;
+    }
+    body:not([data-theme="classic"]) :is(.btn, .top-profile, .role-tab, .shop-tab, .admin-entry):active:not(:disabled) {
+      transform: translateY(1px) scale(.97, .95);
+      box-shadow: inset 0 2px 6px #00000024;
+      transition-duration: 90ms;
+    }
+    body[data-theme="warm"] :is(.btn.secondary, .top-profile) { box-shadow: none; }
+    body:not([data-theme="classic"]) .theme-switch-track {
+      height: 44px;
+      background: var(--panel-2);
+      border-color: var(--line);
+      box-shadow: inset 0 1px 4px #00000018;
+    }
+    body:not([data-theme="classic"]) .theme-switch-track label + label { border-left-color: transparent; }
+    body:not([data-theme="classic"]) .theme-switch-knob {
+      height: 36px;
+      background: var(--accent);
+      border-color: transparent;
+      box-shadow: 0 2px 6px #00000020;
+    }
+    body:not([data-theme="classic"]) .theme-switch-knob::after { display: none; }
+    .profile-help summary { cursor: pointer; font-size: 17px; font-weight: 750; }
+    .profile-quick-actions .btn { min-height: 54px; padding: 10px 8px; font-size: 14px; }
+    .profile-quick-actions .rules-entry { min-height: 54px !important; }
+    .profile-quick-actions .rules-entry strong { font-size: 17px; font-weight: 800; }
+    .profile-help p:first-of-type { margin-top: 16px; }
+    .admin-intro { margin-bottom: 0; font-size: 14px; line-height: 1.5; }
+    .admin-section-grid { display: grid; gap: 14px; }
+    .admin-section-grid .panel { margin-top: 0; }
+    .admin-section-grid h2 { font-size: 20px; margin-bottom: 4px; }
+    .admin-section-note { font-size: 13px; margin-bottom: 14px; line-height: 1.4; }
+    .admin-entry {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      width: 100%;
+      min-height: 64px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--panel-2);
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+    }
+    .admin-entry strong { display: block; font-size: 15px; }
+    .admin-entry small { display: block; color: var(--muted); margin-top: 4px; font-size: 12px; line-height: 1.4; }
+    .admin-entry-chevron { font-size: 24px; color: var(--muted); }
+    .admin-entry:disabled { opacity: .5; cursor: default; }
+    .admin-entry-list { display: grid; gap: 8px; }
+    .admin-panel-compact { display: grid; gap: 14px; }
+    .admin-panel-compact > .panel { margin-top: 0; }
+    .admin-panel-compact > .panel:first-child { margin-top: 16px; }
+    body[data-theme="classic"] .admin-entry { border: 3px outset #eee; }
+    body[data-theme="classic"] .admin-entry:active { border-style: inset; }
+    @media (hover: hover) and (pointer: fine) {
+      .admin-entry:hover:not(:disabled) { border-color: var(--accent); }
+    }
+    @media (min-width: 700px) {
+      .admin-section-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+      .admin-section-grid > .panel:last-child:nth-child(odd) { grid-column: 1 / -1; }
+      .admin-section-grid > .panel:last-child:nth-child(odd) .admin-entry-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .utility-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation: none !important; transition: none !important; }
     }
+    /* One component tree and geometry for every theme; only visual tokens differ. */
+    body[data-theme="glass"] {
+      color-scheme: light;
+      --bg: #e8f3ff; --panel: #f5faffed; --panel-color: #f5faff;
+      --panel-2: #d9edff; --line: #b4d3ed; --text: #101d46; --muted: #425c81;
+      --accent: #1267b8; --accent-2: #144d87; --ok: #237249; --danger: #b32f43;
+      --input-bg: #fff; --input-placeholder: #526b88;
+      --panel-shadow: 0 8px 24px #154b7920; --surface-blur: blur(12px);
+      --app-bg-layer: url("/admin/theme-assets/winter-forest.png");
+      --icon-color: #145c9d; --rules-surface: #1674c6; --rules-text: #fff;
+      --icon-filter: brightness(0) saturate(100%) invert(29%) sepia(63%) saturate(1600%) hue-rotate(174deg) brightness(88%) contrast(91%);
+    }
+    body[data-theme="expressive"] {
+      color-scheme: light;
+      --bg: #282a24; --panel: #fff5e7f5; --panel-color: #fff5e7;
+      --panel-2: #f3dfc6; --line: #d7ba94; --text: #3d281d; --muted: #725341;
+      --accent: #99421d; --accent-2: #773219; --ok: #366d44; --danger: #a02c29;
+      --input-bg: #fffaf2; --input-placeholder: #7a5f4e;
+      --panel-shadow: 0 8px 24px #130b0540; --surface-blur: blur(8px);
+      --app-bg-layer: url("/admin/theme-assets/autumn-courtyard.png");
+      --icon-color: #97451e; --rules-surface: #99421d; --rules-text: #fffaf2;
+      --icon-filter: brightness(0) saturate(100%) invert(28%) sepia(40%) saturate(2200%) hue-rotate(346deg) brightness(88%) contrast(88%);
+    }
+    body[data-theme="warm"] { --icon-color: #b7664b; --rules-surface: #b7664b; --rules-text: #fff; --icon-filter: brightness(0) saturate(100%) invert(44%) sepia(31%) saturate(1100%) hue-rotate(331deg) brightness(95%) contrast(88%); }
+    body[data-theme="classic"] { --icon-color: #000080; --rules-surface: #000080; --rules-text: #fff; --icon-filter: brightness(0) saturate(100%) invert(9%) sepia(100%) saturate(4200%) hue-rotate(245deg) brightness(67%) contrast(148%); }
+    body { --radius: 24px; --radius-sm: 16px; --button-radius: 18px; }
+    body[data-theme] { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    body[data-theme] :is(h1,h2) { font-family: inherit; font-weight: 800; letter-spacing: -.025em; }
+    body[data-theme] h1 { font-size: 34px; }
+    .top > div:first-child { min-width: 0; flex: 1; }
+    .top h1 { overflow-wrap: anywhere; }
+    @media (max-width: 360px) { body[data-theme] h1 { font-size: 28px; } }
+    body[data-theme] :is(.btn,.top-profile) { background: var(--accent); color: #fff; }
+    body[data-theme] :is(.btn.secondary,.top-profile) { background: var(--panel-2); color: var(--text); }
+    body[data-theme] .btn.danger { background: var(--danger); color: #fff; }
+    body[data-theme] :is(input,textarea,select,.persistent-radio) { color: var(--text); background: var(--input-bg); }
+    body[data-theme="glass"] :is(.panel,.stat,.profile-card,.inventory-group,.bag-summary,.mine-admin-card,.mine-admin-row)::before,
+    body[data-theme="glass"] :is(.panel,.stat,.profile-card,.inventory-group,.bag-summary,.mine-admin-card,.mine-admin-row)::after { display: none; }
+    body[data-theme="expressive"] .top { color: #fff7e8; }
+    body[data-theme="expressive"] .top .muted { color: #f0dfc8; }
+    body[data-theme="expressive"] .app-bg { background-position: right top; }
+    .seasonal-scene, .seasonal-fire { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; }
+    .seasonal-fire { display: none; }
+    body[data-theme="expressive"] .seasonal-fire { display: block; object-position: right top; }
+    .seasonal-fire { animation: campfire-flicker 1700ms ease-in-out infinite alternate; }
+    @keyframes campfire-flicker { 0%,100% {filter: brightness(.88) saturate(1.08); transform: scale(1);} 25% {filter: brightness(1.16) saturate(1.2); transform: scale(1.005,1.012);} 55% {filter: brightness(.98) saturate(1.12); transform: scale(.997,1.006);} 78% {filter: brightness(1.3) saturate(1.24); transform: scale(1.006,1.018);} }
+    #seasonalWeather { position: fixed; inset: 0; z-index: 0; pointer-events: none; width: 100%; height: 100%; }
+    body[data-view="profile"] .panel { padding: 16px; border-width: 1px; }
+    body[data-view="profile"] .panel.profile-hero { padding: 8px 16px; }
+    .profile-hero { min-height: 110px; margin-bottom: 14px; }
+    body[data-theme] .profile-hero:not(.bg-lava):not(.bg-old-mine):not(.bg-stars) { background: transparent; border-color: transparent; box-shadow: none; backdrop-filter: none; }
+    body[data-theme="expressive"] .profile-hero:not(.bg-lava):not(.bg-old-mine):not(.bg-stars) { color: #fff7e8; --muted: #f0dfc8; text-shadow: 0 1px 4px #000c; }
+    .profile-hero .profile-badge:not(.owner):not(.admin):not(.moderation):not(.custom) { color: var(--text); text-shadow: none; }
+    .profile-avatar { background: var(--accent); border-radius: 28px; }
+    .profile-title h2 { font-size: 22px; line-height: 1.2; }
+    .profile-title .profile-username { font-size: 16px; line-height: 1.4; margin-top: 3px; }
+    body[data-view="profile"] .profile-hero .profile-badges { margin-top: 6px; }
+    .profile-services .service-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; margin-top: 12px; }
+    body[data-view="profile"] :is(.profile-services,.profile-navigation) { padding: 12px; }
+    .profile-services h2, .profile-navigation h2 { margin-bottom: 4px; font-size: 20px; line-height: 1.2; }
+    .profile-services > p, .profile-navigation > p { margin-bottom: 0; font-size: 13px; line-height: 1.3; }
+    .profile-service { display: grid; grid-template-rows: 90px 1fr; gap: 8px; justify-items: center; align-items: start; min-width: 0; padding: 0; min-height: 130px; border: 0; border-radius: 22px; background: transparent; color: var(--text); cursor: pointer; }
+    .service-face { display: grid; grid-template-rows: 40px 18px; align-content: center; justify-items: center; gap: 6px; width: 100%; min-height: 90px; padding: 8px 3px; border-radius: 22px; border: 1px solid var(--line); background: var(--panel-2); }
+    .profile-service strong { font-size: clamp(10px,3vw,13px); line-height: 1.25; letter-spacing: -.02em; }
+    .profile-service small { font-size: 11px; line-height: 1.2; color: var(--muted); }
+    .ui-icon { display: inline-block; flex-shrink: 0; width: 30px; height: 30px; object-fit: contain; filter: var(--icon-filter); }
+    .profile-service .ui-icon { width: 36px; height: 36px; }
+    .profile-rules { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 104px; padding: 20px; margin: 0 0 16px; border: 1px solid var(--line); border-radius: 26px; background: var(--rules-surface); color: var(--rules-text); text-align: left; cursor: pointer; }
+    .profile-rules .ui-icon { filter: brightness(0) invert(1); width: 38px; height: 38px; }
+    .profile-rules strong { display: block; font-size: 24px; line-height: 1.2; margin-bottom: 6px; }
+    .profile-rules small { font-size: 14px; line-height: 1.4; }
+    .profile-rules .entry-arrow { margin-left: auto; width: 22px; height: 22px; }
+    .panel.profile-navigation { margin-top: 8px; }
+    .profile-navigation .navigation-list { display: grid; gap: 8px; margin-top: 8px; }
+    .profile-nav-entry { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 64px; padding: 10px; border: 1px solid var(--line); border-radius: 20px; background: var(--panel-2); color: var(--text); text-align: left; cursor: pointer; }
+    .profile-nav-entry strong { display: block; font-size: 17px; line-height: 1.2; }
+    .profile-nav-entry small { display: block; font-size: 12px; line-height: 1.3; color: var(--muted); margin-top: 4px; }
+    .profile-nav-entry .entry-arrow { margin-left: auto; width: 20px; height: 20px; }
+    .profile-extra-actions { margin-top: 12px; }
+    .profile-extra-actions summary { cursor: pointer; padding: 12px 0; font-weight: 700; }
+    .theme-options { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+    .theme-option { position: relative; }
+    .theme-option input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+    .theme-option label { display: flex; align-items: center; gap: 10px; min-height: 52px; border: 2px solid transparent; border-radius: 16px; background: var(--panel-2); padding: 10px 12px; font-weight: 700; font-size: 14px; cursor: pointer; }
+    .theme-option input:checked + label { border-color: var(--accent); }
+    .theme-option input:focus-visible + label { outline: 3px solid var(--accent); outline-offset: 3px; }
+    .theme-option .ui-icon { width: 22px; height: 22px; }
+    :is(.profile-rules,.profile-service,.profile-nav-entry,.theme-option label) { -webkit-tap-highlight-color: transparent; touch-action: manipulation; transition: transform 240ms cubic-bezier(.2,1.5,.5,1), box-shadow 240ms; }
+    :is(.profile-rules,.profile-service,.profile-nav-entry,.theme-option label):active { transform: translateY(2px) scale(.97,.95); box-shadow: inset 0 3px 10px #0002; transition-duration: 90ms; }
+    body[data-theme="classic"] :is(.profile-rules,.service-face,.profile-nav-entry,.theme-option label) { border-radius: 0; border: 1px outset #eee; box-shadow: inset 2px 2px #fff, inset -2px -2px #808080; }
+    body[data-theme="classic"] :is(.profile-rules,.profile-service,.profile-nav-entry,.theme-option label):active { border-style: inset; }
+    body[data-theme="classic"] .theme-option input:checked + label { outline: 2px solid #000080; outline-offset: -6px; }
+    body[data-theme="classic"] #content :is(.panel,.stat,.btn,.profile-badge,.rank-badge,.inventory-chip,.mine-admin-card,.mine-admin-row,.admin-list-row,.role-row,.friend-row,.reminder-item,.trigger-media-box),
+    body[data-theme="classic"] .top-profile { border-width: 1px !important; }
+    @media (min-width: 700px) { .profile-services .service-grid { gap: 16px; } .profile-service strong { font-size: 17px; } .profile-service small { font-size: 14px; } }
+    @media (prefers-reduced-motion: reduce) { .seasonal-fire { animation: none; } #seasonalWeather { display: none; } :is(.profile-rules,.profile-service,.profile-nav-entry,.theme-option label) { transition: none; } :is(.profile-rules,.profile-service,.profile-nav-entry,.theme-option label):active { transform: none; } }
   </style>
 </head>
 <body>
 <div class="app-bg" aria-hidden="true"></div>
+<canvas id="seasonalWeather" aria-hidden="true"></canvas>
 <main>
   <header class="top">
     <div>
@@ -1930,6 +2102,18 @@ MINI_APP_HTML = r"""<!doctype html>
   let profileReturnView = "mine";
   let currentProfile = null;
   let screenRequestId = 0;
+
+  // Animate only newly rendered navigation content, never individual mine moves.
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  new MutationObserver(records => {
+    if (reducedMotion.matches || activeView === "mine" || !content.animate) return;
+    if (!records.some(record => record.addedNodes.length)) return;
+    content.getAnimations().forEach(animation => animation.cancel());
+    content.animate(
+      [{opacity: .4, transform: "translateY(8px)"}, {opacity: 1, transform: "translateY(0)"}],
+      {duration: 240, easing: "cubic-bezier(.2,.8,.2,1)"}
+    );
+  }).observe(content, {childList: true});
 
   function beginScreenRequest(view) {
     setScreenHeader(view);
@@ -1963,7 +2147,7 @@ MINI_APP_HTML = r"""<!doctype html>
       screenTitle.textContent = "🎒 Сумка";
       nameNode.textContent = "Инвентарь шахтёра";
     } else if (view === "profile") {
-      screenTitle.textContent = "👤 Профиль";
+      screenTitle.textContent = "Профиль";
       nameNode.textContent = "Информация игрока";
     } else if (view === "mineAdmin") {
       screenTitle.textContent = "⛏️ Панель шахты";
@@ -2271,6 +2455,30 @@ MINI_APP_HTML = r"""<!doctype html>
     </div>`;
   }
 
+  function uiIcon(name, extraClass = "") {
+    return `<img class="ui-icon ${extraClass}" aria-hidden="true" alt="" src="/admin/theme-assets/${name}.svg">`;
+  }
+
+  function profileNavigationHtml(viewer) {
+    const entry = (action,icon,title,description) => `<button class="profile-nav-entry" onclick="${action}()">
+      ${uiIcon(icon)}<span><strong>${title}</strong><small>${description}</small></span>${uiIcon("chevron", "entry-arrow")}</button>`;
+    return `<section class="panel profile-navigation"><h2>Игра и управление</h2><p class="muted">Развивайся и управляй своей группой</p><div class="navigation-list">
+      ${entry("showMine","pickaxe","Шахта","Игра и награды")}
+      ${viewer && viewer.canViewAdminPanel ? entry("showAdminPanel","users","Админ-панель","Управление группами") : ""}
+      ${entry("showBag","backpack","Сумка","Твои предметы и подарки")}
+    </div></section>`;
+  }
+
+  function profileServicesHtml() {
+    const services = [["showWeather","cloud","Погода","Погода выбранного города"],
+      ["showRadio","radio-receiver","Радио","Поиск радиостанций"],
+      ["showReminders","bell","Напоминания","Личные напоминания"]];
+    return `<button class="profile-rules" onclick="showRules()">${uiIcon("book-open")}<span><strong>Правила</strong><small>Начни с правил своей группы</small></span>${uiIcon("chevron", "entry-arrow")}</button>
+    <section class="panel profile-services"><h2>Полезные сервисы</h2><p class="muted">Для твоего комфорта на каждый день</p>
+      <div class="service-grid">${services.map(([action,icon,title,description]) => `<button class="profile-service" onclick="${action}()"><span class="service-face">${uiIcon(icon)}<strong>${title === "Напоминания" ? "Напоми<wbr>нания" : title}</strong></span><small>${description}</small></button>`).join("")}</div>
+    </section>`;
+  }
+
   async function showRules(chatId = null) {
     const requestId = beginScreenRequest("rules");
     content.innerHTML = `<section class="panel muted">Загружаю правила...</section>`;
@@ -2314,24 +2522,108 @@ MINI_APP_HTML = r"""<!doctype html>
     localStorage.setItem("miniAppSettings", JSON.stringify(settings));
   }
 
+  let seasonalFrame = 0;
+  let seasonalLastFrame = 0;
+  let seasonalTheme = "";
+  let seasonalParticles = [];
+  const seasonalCanvas = document.getElementById("seasonalWeather");
+  const seasonalContext = seasonalCanvas.getContext("2d");
+
+  function resizeSeasonalScene() {
+    const width = window.innerWidth, height = window.innerHeight;
+    const scale = Math.min(window.devicePixelRatio || 1, 1.5);
+    seasonalCanvas.width = Math.round(width * scale);
+    seasonalCanvas.height = Math.round(height * scale);
+    if (seasonalContext) seasonalContext.setTransform(scale,0,0,scale,0,0);
+    const fire = document.querySelector(".seasonal-fire");
+    if (fire) {
+      // The clipped layer uses the real scene, not a drawn replacement flame.
+      const cover = Math.max(width / 1024, height / 1536);
+      const x = .81 * 1024 * cover - (1024 * cover - width);
+      const y = .235 * 1536 * cover;
+      fire.style.clipPath = `ellipse(${52 * cover}px ${95 * cover}px at ${x}px ${y}px)`;
+      fire.style.transformOrigin = `${x}px ${y + 80 * cover}px`;
+    }
+    seasonalParticles = Array.from({length: seasonalTheme === "glass" ? 36 : 56}, () => ({
+      x: Math.random() * width, y: Math.random() * height,
+      size: 1 + Math.random() * 2.4, speed: 15 + Math.random() * 28, phase: Math.random() * Math.PI * 2,
+    }));
+  }
+
+  function animateSeasonalWeather(time) {
+    seasonalFrame = 0;
+    if (reducedMotion.matches || document.hidden || !seasonalContext || !["glass","expressive"].includes(seasonalTheme)) return;
+    if (time - seasonalLastFrame < 32) { seasonalFrame = requestAnimationFrame(animateSeasonalWeather); return; }
+    const delta = Math.min((time - seasonalLastFrame) / 1000, .08);
+    seasonalLastFrame = time;
+    const width = window.innerWidth, height = window.innerHeight;
+    seasonalContext.clearRect(0,0,width,height);
+    for (const particle of seasonalParticles) {
+      const winter = seasonalTheme === "glass";
+      particle.y += particle.speed * delta * (winter ? 1 : 12);
+      particle.x += (winter ? Math.sin(time / 1600 + particle.phase) * 7 : -45) * delta;
+      if (particle.y > height + 12) { particle.y = -12; particle.x = Math.random() * width; }
+      if (particle.x < -12) particle.x = width + 12;
+      // Rain falls outside the shelter, never over the sheltered fire.
+      if (!winter && particle.x > width * .52 && particle.y < height * .4) continue;
+      seasonalContext.beginPath();
+      if (winter) {
+        seasonalContext.fillStyle = "rgba(255,255,255,.72)";
+        seasonalContext.arc(particle.x,particle.y,particle.size,0,Math.PI*2);
+        seasonalContext.fill();
+      } else {
+        seasonalContext.strokeStyle = "rgba(215,230,235,.3)";
+        seasonalContext.lineWidth = .8;
+        seasonalContext.moveTo(particle.x,particle.y);
+        seasonalContext.lineTo(particle.x - 3,particle.y + 11);
+        seasonalContext.stroke();
+      }
+    }
+    seasonalFrame = requestAnimationFrame(animateSeasonalWeather);
+  }
+
+  function syncSeasonalMotion() {
+    cancelAnimationFrame(seasonalFrame);
+    seasonalFrame = 0;
+    seasonalLastFrame = 0;
+    if (seasonalContext) seasonalContext.clearRect(0,0,window.innerWidth,window.innerHeight);
+    const fire = document.querySelector(".seasonal-fire");
+    if (fire) fire.style.animationPlayState = document.hidden || reducedMotion.matches ? "paused" : "running";
+    if (!document.hidden && !reducedMotion.matches && ["glass","expressive"].includes(seasonalTheme)) seasonalFrame = requestAnimationFrame(animateSeasonalWeather);
+  }
+
+  function updateSeasonalScene(theme) {
+    if (seasonalTheme === theme) return;
+    seasonalTheme = theme;
+    const background = document.querySelector(".app-bg");
+    background.innerHTML = theme === "expressive" ? `<img class="seasonal-fire" src="/admin/theme-assets/autumn-courtyard.png" alt="">` : "";
+    resizeSeasonalScene();
+    syncSeasonalMotion();
+  }
+  window.addEventListener("resize", resizeSeasonalScene, {passive: true});
+  document.addEventListener("visibilitychange", syncSeasonalMotion);
+  reducedMotion.addEventListener("change", syncSeasonalMotion);
+
+  // Keep stable stored keys for users of the former Glass / Expressive themes.
   const MINI_APP_THEMES = {
-    expressive: "Material 3 Expressive",
-    glass: "Liquid Glass",
+    expressive: "Осенняя",
+    glass: "Зимняя",
     classic: "Classic Minesweeper",
     warm: "Abstergo",
   };
 
   function currentMiniTheme() {
-    const savedTheme = loadMiniSettings().theme || "expressive";
+    const savedTheme = loadMiniSettings().theme || "glass";
     const theme = savedTheme === "neon" ? "classic" : savedTheme;
-    return Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "expressive";
+    return Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "glass";
   }
 
   function applyMiniTheme(theme) {
-    const safeTheme = Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "expressive";
+    const safeTheme = Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "glass";
     document.documentElement.dataset.theme = safeTheme;
-    document.documentElement.style.colorScheme = ["classic", "warm"].includes(safeTheme) ? "light" : "dark";
+    document.documentElement.style.colorScheme = "light";
     document.body.dataset.theme = safeTheme;
+    updateSeasonalScene(safeTheme);
   }
 
   function enforceMiniAppTheme() {
@@ -2339,57 +2631,28 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   function setMiniTheme(theme) {
+    const restoreKeyboardFocus = document.activeElement && document.activeElement.name === "miniAppTheme";
     const settings = loadMiniSettings();
-    settings.theme = Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "expressive";
+    settings.theme = Object.prototype.hasOwnProperty.call(MINI_APP_THEMES, theme) ? theme : "glass";
     saveMiniSettings(settings);
     enforceMiniAppTheme();
     const block = document.getElementById("themeSwitcher");
     if (block) block.outerHTML = themeSwitcherHtml();
+    if (restoreKeyboardFocus) document.getElementById(`theme-${settings.theme}`)?.focus({preventScroll: true});
   }
 
   function themeSwitcherHtml() {
     const theme = currentMiniTheme();
-    return `<div id="themeSwitcher" class="theme-switcher">
+    const options = [
+      ["glass", "Зимняя", "snowflake"], ["expressive", "Осенняя", "leaf"],
+      ["classic", "Сапёр Classic", "mine"], ["warm", "Abstergo", "house"],
+    ];
+    return `<div id="themeSwitcher" class="theme-switcher" role="group" aria-label="Тема интерфейса">
       <div class="muted">Тема интерфейса</div>
-      <div class="theme-platform-switch">
-        <input type="radio" name="miniAppTheme" id="themeApple" value="glass" ${theme === "glass" ? "checked" : ""} onchange="setMiniTheme('glass')">
-        <input type="radio" name="miniAppTheme" id="themeExpressive" value="expressive" ${theme === "expressive" ? "checked" : ""} onchange="setMiniTheme('expressive')">
-        <input type="radio" name="miniAppTheme" id="themeClassic" value="classic" ${theme === "classic" ? "checked" : ""} onchange="setMiniTheme('classic')">
-        <input type="radio" name="miniAppTheme" id="themeWarm" value="warm" ${theme === "warm" ? "checked" : ""} onchange="setMiniTheme('warm')">
-        <div class="theme-switch-icons">
-          <label class="theme-platform-icon theme-apple-icon" for="themeApple" aria-label="Liquid Glass">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M17.2 12.5c0-2.5 2.1-3.7 2.2-3.8-1.2-1.8-3.1-2-3.8-2-1.6-.2-3.1.9-3.9.9-.8 0-2-.9-3.3-.9-1.7 0-3.2 1-4.1 2.4-1.8 3-.5 7.5 1.3 10 .9 1.2 1.9 2.6 3.3 2.5 1.3-.1 1.8-.8 3.4-.8 1.6 0 2 .8 3.4.8 1.4 0 2.3-1.2 3.1-2.5 1-1.4 1.4-2.8 1.4-2.9-.1 0-3-.9-3-3.7zM14.6 5c.7-.8 1.2-2 1.1-3.1-1 .1-2.2.7-2.9 1.5-.6.7-1.2 1.9-1.1 3 1.1.1 2.2-.6 2.9-1.4z"/>
-            </svg>
-          </label>
-          <label class="theme-platform-icon theme-expressive-icon" for="themeExpressive" aria-label="Material 3 Expressive">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 2.4l1.8 5.2 5.5.2-4.4 3.3 1.5 5.3L12 13.3l-4.5 3.1 1.5-5.3-4.4-3.3 5.5-.2L12 2.4zm6.5 12.6l.8 2.3 2.4.1-1.9 1.4.7 2.3-2-1.3-2 1.3.7-2.3-1.9-1.4 2.4-.1.8-2.3zM4.7 15l.8 2.3 2.4.1L6 18.8l.7 2.3-2-1.3-2 1.3.7-2.3-1.9-1.4 2.4-.1.8-2.3z"/>
-            </svg>
-          </label>
-          <label class="theme-platform-icon theme-classic-icon" for="themeClassic" aria-label="Classic Minesweeper">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M13 2v2.1a7.5 7.5 0 1 1-2 0V2h2zm-1 5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zm0 2 1 2 2 .3-1.5 1.5.4 2.2-1.9-1-1.9 1 .4-2.2L9 11.3l2-.3 1-2zm4.7-5.7 1.4-1.4 2 2-1.4 1.4-2-2z"/>
-            </svg>
-          </label>
-          <label class="theme-platform-icon theme-warm-icon" for="themeWarm" aria-label="Abstergo">
-            <img src="/admin/theme-assets/abstergo-copper-mark.png" alt="">
-          </label>
-        </div>
-        <div class="theme-switch-track">
-          <span class="theme-switch-knob"></span>
-          <label for="themeApple"></label>
-          <label for="themeExpressive"></label>
-          <label for="themeClassic"></label>
-          <label for="themeWarm"></label>
-        </div>
-        <div class="theme-switch-labels">
-          <label class="theme-apple-label" for="themeApple">Liquid Glass</label>
-          <label class="theme-expressive-label" for="themeExpressive">M3 Expressive</label>
-          <label class="theme-classic-label" for="themeClassic">Сапёр Classic</label>
-          <label class="theme-warm-label" for="themeWarm">Abstergo</label>
-        </div>
-      </div>
+      <div class="theme-options">${options.map(([key,title,icon]) => `<div class="theme-option">
+        <input type="radio" name="miniAppTheme" id="theme-${key}" value="${key}" ${theme === key ? "checked" : ""} onchange="setMiniTheme('${key}')">
+        <label for="theme-${key}">${uiIcon(icon)}<span>${title}</span></label>
+      </div>`).join("")}</div>
     </div>`;
   }
 
@@ -2844,31 +3107,40 @@ MINI_APP_HTML = r"""<!doctype html>
   }
 
   function adminSectionHtml(section) {
-    const action = section.key === "roles" && section.enabled
-      ? `<button class="btn secondary" onclick="showRoleManager()">Открыть роли</button>`
-      : section.key === "access" && section.enabled
-        ? `<button class="btn secondary" onclick="showAccessManager()">Открыть доступ</button>`
-      : section.key === "moderator-roles" && section.enabled
-        ? `<button class="btn secondary" onclick="showModeratorRoleManager()">Открыть модераторов</button>`
-      : section.key === "mine" && section.enabled
-        ? `<button class="btn secondary" onclick="showMineAdmin()">Настройки шахты</button>`
-        : section.key === "moderation" && section.enabled
-          ? `<button class="btn secondary" onclick="showModerationManager()">Открыть тревоги</button>`
-          : section.key === "blacklist" && section.enabled
-            ? `<button class="btn secondary" onclick="showBlacklistManager()">Открыть список</button>`
-          : section.key === "rules" && section.enabled
-            ? `<button class="btn secondary" onclick="showRulesManager()">Открыть правила</button>`
-          : section.key === "triggers" && section.enabled
-            ? `<button class="btn secondary" onclick="showTriggerManager()">Открыть триггеры</button>`
-          : section.key === "macros" && section.enabled
-            ? `<button class="btn secondary" onclick="showMacroManager()">Открыть макросы</button>`
-          : section.key === "inline-stats" && section.enabled
-            ? `<button class="btn secondary" onclick="showInlineStatistics()">Открыть статистику</button>`
-            : `<span class="muted">Нет доступа</span>`;
-    return `<div class="admin-list-row">
-      <span><b>${escapeHtml(section.title || section.key)}</b></span>
-      ${action}
-    </div>`;
+    const entries = {
+      roles: ["showRoleManager()", "Администраторы и роли по группам"],
+      access: ["showAccessManager()", "Кому доступны разделы и действия"],
+      "moderator-roles": ["showModeratorRoleManager()", "Назначение и снятие модераторов"],
+      mine: ["showMineAdmin()", "Игроки, награды и параметры игры"],
+      moderation: ["showModerationManager()", "Тревоги и уведомления группы"],
+      blacklist: ["showBlacklistManager()", "Запрещённые слова и ограничения"],
+      rules: ["showRulesManager()", "Текст правил и подтверждение прочтения"],
+      triggers: ["showTriggerManager()", "Реакции на слова и фразы"],
+      macros: ["showMacroManager()", "Общие и личные заготовки команд"],
+      "inline-stats": ["showInlineStatistics()", "Использование погоды и карт тревог"]
+    };
+    const entry = entries[section.key];
+    const enabled = section.enabled && !!entry;
+    return `<button class="admin-entry" ${enabled ? `onclick="${entry[0]}"` : "disabled"}>
+      <span><strong>${escapeHtml(section.title || section.key)}</strong><small>${escapeHtml(entry ? entry[1] : "Нет доступа")}</small></span>
+      <span class="admin-entry-chevron" aria-hidden="true">›</span>
+    </button>`;
+  }
+
+  function adminSectionGroupsHtml(sections) {
+    const groups = [
+      {title: "Участники и доступ", note: "Роли и права управления", keys: ["roles", "access", "moderator-roles"]},
+      {title: "Порядок в группе", note: "Правила, ограничения и уведомления", keys: ["rules", "blacklist", "moderation"]},
+      {title: "Команды и игра", note: "Автоматизация, шахта и статистика", keys: ["triggers", "macros", "mine", "inline-stats"]}
+    ];
+    const known = new Set(groups.flatMap(group => group.keys));
+    groups.push({title: "Другие разделы", note: "Дополнительные инструменты", keys: sections.filter(section => !known.has(section.key)).map(section => section.key)});
+    return groups.map(group => {
+      const items = sections.filter(section => section.enabled && group.keys.includes(section.key))
+        .sort((left, right) => group.keys.indexOf(left.key) - group.keys.indexOf(right.key));
+      if (!items.length) return "";
+      return `<section class="panel"><h2>${group.title}</h2><p class="muted admin-section-note">${group.note}</p><div class="admin-entry-list">${items.map(adminSectionHtml).join("")}</div></section>`;
+    }).join("");
   }
 
   async function showAdminPanel() {
@@ -2881,7 +3153,8 @@ MINI_APP_HTML = r"""<!doctype html>
       const sections = data.sections || [];
       const build = data.build || {};
       content.innerHTML = `<div class="admin-panel-compact"><section class="panel">
-        <h2>Админ-панель Mini App</h2>
+        <h2>Обзор групп</h2>
+        <p class="muted admin-intro">Управление группами. Здесь только разделы, доступные вашей роли.</p>
         <div class="admin-summary">
           <span>Чаты: <b>${Number(summary.chats || 0)}</b></span>
           <span>Админы: <b>${Number(summary.admins || 0)}</b></span>
@@ -2894,10 +3167,7 @@ MINI_APP_HTML = r"""<!doctype html>
           <p class="muted">API запущен: ${build.startedAt ? escapeHtml(new Date(build.startedAt).toLocaleString()) : 'нет данных'}</p>
         </details>
       </section>
-      <section class="panel">
-        <h2>Разделы</h2>
-        <div class="role-list">${sections.filter(section => section.enabled).map(adminSectionHtml).join("") || '<p class="muted">Нет доступных разделов.</p>'}</div>
-      </section>
+      <div class="admin-section-grid">${adminSectionGroupsHtml(sections) || '<section class="panel"><p class="muted">Нет доступных разделов.</p></section>'}</div>
       <section class="panel"><button class="btn secondary" style="margin:0" onclick="showProfile()">Назад к профилю</button></section></div>`;
       scrollToTop();
     } catch (error) {
@@ -4148,21 +4418,21 @@ MINI_APP_HTML = r"""<!doctype html>
         ${profileBadgesHtml(profile)}
       </div>
     </section>
-    ${isSelf ? `<section class="panel profile-quick-actions"><h2>Быстрый доступ</h2>${utilityActionsHtml()}</section>` : ""}
+    ${isSelf ? profileServicesHtml() : ""}
+    ${isSelf ? profileNavigationHtml(viewer) : ""}
     <section class="panel">
       <p class="muted">Premium: <b>${escapeHtml(premiumText)}</b></p>
-      <div class="profile-actions">
+      <details class="profile-extra-actions"><summary>Друзья, подарки и оформление</summary><div class="profile-actions">
         <button class="btn secondary" onclick="showFriendsInfo()">${friends.length ? `Друзья: ${friends.length}` : "Друзья"}</button>
-        ${isSelf ? `<button class="btn secondary" onclick="showMine()">⛏️ Шахта</button><button class="btn secondary" onclick="showBag()">Сумка</button>` : `<button class="btn secondary" onclick="showProfile()">Мой профиль</button>`}
+        ${!isSelf ? `<button class="btn secondary" onclick="showProfile()">Мой профиль</button>` : ""}
         ${isSelf ? `<button class="btn secondary" onclick="showWardrobe()">Оформить профиль</button><button class="btn secondary" onclick="showShop('gifts')">Купить подарок</button>` : ""}
-        ${isSelf ? adminPanelButtonHtml(viewer) : ""}
-      </div>
+      </div></details>
       ${isSelf ? themeSwitcherHtml() : ""}
     </section>
     ${friendsPreview ? `<section class="panel"><h2>${isSelf ? "Друзья" : "Связи"}</h2><div class="friend-list">${friendsPreview}</div>${friends.length > 3 ? `<button class="btn secondary" onclick="showFriendsInfo()">Показать всех: ${friends.length}</button>` : ""}</section>` : ""}
     ${cosmeticsHtml}
     ${(social.relationships || []).map(pair => `<section class="panel"><h2>💞 ${escapeHtml(pair.partnerName)}</h2><p class="muted">${escapeHtml(pair.chatTitle)} · вместе с ${escapeHtml(new Date(pair.since).toLocaleDateString())}</p><h3>Уровень ${pair.level}: ${escapeHtml(pair.title)}</h3><div class="meter" role="progressbar" aria-valuenow="${pair.percent}" aria-valuemin="0" aria-valuemax="100"><div class="fill" style="width:${pair.percent}%"></div></div><p>${pair.xp}${pair.nextXp ? ' / '+pair.nextXp+' опыта · осталось '+pair.remaining : ' опыта · максимальный уровень'}</p><button class="btn" ${pair.canCare?'':'disabled'} onclick="careForPartner(${Number(pair.chatId)})">${pair.canCare?'💕 Уделить внимание · +20 опыта':'Внимание сегодня уже уделено'}</button><p class="muted">Каждый может уделить внимание раз в день. Цветок: +10, кристалл: +30, свидание-подарок: +25. От подарков — до 100 опыта пары в день. Новый день по Киеву; пропуски без штрафов.</p><button class="btn secondary" onclick="showShop('relationships')">Подарки паре</button></section>`).join('')}
-    ${isSelf ? `<section class="panel"><h2>Команды отношений</h2><p>В группе: <b>пара @твой_ник @ник</b>. Получатель должен подтвердить предложение.</p><p><b>отношения</b> — пара и заявки; <b>расстаться</b> — завершить с подтверждением. Предложение действует 24 часа. В каждой группе — одна пара.</p></section>` : ''}
+    ${isSelf ? `<details class="panel profile-help"><summary>Команды отношений</summary><p>В группе: <b>пара @твой_ник @ник</b>. Получатель должен подтвердить предложение.</p><p><b>отношения</b> — пара и заявки; <b>расстаться</b> — завершить с подтверждением. Предложение действует 24 часа. В каждой группе — одна пара.</p></details>` : ''}
     ${social.partner && !(social.relationships || []).length ? `<section class="panel"><h2>💕 Отношения</h2><p>Пара: <b>${escapeHtml(social.partner.fullName || 'Игрок')}</b></p><p class="muted">Цветы, парный кристалл и приглашение на свидание остаются памятными подарками в профиле.</p>${isSelf ? `<button class="btn" onclick="showShop('relationships')">Подарок паре</button>` : ''}</section>` : ''}
     <section class="panel"><h2>🎁 Витрина подарков</h2><p class="muted">Подарки остаются в коллекции. Закреплённые показываются первыми.</p>
     ${(mine.gifts || []).map(gift => `<div class="profile-card" style="margin-bottom:12px"><b>${gift.pinned ? "📌 " : ""}${escapeHtml(gift.title)}</b><p>От: ${escapeHtml(gift.sender)} · ${escapeHtml(new Date(gift.createdAt).toLocaleDateString())}</p>${isSelf ? `<button class="btn secondary" onclick="pinGift(${Number(gift.id)}, ${!gift.pinned})">${gift.pinned ? "Открепить" : "Закрепить"}</button>` : ""}</div>`).join("") || '<p class="muted">Здесь появятся подарки от друзей и пары.</p>'}</section>

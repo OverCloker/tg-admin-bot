@@ -63,12 +63,16 @@ ADMIN_WARM_ICON_NAMES = frozenset({
     "ban", "bell", "chart", "chevron", "crown", "gift", "house", "key", "logs",
     "megaphone", "message", "mine", "mute", "quote", "radio", "reply", "restart",
     "send", "settings", "shield", "star", "users", "volume", "zap",
+    "cloud", "book-open", "backpack", "snowflake", "leaf", "pickaxe", "radio-receiver",
 })
 
 
 @app.get("/admin/theme-assets/{filename}", include_in_schema=False)
 def admin_theme_asset(filename: str) -> FileResponse:
-    if filename == "abstergo-copper-mark.png" or filename == "warm-paper-texture.png":
+    if filename in {"winter-forest.png", "autumn-courtyard.png"}:
+        path = ADMIN_THEME_ASSETS / "themes" / filename
+        media_type = "image/png"
+    elif filename == "abstergo-copper-mark.png" or filename == "warm-paper-texture.png":
         path = ADMIN_THEME_ASSETS / filename
         media_type = "image/png"
     elif filename.endswith(".svg") and filename[:-4] in ADMIN_WARM_ICON_NAMES:
