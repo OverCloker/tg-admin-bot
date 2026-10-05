@@ -107,10 +107,17 @@ def test_abstergo_warm_theme_keeps_existing_actions_and_group_selection():
     assert 'if (id !== "access" && !canUseAction(id))' in page
 
 
-@pytest.mark.parametrize("filename", ["abstergo-copper-mark.png", "warm-paper-texture.png", "users.svg", "winter-forest.png", "autumn-courtyard.png", "cloud.svg", "book-open.svg", "backpack.svg"])
+@pytest.mark.parametrize("filename", ["abstergo-copper-mark.png", "warm-paper-texture.png", "users.svg", "winter-forest.png", "autumn-courtyard.png", "cloud.svg", "book-open.svg", "backpack.svg", "spring-garden.png", "summer-lake.png", "playful-cat.png", "campfire-frames.png", "cat-meow.wav", "cat-meow.ogg"])
 def test_abstergo_warm_asset_exists(filename):
     response = admin_api.admin_theme_asset(filename)
     assert response.path.name == filename
+
+
+def test_playful_cat_pose_atlas_is_allowlisted():
+    response = admin_api.admin_theme_asset("playful-cat-frames.png")
+    assert response.path.name == "playful-cat-frames.png"
+    assert response.path.is_file()
+    assert response.media_type == "image/png"
 
 
 def test_abstergo_warm_icon_allowlist_matches_files():

@@ -1993,7 +1993,7 @@ MINI_APP_HTML = r"""<!doctype html>
       --accent: #99421d; --accent-2: #773219; --ok: #366d44; --danger: #a02c29;
       --input-bg: #fffaf2; --input-placeholder: #7a5f4e;
       --panel-shadow: 0 8px 24px #130b0540; --surface-blur: blur(8px);
-      --app-bg-layer: url("/admin/theme-assets/autumn-courtyard.png");
+      --app-bg-layer: url("/admin/theme-assets/autumn-courtyard.png?v=2");
       --icon-color: #97451e; --rules-surface: #99421d; --rules-text: #fffaf2;
       --icon-filter: brightness(0) saturate(100%) invert(28%) sepia(40%) saturate(2200%) hue-rotate(346deg) brightness(88%) contrast(88%);
     }
@@ -2015,11 +2015,38 @@ MINI_APP_HTML = r"""<!doctype html>
     body[data-theme="expressive"] .top { color: #fff7e8; }
     body[data-theme="expressive"] .top .muted { color: #f0dfc8; }
     body[data-theme="expressive"] .app-bg { background-position: right top; }
-    .seasonal-scene, .seasonal-fire { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; }
-    .seasonal-fire { display: none; }
-    body[data-theme="expressive"] .seasonal-fire { display: block; object-position: right top; }
-    .seasonal-fire { animation: campfire-flicker 1700ms ease-in-out infinite alternate; }
-    @keyframes campfire-flicker { 0%,100% {filter: brightness(.88) saturate(1.08); transform: scale(1);} 25% {filter: brightness(1.16) saturate(1.2); transform: scale(1.005,1.012);} 55% {filter: brightness(.98) saturate(1.12); transform: scale(.997,1.006);} 78% {filter: brightness(1.3) saturate(1.24); transform: scale(1.006,1.018);} }
+    body[data-theme="spring"] {
+      color-scheme: light;
+      --bg: #e9f3e6; --panel: #fcfff7ef; --panel-color: #fcfff7;
+      --panel-2: #e7f2e1; --line: #c3dcbc; --text: #10391f; --muted: #456b53;
+      --accent: #146942; --accent-2: #225b38; --ok: #286b40; --danger: #a52f41;
+      --input-bg: #fcfff9; --input-placeholder: #536e57;
+      --panel-shadow: 0 8px 24px #164a2820; --surface-blur: blur(12px);
+      --app-bg-layer: url("/admin/theme-assets/spring-garden.png");
+      --icon-color: #146942; --rules-surface: #146942; --rules-text: #fff;
+      --icon-filter: brightness(0) saturate(100%) invert(29%) sepia(55%) saturate(680%) hue-rotate(102deg) brightness(86%) contrast(96%);
+    }
+    body[data-theme="summer"] {
+      color-scheme: light;
+      --bg: #30343d; --panel: #fff0d8f5; --panel-color: #fff0d8;
+      --panel-2: #fbe5c2; --line: #dfbe86; --text: #42220d; --muted: #805430;
+      --accent: #a65a0c; --accent-2: #794310; --ok: #456738; --danger: #a52d30;
+      --input-bg: #fff9ee; --input-placeholder: #806248;
+      --panel-shadow: 0 8px 24px #1b160d40; --surface-blur: blur(10px);
+      --app-bg-layer: url("/admin/theme-assets/summer-lake.png");
+      --icon-color: #94510c; --rules-surface: #a65a0c; --rules-text: #fff7e5;
+      --icon-filter: brightness(0) saturate(100%) invert(29%) sepia(83%) saturate(1190%) hue-rotate(16deg) brightness(92%) contrast(96%);
+    }
+    body[data-theme="summer"] .top { color: #fff5df; }
+    body[data-theme="spring"] :is(.top,.profile-hero) { text-shadow: 0 1px 3px #fff, 0 0 8px #fffe; }
+    body[data-theme="summer"] .top .muted { color: #fff0d2; }
+    body[data-theme="summer"] .profile-hero:not(.bg-lava):not(.bg-old-mine):not(.bg-stars) { color: #fff7e4; --muted: #fff0d2; text-shadow: 0 1px 5px #16120ed9; }
+    #playfulCat { position: fixed; z-index: 2147483000; pointer-events: none; width: 128px; height: 128px; object-fit: contain; left: 0; top: 0; visibility: hidden; filter: drop-shadow(0 5px 8px #0003); will-change: transform; }
+    #playfulCat[data-visible="true"] { visibility: visible; }
+    #catSprite { width: 128px; height: 128px; transform-origin: 50% 90%; animation: kitten-breath 3200ms ease-in-out infinite; }
+    @keyframes kitten-breath { 0%,100% { transform: scale(1); } 50% { transform: scale(1.018,1.028); } }
+    .cat-setting { margin-top: 16px; }
+    .cat-setting small { display: block; font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 4px; }
     #seasonalWeather { position: fixed; inset: 0; z-index: 0; pointer-events: none; width: 100%; height: 100%; }
     body[data-view="profile"] .panel { padding: 16px; border-width: 1px; }
     body[data-view="profile"] .panel.profile-hero { padding: 8px 16px; }
@@ -2069,12 +2096,14 @@ MINI_APP_HTML = r"""<!doctype html>
     body[data-theme="classic"] #content :is(.panel,.stat,.btn,.profile-badge,.rank-badge,.inventory-chip,.mine-admin-card,.mine-admin-row,.admin-list-row,.role-row,.friend-row,.reminder-item,.trigger-media-box),
     body[data-theme="classic"] .top-profile { border-width: 1px !important; }
     @media (min-width: 700px) { .profile-services .service-grid { gap: 16px; } .profile-service strong { font-size: 17px; } .profile-service small { font-size: 14px; } }
-    @media (prefers-reduced-motion: reduce) { .seasonal-fire { animation: none; } #seasonalWeather { display: none; } :is(.profile-rules,.profile-service,.profile-nav-entry,.theme-option label) { transition: none; } :is(.profile-rules,.profile-service,.profile-nav-entry,.theme-option label):active { transform: none; } }
+    @media (prefers-reduced-motion: reduce) { :is(.profile-rules,.profile-service,.profile-nav-entry,.theme-option label) { transition: none; } :is(.profile-rules,.profile-service,.profile-nav-entry,.theme-option label):active { transform: none; } }
   </style>
 </head>
 <body>
 <div class="app-bg" aria-hidden="true"></div>
 <canvas id="seasonalWeather" aria-hidden="true"></canvas>
+<div id="playfulCat" aria-hidden="true"><canvas id="catSprite" width="256" height="256"></canvas></div>
+<audio id="catMeow" preload="none" src="/admin/theme-assets/cat-meow.wav"></audio>
 <main>
   <header class="top">
     <div>
@@ -2528,6 +2557,9 @@ MINI_APP_HTML = r"""<!doctype html>
   let seasonalParticles = [];
   const seasonalCanvas = document.getElementById("seasonalWeather");
   const seasonalContext = seasonalCanvas.getContext("2d");
+  const flameAtlas = new Image();
+  flameAtlas.onload = () => syncSeasonalMotion();
+  flameAtlas.src = "/admin/theme-assets/campfire-frames.png";
 
   function resizeSeasonalScene() {
     const width = window.innerWidth, height = window.innerHeight;
@@ -2535,15 +2567,6 @@ MINI_APP_HTML = r"""<!doctype html>
     seasonalCanvas.width = Math.round(width * scale);
     seasonalCanvas.height = Math.round(height * scale);
     if (seasonalContext) seasonalContext.setTransform(scale,0,0,scale,0,0);
-    const fire = document.querySelector(".seasonal-fire");
-    if (fire) {
-      // The clipped layer uses the real scene, not a drawn replacement flame.
-      const cover = Math.max(width / 1024, height / 1536);
-      const x = .81 * 1024 * cover - (1024 * cover - width);
-      const y = .235 * 1536 * cover;
-      fire.style.clipPath = `ellipse(${52 * cover}px ${95 * cover}px at ${x}px ${y}px)`;
-      fire.style.transformOrigin = `${x}px ${y + 80 * cover}px`;
-    }
     seasonalParticles = Array.from({length: seasonalTheme === "glass" ? 36 : 56}, () => ({
       x: Math.random() * width, y: Math.random() * height,
       size: 1 + Math.random() * 2.4, speed: 15 + Math.random() * 28, phase: Math.random() * Math.PI * 2,
@@ -2552,7 +2575,7 @@ MINI_APP_HTML = r"""<!doctype html>
 
   function animateSeasonalWeather(time) {
     seasonalFrame = 0;
-    if (reducedMotion.matches || document.hidden || !seasonalContext || !["glass","expressive"].includes(seasonalTheme)) return;
+    if (reducedMotion.matches || document.hidden || !seasonalContext || !["glass","expressive","spring","summer"].includes(seasonalTheme)) return;
     if (time - seasonalLastFrame < 32) { seasonalFrame = requestAnimationFrame(animateSeasonalWeather); return; }
     const delta = Math.min((time - seasonalLastFrame) / 1000, .08);
     seasonalLastFrame = time;
@@ -2560,15 +2583,17 @@ MINI_APP_HTML = r"""<!doctype html>
     seasonalContext.clearRect(0,0,width,height);
     for (const particle of seasonalParticles) {
       const winter = seasonalTheme === "glass";
-      particle.y += particle.speed * delta * (winter ? 1 : 12);
-      particle.x += (winter ? Math.sin(time / 1600 + particle.phase) * 7 : -45) * delta;
+      const rain = seasonalTheme === "expressive";
+      const summer = seasonalTheme === "summer";
+      particle.y += (summer ? Math.sin(time / 1700 + particle.phase) * 8 : particle.speed * (rain ? 12 : .6)) * delta;
+      particle.x += (rain ? -45 : Math.sin(time / 1600 + particle.phase) * 7) * delta;
       if (particle.y > height + 12) { particle.y = -12; particle.x = Math.random() * width; }
       if (particle.x < -12) particle.x = width + 12;
       // Rain falls outside the shelter, never over the sheltered fire.
-      if (!winter && particle.x > width * .52 && particle.y < height * .4) continue;
+      if (rain && particle.x > width * .52 && particle.y < height * .4) continue;
       seasonalContext.beginPath();
-      if (winter) {
-        seasonalContext.fillStyle = "rgba(255,255,255,.72)";
+      if (!rain) {
+        seasonalContext.fillStyle = summer ? `rgba(255,222,116,${.2 + .4 * (1 + Math.sin(time / 1000 + particle.phase)) / 2})` : winter ? "rgba(255,255,255,.72)" : "rgba(255,232,244,.65)";
         seasonalContext.arc(particle.x,particle.y,particle.size,0,Math.PI*2);
         seasonalContext.fill();
       } else {
@@ -2579,7 +2604,22 @@ MINI_APP_HTML = r"""<!doctype html>
         seasonalContext.stroke();
       }
     }
+    drawSeasonalFire(time);
     seasonalFrame = requestAnimationFrame(animateSeasonalWeather);
+  }
+
+  function drawSeasonalFire(time = 0) {
+    if (seasonalContext && seasonalTheme === "expressive" && flameAtlas.complete && flameAtlas.naturalWidth) {
+      // Sixteen distinct raster flame shapes; no clipped/glowing copy of the scene.
+      const width = window.innerWidth, height = window.innerHeight;
+      const cover = Math.max(width / 1024, height / 1536);
+      const x = .81 * 1024 * cover - (1024 * cover - width);
+      const base = .263 * 1536 * cover;
+      const frame = Math.floor(time / 85) % 16;
+      const cw = flameAtlas.naturalWidth / 4, ch = flameAtlas.naturalHeight / 4;
+      seasonalContext.drawImage(flameAtlas, (frame % 4) * cw, Math.floor(frame / 4) * ch, cw, ch,
+        x - 86 * cover, base - 134 * cover, 172 * cover, 138 * cover);
+    }
   }
 
   function syncSeasonalMotion() {
@@ -2587,16 +2627,15 @@ MINI_APP_HTML = r"""<!doctype html>
     seasonalFrame = 0;
     seasonalLastFrame = 0;
     if (seasonalContext) seasonalContext.clearRect(0,0,window.innerWidth,window.innerHeight);
-    const fire = document.querySelector(".seasonal-fire");
-    if (fire) fire.style.animationPlayState = document.hidden || reducedMotion.matches ? "paused" : "running";
-    if (!document.hidden && !reducedMotion.matches && ["glass","expressive"].includes(seasonalTheme)) seasonalFrame = requestAnimationFrame(animateSeasonalWeather);
+    if (!document.hidden) drawSeasonalFire(); // Still flame when reduced motion is requested.
+    if (!document.hidden && !reducedMotion.matches && ["glass","expressive","spring","summer"].includes(seasonalTheme)) seasonalFrame = requestAnimationFrame(animateSeasonalWeather);
   }
 
   function updateSeasonalScene(theme) {
     if (seasonalTheme === theme) return;
     seasonalTheme = theme;
     const background = document.querySelector(".app-bg");
-    background.innerHTML = theme === "expressive" ? `<img class="seasonal-fire" src="/admin/theme-assets/autumn-courtyard.png" alt="">` : "";
+    background.replaceChildren();
     resizeSeasonalScene();
     syncSeasonalMotion();
   }
@@ -2610,6 +2649,8 @@ MINI_APP_HTML = r"""<!doctype html>
     glass: "Зимняя",
     classic: "Classic Minesweeper",
     warm: "Abstergo",
+    spring: "Весенняя",
+    summer: "Летняя",
   };
 
   function currentMiniTheme() {
@@ -2623,6 +2664,12 @@ MINI_APP_HTML = r"""<!doctype html>
     document.documentElement.dataset.theme = safeTheme;
     document.documentElement.style.colorScheme = "light";
     document.body.dataset.theme = safeTheme;
+    // Some Telegram WebViews retain inherited custom properties on animated
+    // containers. Refresh the same theme tokens explicitly, without changing layout.
+    const palette = getComputedStyle(document.body);
+    for (const token of ["--bg","--panel","--panel-color","--panel-2","--line","--text","--muted","--accent","--accent-2","--ok","--danger","--input-bg","--input-placeholder","--panel-shadow","--surface-blur","--icon-color","--icon-filter","--rules-surface","--rules-text"]) {
+      content.style.setProperty(token, palette.getPropertyValue(token));
+    }
     updateSeasonalScene(safeTheme);
   }
 
@@ -2646,6 +2693,7 @@ MINI_APP_HTML = r"""<!doctype html>
     const options = [
       ["glass", "Зимняя", "snowflake"], ["expressive", "Осенняя", "leaf"],
       ["classic", "Сапёр Classic", "mine"], ["warm", "Abstergo", "house"],
+      ["spring", "Весенняя", "leaf"], ["summer", "Летняя", "star"],
     ];
     return `<div id="themeSwitcher" class="theme-switcher" role="group" aria-label="Тема интерфейса">
       <div class="muted">Тема интерфейса</div>
@@ -2655,6 +2703,116 @@ MINI_APP_HTML = r"""<!doctype html>
       </div>`).join("")}</div>
     </div>`;
   }
+
+  const playfulCat = document.getElementById("playfulCat");
+  const catMeow = document.getElementById("catMeow");
+  catMeow.volume = .35;
+  let catAnimation = null;
+  let catInterval = 0;
+  let catEnabled = loadMiniSettings().cats === true;
+  const catSprite = document.getElementById("catSprite");
+  const catSpriteContext = catSprite.getContext("2d");
+  const catAtlas = new Image();
+  let catSpriteFrame = 0;
+  let catDrawnFrame = -1;
+  let catReactionStart = -10000;
+  let catLeft = 0, catTop = 0;
+  catAtlas.onload = () => syncCatMode();
+  catAtlas.src = "/admin/theme-assets/playful-cat-frames.png";
+
+  function drawCatPose(frame) {
+    if (!catSpriteContext || !catAtlas.complete || !catAtlas.naturalWidth) return;
+    if (catDrawnFrame === frame) return;
+    const w = catAtlas.naturalWidth / 4, h = catAtlas.naturalHeight / 2;
+    catSpriteContext.clearRect(0,0,256,256);
+    catSpriteContext.drawImage(catAtlas,(frame % 4) * w,Math.floor(frame / 4) * h,w,h,0,0,256,256);
+    catDrawnFrame = frame;
+    catSprite.dataset.pose = String(frame);
+  }
+
+  function animateCatPose(time) {
+    catSpriteFrame = 0;
+    if (!catEnabled || document.hidden || reducedMotion.matches) return;
+    const reaction = [4,5,6,6,5,4,0];
+    const elapsed = time - catReactionStart;
+    // Pause between blinks; the kitten does not cycle frantically through poses.
+    const idle = [0,0,1,1,0,0,0,0,0,0,2,3,2,4,0,0,1,1,0,0];
+    drawCatPose(elapsed >= 0 && elapsed < 770 ? reaction[Math.floor(elapsed / 110)] : idle[Math.floor(time / 160) % idle.length]);
+    catSpriteFrame = requestAnimationFrame(animateCatPose);
+  }
+
+  function catSettingsHtml() {
+    return `<div class="setting-switch-row cat-setting">
+      <label for="catMode">Котики<small>Мяу при нажатиях и игривый кот поверх экрана</small></label>
+      <label class="switch"><input id="catMode" type="checkbox" role="switch" ${catEnabled ? "checked" : ""} onchange="setCatMode(this.checked)"><span class="slider round"></span></label>
+    </div><small class="muted">Звук: <a href="https://commons.wikimedia.org/wiki/File:Meow.ogg" target="_blank" rel="noopener noreferrer">Dan Crosby · CC BY-SA 3.0</a></small>`;
+  }
+
+  function placeCat(x, y, jump = true) {
+    if (!catEnabled || document.hidden) return;
+    catAnimation?.cancel();
+    const left = Math.max(8, Math.min(window.innerWidth - 144, x - 90));
+    const top = Math.max(12, Math.min(window.innerHeight - 156, y - 85));
+    const fromLeft = catLeft, fromTop = catTop;
+    catLeft = left; catTop = top;
+    playfulCat.dataset.visible = "true";
+    const destination = `perspective(700px) translate(${left}px,${top}px) rotateY(-6deg)`;
+    playfulCat.style.transform = destination;
+    if (!reducedMotion.matches && jump && playfulCat.animate) {
+      catReactionStart = performance.now();
+      catAnimation = playfulCat.animate([
+        {transform:`perspective(700px) translate(${fromLeft}px,${fromTop}px) rotateY(-6deg)`},
+        {transform:`perspective(700px) translate(${(fromLeft + left) / 2}px,${Math.max(10,Math.min(fromTop,top) - 28)}px) rotateY(12deg) rotateZ(-7deg)`,offset:.45},
+        {transform:`perspective(700px) translate(${left}px,${top + 3}px) rotateY(-10deg) scale(1.04,.94)`,offset:.82},
+        {transform:destination}
+      ], {duration:850,easing:"cubic-bezier(.2,.8,.3,1)"});
+    }
+  }
+
+  function syncCatMode() {
+    clearInterval(catInterval);
+    catAnimation?.cancel();
+    cancelAnimationFrame(catSpriteFrame);
+    catSpriteFrame = 0;
+    catSprite.style.animationPlayState = !catEnabled || document.hidden || reducedMotion.matches ? "paused" : "running";
+    if (!catEnabled || document.hidden) {
+      playfulCat.dataset.visible = "false";
+      catMeow.pause();
+      return;
+    }
+    placeCat(window.innerWidth - 18, window.innerHeight - 85, false);
+    drawCatPose(0);
+    if (!reducedMotion.matches) catSpriteFrame = requestAnimationFrame(animateCatPose);
+    if (!reducedMotion.matches) catInterval = setInterval(() => {
+      const buttons = [...content.querySelectorAll("button:not(:disabled)")].filter(button => {
+        const rect = button.getBoundingClientRect();
+        return rect.width > 0 && rect.top > 70 && rect.bottom < window.innerHeight - 30;
+      });
+      const button = buttons[Math.floor(Math.random() * buttons.length)];
+      if (button) { const rect = button.getBoundingClientRect(); placeCat(rect.right - 12, rect.top + rect.height / 2); }
+    }, 14000);
+  }
+
+  function setCatMode(enabled) {
+    catEnabled = !!enabled;
+    const settings = loadMiniSettings();
+    settings.cats = catEnabled;
+    saveMiniSettings(settings);
+    syncCatMode();
+  }
+  document.addEventListener("click", event => {
+    if (!catEnabled || document.hidden) return;
+    // One reusable player and one cat: rapid taps never stack audio/overlays.
+    catMeow.currentTime = 0;
+    catMeow.play().catch(() => {});
+    if (event.target.closest(".cat-setting")) return;
+    const rect = event.target.getBoundingClientRect();
+    placeCat(event.clientX || rect.right, event.clientY || rect.top + rect.height / 2);
+  });
+  document.addEventListener("visibilitychange", syncCatMode);
+  window.addEventListener("resize", syncCatMode, {passive: true});
+  reducedMotion.addEventListener("change", syncCatMode);
+  syncCatMode();
 
   enforceMiniAppTheme();
   if (telegram && typeof telegram.onEvent === "function") {
@@ -4428,6 +4586,7 @@ MINI_APP_HTML = r"""<!doctype html>
         ${isSelf ? `<button class="btn secondary" onclick="showWardrobe()">Оформить профиль</button><button class="btn secondary" onclick="showShop('gifts')">Купить подарок</button>` : ""}
       </div></details>
       ${isSelf ? themeSwitcherHtml() : ""}
+      ${isSelf ? catSettingsHtml() : ""}
     </section>
     ${friendsPreview ? `<section class="panel"><h2>${isSelf ? "Друзья" : "Связи"}</h2><div class="friend-list">${friendsPreview}</div>${friends.length > 3 ? `<button class="btn secondary" onclick="showFriendsInfo()">Показать всех: ${friends.length}</button>` : ""}</section>` : ""}
     ${cosmeticsHtml}

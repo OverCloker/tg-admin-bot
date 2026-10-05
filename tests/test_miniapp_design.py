@@ -67,3 +67,39 @@ def test_theme_picker_keeps_old_keys_but_has_clear_new_names():
     assert 'savedTheme === "neon" ? "classic" : savedTheme' in MINI_APP_HTML
     assert 'role="group" aria-label="Тема интерфейса"' in MINI_APP_HTML
     assert '.theme-option input:focus-visible + label' in MINI_APP_HTML
+
+
+def test_new_seasons_and_real_flame_frames_keep_common_layout():
+    for name in ('spring: "Весенняя"', 'summer: "Летняя"', 'spring-garden.png', 'summer-lake.png'):
+        assert name in MINI_APP_HTML
+    assert 'campfire-frames.png' in MINI_APP_HTML
+    assert 'Math.floor(time / 85) % 16' in MINI_APP_HTML
+    assert 'seasonalContext.drawImage(flameAtlas' in MINI_APP_HTML
+    assert 'clipPath = `ellipse' not in MINI_APP_HTML
+    assert 'campfire-flicker' not in MINI_APP_HTML
+
+
+def test_cats_are_opt_in_nonblocking_persistent_and_bounded():
+    assert 'loadMiniSettings().cats === true' in MINI_APP_HTML
+    assert 'settings.cats = catEnabled' in MINI_APP_HTML
+    assert 'id="catMode" type="checkbox" role="switch"' in MINI_APP_HTML
+    assert 'pointer-events: none; width: 128px' in MINI_APP_HTML
+    assert 'clearInterval(catInterval)' in MINI_APP_HTML
+    assert 'catAnimation?.cancel()' in MINI_APP_HTML
+    assert 'if (!catEnabled || document.hidden)' in MINI_APP_HTML
+    assert 'if (!reducedMotion.matches) catInterval' in MINI_APP_HTML
+    assert 'catMeow.play().catch(() => {})' in MINI_APP_HTML
+    assert '${isSelf ? catSettingsHtml() : ""}' in MINI_APP_HTML
+
+
+def test_cat_has_real_pose_frames_and_stops_motion_when_disabled():
+    assert '/admin/theme-assets/playful-cat-frames.png' in MINI_APP_HTML
+    assert 'catSpriteContext.drawImage(catAtlas' in MINI_APP_HTML
+    assert 'catAtlas.naturalWidth / 4' in MINI_APP_HTML
+    assert 'catAtlas.naturalHeight / 2' in MINI_APP_HTML
+    assert 'if (catDrawnFrame === frame) return' in MINI_APP_HTML
+    assert 'cancelAnimationFrame(catSpriteFrame)' in MINI_APP_HTML
+    assert 'if (!catEnabled || document.hidden || reducedMotion.matches) return' in MINI_APP_HTML
+    assert 'drawCatPose(0)' in MINI_APP_HTML
+    assert 'perspective(700px)' in MINI_APP_HTML
+    assert 'catReactionStart = performance.now()' in MINI_APP_HTML
