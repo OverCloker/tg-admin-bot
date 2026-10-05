@@ -19,7 +19,7 @@ from html import escape, unescape
 from ipaddress import ip_address
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -917,7 +917,7 @@ class BlacklistMiddleware(BaseMiddleware):
             isinstance(event, Message)
             and event.chat.type in BLACKLIST_CHAT_TYPES
             and (event.text or event.caption)
-            and await handle_blacklist(event)
+            and (await handle_exact_bot_spam(event) or await handle_blacklist(event))
         ):
             return None
         return await handler(event, data)
@@ -1956,6 +1956,11 @@ HELP_SECTIONS = {
         "<code>черный список слов</code> — показать все выражения\n"
         "Муты за нарушения за неделю: 5м → 10м → 30м → 1ч; затем по 1ч. "
         "Сброс каждый понедельник в 00:00 по Киеву.\n\n"
+        "<b>Антиспам</b>\n"
+        "Реклама @psikh_lightbot, @myppsychologybot, @psohmarybot и @psumarybot "
+        "в группах автоматически приводит к бану автора и удалению сообщения. "
+        "Проверяются также ссылки и подписи к медиа. Администраторы и автоматические "
+        "пересылки постов исключены. Боту нужны права удаления и блокировки.\n\n"
         "<b>Персонал</b>\n"
         "<code>модеры</code> · <code>рейтинг модеров</code> · <code>модрейтинг</code>\n"
         "<code>голос @ник</code> — отдать голос за модератора\n"
@@ -11703,6 +11708,78 @@ async def handle_birthdays(message: Message) -> None:
     for birthday in birthdays:
         await safe_reply(message, f"Сегодня праздник: <b>{escape(birthday.text)}</b> 🎉")
         db.mark_birthday_sent(message.chat.id, birthday.id, sent_date)
+
+
+BLOCKED_AD_BOTS = frozenset({"psikh_lightbot", "myppsychologybot", "psohmarybot", "psumarybot"})
+AD_BOT_MENTION_RE = re.compile(r"(?<![\w@])@([a-zA-Z0-9_]{5,32})(?!\w)")
+AD_BOT_URL_RE = re.compile(r"(?<![\w./])(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/[a-zA-Z0-9_]+(?:\?[^\s<>]*)?", re.IGNORECASE)
+
+
+def exact_ad_bot_match(message: Message) -> str | None:
+    text = message.text or message.caption or ""
+    for match in AD_BOT_MENTION_RE.finditer(text):
+        username = match.group(1).casefold()
+        if username in BLOCKED_AD_BOTS:
+            return username
+    urls = [match.group(0) for match in AD_BOT_URL_RE.finditer(text)]
+    for entity in (getattr(message, "entities", None) or getattr(message, "caption_entities", None) or []):
+        if getattr(entity, "url", None):
+            urls.append(entity.url)
+    for url in urls:
+        try:
+            parsed = urlsplit(url if "://" in url else "https://" + url)
+            if parsed.hostname and parsed.hostname.casefold() in {"t.me", "www.t.me", "telegram.me", "www.telegram.me"}:
+                username = parsed.path.strip("/").split("/")[0].casefold()
+                if username in BLOCKED_AD_BOTS:
+                    return username
+        except ValueError:
+            continue
+    return None
+
+
+async def handle_exact_bot_spam(message: Message) -> bool:
+    if message.chat.type not in SUPPORTED_CHAT_TYPES or getattr(message, "is_automatic_forward", False):
+        return False
+    matched = exact_ad_bot_match(message)
+    if not matched:
+        return False
+    sender_chat = getattr(message, "sender_chat", None)
+    actor = message.from_user
+    # Anonymous administrators and the bot itself must never be banned.
+    if sender_chat and sender_chat.id == message.chat.id:
+        return False
+    if not sender_chat and (not actor or actor.id == message.bot.id):
+        return False
+    status_known = True
+    if not sender_chat:
+        try:
+            member = await message.bot.get_chat_member(message.chat.id, actor.id)
+            if member_status_text(member.status) in ADMIN_STATUS_TEXTS:
+                return False
+        except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter):
+            status_known = False  # Delete spam, but do not ban an unverified administrator.
+    banned = deleted = False
+    try:
+        if sender_chat:
+            await message.bot.ban_chat_sender_chat(chat_id=message.chat.id, sender_chat_id=sender_chat.id)
+            banned = True
+        elif status_known:
+            await message.bot.ban_chat_member(chat_id=message.chat.id, user_id=actor.id)
+            banned = True
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as exc:
+        logging.warning("Exact ad-bot spam ban failed in %s: %s", message.chat.id, type(exc).__name__)
+    # Always attempt source deletion, even if banning failed or sender-chat banning
+    # did not remove the original comment. Do not pass spam to triggers or Gemini.
+    try:
+        await message.delete()
+        deleted = True
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as exc:
+        logging.warning("Exact ad-bot spam deletion failed in %s: %s", message.chat.id, type(exc).__name__)
+    await notify_staff_moderation(message.bot,
+        f"Антиспам: реклама @{matched}. Чат: <code>{message.chat.id}</code>, "
+        f"автор: <code>{sender_chat.id if sender_chat else actor.id}</code>.\n"
+        f"Блокировка: {'да' if banned else 'не выполнена'}. Удаление сообщения: {'да' if deleted else 'не выполнено'}.")
+    return True
 
 
 def normalize_blacklist_text(text: str) -> str:
