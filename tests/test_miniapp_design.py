@@ -83,31 +83,32 @@ def test_cats_are_opt_in_nonblocking_persistent_and_bounded():
     assert 'loadMiniSettings().cats === true' in MINI_APP_HTML
     assert 'settings.cats = catEnabled' in MINI_APP_HTML
     assert 'id="catMode" type="checkbox" role="switch"' in MINI_APP_HTML
-    assert 'pointer-events: none; width: 128px' in MINI_APP_HTML
-    assert 'clearTimeout(catIdleTimer)' in MINI_APP_HTML
-    assert 'catMovement = null' in MINI_APP_HTML
+    assert 'pointer-events: none; width: 180px' in MINI_APP_HTML
+    assert 'catCompanion?.sync(catEnabled)' in MINI_APP_HTML
     assert 'if (!catEnabled || document.hidden)' in MINI_APP_HTML
-    assert 'const CAT_IDLE_DELAY = 18000' in MINI_APP_HTML
-    assert 'setTimeout(startCatSleep, CAT_IDLE_DELAY)' in MINI_APP_HTML
     assert 'catMeow.play().catch(() => {})' in MINI_APP_HTML
     assert '${isSelf ? catSettingsHtml() : ""}' in MINI_APP_HTML
 
 
-def test_cat_has_real_pose_frames_and_stops_motion_when_disabled():
-    assert '/admin/theme-assets/realistic-cat-poses-v2.png' in MINI_APP_HTML
-    assert 'catSpriteContext.drawImage(atlas' in MINI_APP_HTML
-    assert 'const catPoseRects = [' in MINI_APP_HTML
-    assert '232-height,width,height' in MINI_APP_HTML
-    assert 'if (!changed && blend >= 1) return' in MINI_APP_HTML
-    assert 'const blend = Math.min(1,Math.max(0,(time-catBlendStarted)/180))' in MINI_APP_HTML
-    assert 'cancelAnimationFrame(catSpriteFrame)' in MINI_APP_HTML
-    assert 'if (!catEnabled || document.hidden || reducedMotion.matches) return' in MINI_APP_HTML
-    assert 'drawCatPose(16)' in MINI_APP_HTML
-    assert 'realistic-cat-gaze.png' in MINI_APP_HTML
-    assert 'setCatState("watching",time)' in MINI_APP_HTML
-    assert 'setCatState("reaching", time)' in MINI_APP_HTML
-    assert 'catSpriteContext.scale(-1,1)' in MINI_APP_HTML
-    assert 'setCatState("curling", time)' in MINI_APP_HTML
-    assert 'setCatState("sleeping", time)' in MINI_APP_HTML
+def test_cat_3d_is_lazy_local_and_preserves_input_and_lifecycle():
+    from pathlib import Path
+    assets = Path(__file__).resolve().parents[1] / 'app/assets/themes'
+    runtime = (assets / 'cat-companion.js').read_text(encoding='utf-8')
+    assert 'import("/admin/theme-assets/cat-companion.bundle.js?v=3d-v4")' in MINI_APP_HTML
+    assert 'catCompanion || catLoading || !catEnabled || catDestroyed' in MINI_APP_HTML
+    assert 'realistic-cat-poses-v2.png' not in MINI_APP_HTML
+    assert 'if (event.persisted)' in MINI_APP_HTML
+    assert 'window.addEventListener("pageshow", syncCatMode)' in MINI_APP_HTML
+    assert 'owner-cat-v4.glb' in runtime
+    assert 'cancelAnimationFrame(frame)' in runtime
+    assert 'if (!reducedMotion.matches)' in runtime
+    assert 'document.hidden' in runtime
+    assert "pivot.rotation.set(0, yaw, 0, 'YXZ')" in runtime
+    assert 'stand *' not in runtime
+    assert 'const targetYaw = s.reduced ? s.facing*.35 : s.heading' in runtime
+    assert 'curl * (front ?' not in runtime
+    assert "turn('spine_02', 0, curl" not in runtime
+    assert (assets / 'owner-cat-v4.glb').stat().st_size < 6_000_000
+    assert (assets / 'cat-companion.bundle.js').stat().st_size < 1_000_000
     assert '}, {capture: true}); // Read bounds before a button replaces the current screen.' in MINI_APP_HTML
     assert 'window.visualViewport?.addEventListener("resize", resizeCatViewport' in MINI_APP_HTML

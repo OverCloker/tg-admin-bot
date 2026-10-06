@@ -72,6 +72,9 @@ def admin_theme_asset(filename: str) -> FileResponse:
     if filename in {"winter-forest.png", "autumn-courtyard.png", "spring-garden.png", "summer-lake.png", "playful-cat.png", "playful-cat-frames.png", "realistic-cat-poses-v2.png", "realistic-cat-gaze.png", "campfire-frames.png"}:
         path = ADMIN_THEME_ASSETS / "themes" / filename
         media_type = "image/png"
+    elif filename in {"owner-cat-v3.glb", "owner-cat-v4.glb", "cat-companion.bundle.js"}:
+        path = ADMIN_THEME_ASSETS / "themes" / filename
+        media_type = "model/gltf-binary" if filename.endswith(".glb") else "text/javascript"
     elif filename in {"cat-meow.ogg", "cat-meow.wav"}:
         path = ADMIN_THEME_ASSETS / "themes" / filename
         media_type = "audio/ogg" if filename.endswith(".ogg") else "audio/wav"
