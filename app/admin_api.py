@@ -69,7 +69,7 @@ ADMIN_WARM_ICON_NAMES = frozenset({
 
 @app.get("/admin/theme-assets/{filename}", include_in_schema=False)
 def admin_theme_asset(filename: str) -> FileResponse:
-    if filename in {"winter-forest.png", "autumn-courtyard.png", "spring-garden.png", "summer-lake.png", "playful-cat.png", "playful-cat-frames.png", "campfire-frames.png"}:
+    if filename in {"winter-forest.png", "autumn-courtyard.png", "spring-garden.png", "summer-lake.png", "playful-cat.png", "playful-cat-frames.png", "realistic-cat-poses-v2.png", "realistic-cat-gaze.png", "campfire-frames.png"}:
         path = ADMIN_THEME_ASSETS / "themes" / filename
         media_type = "image/png"
     elif filename in {"cat-meow.ogg", "cat-meow.wav"}:

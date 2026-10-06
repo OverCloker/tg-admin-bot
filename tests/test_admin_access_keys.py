@@ -113,9 +113,10 @@ def test_abstergo_warm_asset_exists(filename):
     assert response.path.name == filename
 
 
-def test_playful_cat_pose_atlas_is_allowlisted():
-    response = admin_api.admin_theme_asset("playful-cat-frames.png")
-    assert response.path.name == "playful-cat-frames.png"
+@pytest.mark.parametrize("filename", ["playful-cat-frames.png", "realistic-cat-poses-v2.png", "realistic-cat-gaze.png"])
+def test_playful_cat_pose_atlas_is_allowlisted(filename):
+    response = admin_api.admin_theme_asset(filename)
+    assert response.path.name == filename
     assert response.path.is_file()
     assert response.media_type == "image/png"
 

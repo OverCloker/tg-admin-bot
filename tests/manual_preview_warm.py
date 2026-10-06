@@ -72,7 +72,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             body, content_type = MOBILE_FRAME, "text/html; charset=utf-8"
         elif self.path.startswith("/admin/theme-assets/"):
             filename = self.path.removeprefix("/admin/theme-assets/").split("?", 1)[0]
-            if filename in {"winter-forest.png", "autumn-courtyard.png", "spring-garden.png", "summer-lake.png", "playful-cat.png", "playful-cat-frames.png", "campfire-frames.png"}:
+            if filename in {"winter-forest.png", "autumn-courtyard.png", "spring-garden.png", "summer-lake.png", "playful-cat.png", "playful-cat-frames.png", "realistic-cat-poses-v2.png", "realistic-cat-gaze.png", "campfire-frames.png"}:
                 asset = ADMIN_THEME_ASSETS / "themes" / filename
                 content_type = "image/png"
             elif filename in {"cat-meow.ogg", "cat-meow.wav"}:

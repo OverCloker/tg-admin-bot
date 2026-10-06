@@ -2043,8 +2043,9 @@ MINI_APP_HTML = r"""<!doctype html>
     body[data-theme="summer"] .profile-hero:not(.bg-lava):not(.bg-old-mine):not(.bg-stars) { color: #fff7e4; --muted: #fff0d2; text-shadow: 0 1px 5px #16120ed9; }
     #playfulCat { position: fixed; z-index: 2147483000; pointer-events: none; width: 128px; height: 128px; object-fit: contain; left: 0; top: 0; visibility: hidden; filter: drop-shadow(0 5px 8px #0003); will-change: transform; }
     #playfulCat[data-visible="true"] { visibility: visible; }
-    #catSprite { width: 128px; height: 128px; transform-origin: 50% 90%; animation: kitten-breath 3200ms ease-in-out infinite; }
-    @keyframes kitten-breath { 0%,100% { transform: scale(1); } 50% { transform: scale(1.018,1.028); } }
+    #catSprite { width: 128px; height: 128px; transform-origin: 50% 88%; animation: kitten-breath 3600ms ease-in-out infinite; }
+    #playfulCat[data-state="sleeping"] #catSprite { animation-duration: 4800ms; }
+    @keyframes kitten-breath { 0%,100% { transform: scale(1); } 50% { transform: scale(1.008,1.013); } }
     .cat-setting { margin-top: 16px; }
     .cat-setting small { display: block; font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 4px; }
     #seasonalWeather { position: fixed; inset: 0; z-index: 0; pointer-events: none; width: 100%; height: 100%; }
@@ -2707,71 +2708,220 @@ MINI_APP_HTML = r"""<!doctype html>
   const playfulCat = document.getElementById("playfulCat");
   const catMeow = document.getElementById("catMeow");
   catMeow.volume = .35;
-  let catAnimation = null;
-  let catInterval = 0;
+  const CAT_SIZE = 128;
+  const CAT_IDLE_DELAY = 18000;
+  let catIdleTimer = 0;
   let catEnabled = loadMiniSettings().cats === true;
   const catSprite = document.getElementById("catSprite");
   const catSpriteContext = catSprite.getContext("2d");
   const catAtlas = new Image();
+  const catGazeAtlas = new Image();
+  const catBlendCanvas = document.createElement("canvas");
+  catBlendCanvas.width = catBlendCanvas.height = 256;
+  const catBlendContext = catBlendCanvas.getContext("2d");
   let catSpriteFrame = 0;
   let catDrawnFrame = -1;
-  let catReactionStart = -10000;
+  let catRequestedPose = 16, catBlendStarted = -10000;
+  let catState = "idle", catStateStarted = 0;
+  let catFacing = 1, catDrawnFacing = 0;
+  let catMovement = null;
+  let catLookPose = 16, catPendingTap = null;
   let catLeft = 0, catTop = 0;
-  catAtlas.onload = () => syncCatMode();
-  catAtlas.src = "/admin/theme-assets/playful-cat-frames.png";
+  // Source cutouts have different heights: anchor their feet, not their cell centres.
+  // Coordinates refer to the untouched 1254px photographic atlas.
+  const catPoseRects = [
+    [26,70,268,275], [324,72,260,273], [622,75,245,271], [926,94,273,254],
+    [40,376,237,337], [338,384,272,330], [629,354,259,363], [931,460,282,255],
+    [24,727,300,251], [327,727,296,251], [626,730,297,248], [939,735,301,243],
+    [25,1028,350,155], [390,1023,249,168], [668,1037,266,155], [957,1040,280,157]
+  ];
+  const catGazeRects = [
+    [37,58,382,540], [425,60,372,540], [809,57,387,544],
+    [422,640,380,543], [31,632,388,551], [814,639,393,545]
+  ];
+  function catAssetLoaded() {
+    catDrawnFrame = -1;
+    if (catEnabled && !document.hidden) drawCatPose(catRequestedPose);
+    ensureCatAnimation();
+  }
+  catAtlas.onload = catGazeAtlas.onload = catAssetLoaded;
 
-  function drawCatPose(frame) {
+  function drawCatPose(frame, time = performance.now()) {
+    catRequestedPose = frame;
     if (!catSpriteContext || !catAtlas.complete || !catAtlas.naturalWidth) return;
-    if (catDrawnFrame === frame) return;
-    const w = catAtlas.naturalWidth / 4, h = catAtlas.naturalHeight / 2;
+    // Seated gaze frames keep the torso fixed; only the head changes direction.
+    const gazeReady = catGazeAtlas.complete && catGazeAtlas.naturalWidth;
+    const atlas = frame >= 16 && gazeReady ? catGazeAtlas : catAtlas;
+    const facing = frame >= 16 ? 1 : catFacing;
+    const changed = catDrawnFrame !== frame || catDrawnFacing !== facing;
+    if (changed && catBlendContext) {
+      catBlendContext.clearRect(0,0,256,256);
+      catBlendContext.drawImage(catSprite,0,0);
+      catBlendStarted = catDrawnFrame < 0 || reducedMotion.matches ? time-180 : time;
+    }
+    const blend = Math.min(1,Math.max(0,(time-catBlendStarted)/180));
+    if (!changed && blend >= 1) return;
+    let x,y,w,h,sourceScale,scale;
+    if (frame >= 16 && gazeReady) {
+      [x,y,w,h] = catGazeRects[frame-16];
+      sourceScale = atlas.naturalWidth/1254; scale = .32;
+    } else {
+      [x,y,w,h] = catPoseRects[frame >= 16 ? 3 : frame];
+      sourceScale = catAtlas.naturalWidth/1254; scale = .61;
+    }
+    const width = w*scale, height = h*scale;
     catSpriteContext.clearRect(0,0,256,256);
-    catSpriteContext.drawImage(catAtlas,(frame % 4) * w,Math.floor(frame / 4) * h,w,h,0,0,256,256);
+    if (blend < 1 && catBlendContext) {
+      catSpriteContext.globalAlpha = 1-blend;
+      catSpriteContext.drawImage(catBlendCanvas,0,0);
+    }
+    catSpriteContext.save();
+    catSpriteContext.globalAlpha = blend;
+    if (facing < 0) { catSpriteContext.translate(256,0); catSpriteContext.scale(-1,1); }
+    catSpriteContext.drawImage(atlas,x*sourceScale,y*sourceScale,w*sourceScale,h*sourceScale,
+      128-width/2,232-height,width,height);
+    catSpriteContext.restore();
+    catSpriteContext.globalAlpha = 1;
     catDrawnFrame = frame;
+    catDrawnFacing = facing;
     catSprite.dataset.pose = String(frame);
+  }
+
+  function catViewport() {
+    const viewport = window.visualViewport;
+    return {width: Math.min(window.innerWidth, viewport?.width || window.innerWidth),
+      height: Math.min(window.innerHeight, viewport ? viewport.height + viewport.offsetTop : window.innerHeight)};
+  }
+
+  function setCatState(state, time = performance.now()) {
+    catState = state;
+    catStateStarted = time;
+    playfulCat.dataset.state = state;
+    catSprite.style.animationPlayState = reducedMotion.matches || document.hidden || !catEnabled
+      || state === "reaching" || state === "approaching" || state === "going-home" ? "paused" : "running";
+  }
+
+  function catTransform() {
+    playfulCat.style.transform = `translate3d(${catLeft}px,${catTop}px,0)`;
+    playfulCat.dataset.facing = catFacing < 0 ? "left" : "right";
+  }
+
+  function moveCatTo(left, top, duration, time = performance.now()) {
+    const viewport = catViewport();
+    left = Math.max(4, Math.min(Math.max(4, viewport.width - CAT_SIZE - 4), left));
+    top = Math.max(4, Math.min(Math.max(4, viewport.height - CAT_SIZE - 4), top));
+    // catLeft/catTop are the actual current position, never an unfinished destination.
+    catMovement = {fromLeft:catLeft, fromTop:catTop, left, top, started:time, duration};
+    if (reducedMotion.matches || !duration) {
+      catLeft = left; catTop = top; catMovement = null; catTransform();
+    }
+    playfulCat.dataset.visible = "true";
+  }
+
+  function startCatSleep() {
+    catIdleTimer = 0;
+    if (!catEnabled || document.hidden) return;
+    const viewport = catViewport();
+    const left = catLeft + CAT_SIZE / 2 < viewport.width / 2 ? 8 : viewport.width - CAT_SIZE - 8;
+    const top = viewport.height - CAT_SIZE - 6;
+    catFacing = left < catLeft ? -1 : 1;
+    setCatState(reducedMotion.matches ? "sleeping" : "going-home");
+    moveCatTo(left, top, Math.min(1800, Math.abs(left-catLeft)*8));
+    if (reducedMotion.matches) drawCatPose(14);
+    ensureCatAnimation();
+  }
+
+  function scheduleCatSleep() {
+    clearTimeout(catIdleTimer);
+    catIdleTimer = setTimeout(startCatSleep, CAT_IDLE_DELAY);
+  }
+
+  function ensureCatAnimation() {
+    if (!catSpriteFrame && catEnabled && !document.hidden && !reducedMotion.matches)
+      catSpriteFrame = requestAnimationFrame(animateCatPose);
   }
 
   function animateCatPose(time) {
     catSpriteFrame = 0;
     if (!catEnabled || document.hidden || reducedMotion.matches) return;
-    const reaction = [4,5,6,6,5,4,0];
-    const elapsed = time - catReactionStart;
-    // Pause between blinks; the kitten does not cycle frantically through poses.
-    const idle = [0,0,1,1,0,0,0,0,0,0,2,3,2,4,0,0,1,1,0,0];
-    drawCatPose(elapsed >= 0 && elapsed < 770 ? reaction[Math.floor(elapsed / 110)] : idle[Math.floor(time / 160) % idle.length]);
+    if (catMovement) {
+      const progress = Math.max(0, Math.min(1, (time-catMovement.started)/catMovement.duration));
+      const eased = progress*progress*(3-2*progress);
+      catLeft = catMovement.fromLeft + (catMovement.left-catMovement.fromLeft)*eased;
+      catTop = catMovement.fromTop + (catMovement.top-catMovement.fromTop)*eased;
+      catTransform();
+      if (progress >= 1) catMovement = null;
+    }
+    if (catState === "going-home" && !catMovement) setCatState("curling", time);
+    if (catState === "approaching" && !catMovement) setCatState("reaching", time);
+    let elapsed = time - catStateStarted;
+    if (catState === "waking" && elapsed >= 700) {
+      const tap = catPendingTap;
+      catPendingTap = null;
+      if (tap) performCatTap(tap.x,tap.y,time);
+      else setCatState("watching",time);
+      elapsed = 0;
+    }
+    if (catState === "curling" && elapsed >= 1200) { setCatState("sleeping", time); elapsed = 0; }
+    if (catState === "reaching" && elapsed >= 2800) { setCatState("watching", time); elapsed = 0; }
+    if (catState === "watching" && elapsed >= 5000) { setCatState("idle", time); elapsed = 0; }
+    let pose = 16;
+    if (catState === "going-home" || catState === "approaching") pose = 8 + Math.floor(elapsed/200)%4;
+    else if (catState === "waking") pose = elapsed < 250 ? 13 : elapsed < 500 ? 12 : 16;
+    else if (catState === "curling") pose = elapsed < 400 ? 12 : elapsed < 800 ? 13 : 14;
+    else if (catState === "sleeping") pose = Math.floor(elapsed/2400)%2 ? 15 : 14;
+    else if (catState === "reaching") {
+      // Rise only after the horizontal walk ends, so slow travel cannot skip poses.
+      pose = elapsed < 400 ? 4 : elapsed < 850 ? 5 : elapsed < 1900 ? 6 : elapsed < 2250 ? 5 : 7;
+    } else if (catState === "watching") pose = catLookPose;
+    else pose = elapsed%5200 > 4700 && elapsed%5200 < 4950 ? 21 : 16;
+    drawCatPose(pose,time);
     catSpriteFrame = requestAnimationFrame(animateCatPose);
   }
 
   function catSettingsHtml() {
     return `<div class="setting-switch-row cat-setting">
-      <label for="catMode">Котики<small>Мяу при нажатиях и игривый кот поверх экрана</small></label>
+      <label for="catMode">Котики<small>Следит за нажатиями, тянется лапами и засыпает внизу.</small></label>
       <label class="switch"><input id="catMode" type="checkbox" role="switch" ${catEnabled ? "checked" : ""} onchange="setCatMode(this.checked)"><span class="slider round"></span></label>
     </div><small class="muted">Звук: <a href="https://commons.wikimedia.org/wiki/File:Meow.ogg" target="_blank" rel="noopener noreferrer">Dan Crosby · CC BY-SA 3.0</a></small>`;
   }
 
-  function placeCat(x, y, jump = true) {
-    if (!catEnabled || document.hidden) return;
-    catAnimation?.cancel();
-    const left = Math.max(8, Math.min(window.innerWidth - 144, x - 90));
-    const top = Math.max(12, Math.min(window.innerHeight - 156, y - 85));
-    const fromLeft = catLeft, fromTop = catTop;
-    catLeft = left; catTop = top;
-    playfulCat.dataset.visible = "true";
-    const destination = `perspective(700px) translate(${left}px,${top}px) rotateY(-6deg)`;
-    playfulCat.style.transform = destination;
-    if (!reducedMotion.matches && jump && playfulCat.animate) {
-      catReactionStart = performance.now();
-      catAnimation = playfulCat.animate([
-        {transform:`perspective(700px) translate(${fromLeft}px,${fromTop}px) rotateY(-6deg)`},
-        {transform:`perspective(700px) translate(${(fromLeft + left) / 2}px,${Math.max(10,Math.min(fromTop,top) - 28)}px) rotateY(12deg) rotateZ(-7deg)`,offset:.45},
-        {transform:`perspective(700px) translate(${left}px,${top + 3}px) rotateY(-10deg) scale(1.04,.94)`,offset:.82},
-        {transform:destination}
-      ], {duration:850,easing:"cubic-bezier(.2,.8,.3,1)"});
+  function performCatTap(x,y,time = performance.now()) {
+    const viewport = catViewport();
+    const floorTop = Math.max(4,viewport.height-CAT_SIZE-6);
+    catFacing = x < catLeft + CAT_SIZE/2 ? -1 : 1;
+    catLookPose = y < floorTop + 35 ? (catFacing < 0 ? 19 : 20) : (catFacing < 0 ? 17 : 18);
+    catMovement = null;
+    // Distant buttons get a seated head turn, not an airborne cat across the page.
+    if (y < floorTop + CAT_SIZE*.32 || reducedMotion.matches) {
+      setCatState("watching",time);
+      catTop = floorTop;
+      catTransform();
+      if (reducedMotion.matches) drawCatPose(catLookPose,time);
+      return;
     }
+    const pawX = catFacing > 0 ? .76 : .24;
+    const left = x - CAT_SIZE*pawX;
+    const distance = Math.abs(Math.max(4,Math.min(viewport.width-CAT_SIZE-4,left))-catLeft);
+    setCatState(distance < 8 ? "reaching" : "approaching",time);
+    moveCatTo(left, floorTop, distance < 8 ? 0 : Math.min(1800, Math.max(420,distance*8)),time);
+  }
+
+  function reachCatTo(x, y) {
+    if (!catEnabled || document.hidden) return;
+    scheduleCatSleep();
+    if (!reducedMotion.matches && ["sleeping","curling","waking"].includes(catState)) {
+      catPendingTap = {x,y};
+      if (catState !== "waking") setCatState("waking");
+    } else performCatTap(x,y);
+    ensureCatAnimation();
   }
 
   function syncCatMode() {
-    clearInterval(catInterval);
-    catAnimation?.cancel();
+    clearTimeout(catIdleTimer);
+    catIdleTimer = 0;
+    catMovement = null;
+    catPendingTap = null;
     cancelAnimationFrame(catSpriteFrame);
     catSpriteFrame = 0;
     catSprite.style.animationPlayState = !catEnabled || document.hidden || reducedMotion.matches ? "paused" : "running";
@@ -2780,17 +2930,14 @@ MINI_APP_HTML = r"""<!doctype html>
       catMeow.pause();
       return;
     }
-    placeCat(window.innerWidth - 18, window.innerHeight - 85, false);
-    drawCatPose(0);
-    if (!reducedMotion.matches) catSpriteFrame = requestAnimationFrame(animateCatPose);
-    if (!reducedMotion.matches) catInterval = setInterval(() => {
-      const buttons = [...content.querySelectorAll("button:not(:disabled)")].filter(button => {
-        const rect = button.getBoundingClientRect();
-        return rect.width > 0 && rect.top > 70 && rect.bottom < window.innerHeight - 30;
-      });
-      const button = buttons[Math.floor(Math.random() * buttons.length)];
-      if (button) { const rect = button.getBoundingClientRect(); placeCat(rect.right - 12, rect.top + rect.height / 2); }
-    }, 14000);
+    if (!catAtlas.src) catAtlas.src = "/admin/theme-assets/realistic-cat-poses-v2.png";
+    if (!catGazeAtlas.src) catGazeAtlas.src = "/admin/theme-assets/realistic-cat-gaze.png";
+    const viewport = catViewport();
+    setCatState("idle");
+    moveCatTo(viewport.width - CAT_SIZE - 8, viewport.height - CAT_SIZE - 6, 0);
+    drawCatPose(16);
+    ensureCatAnimation();
+    scheduleCatSleep();
   }
 
   function setCatMode(enabled) {
@@ -2800,17 +2947,41 @@ MINI_APP_HTML = r"""<!doctype html>
     saveMiniSettings(settings);
     syncCatMode();
   }
+
+  function resizeCatViewport() {
+    if (!catEnabled || document.hidden) return;
+    const viewport = catViewport();
+    const maxLeft = Math.max(4,viewport.width - CAT_SIZE - 4);
+    const maxTop = Math.max(4,viewport.height - CAT_SIZE - 4);
+    catLeft = Math.max(4, Math.min(maxLeft,catLeft));
+    catTop = Math.max(4, Math.min(maxTop,catTop));
+    // Keep paws on the bottom edge, including after orientation/keyboard changes.
+    const floorTop = Math.max(4,viewport.height - CAT_SIZE - 6);
+    catTop = floorTop;
+    if (catMovement) {
+      const time = performance.now();
+      catMovement = {...catMovement, fromLeft:catLeft, fromTop:catTop,
+        left:Math.max(4, Math.min(maxLeft,catMovement.left)),
+        top:floorTop, started:time,
+        duration:Math.max(1,catMovement.started + catMovement.duration - time)};
+    }
+    catTransform();
+    // A scrollbar appearing during navigation must not cancel the reaching pose.
+  }
   document.addEventListener("click", event => {
     if (!catEnabled || document.hidden) return;
+    if (!(event.target instanceof Element) || event.target.closest(".cat-setting")) return;
     // One reusable player and one cat: rapid taps never stack audio/overlays.
     catMeow.currentTime = 0;
     catMeow.play().catch(() => {});
-    if (event.target.closest(".cat-setting")) return;
-    const rect = event.target.getBoundingClientRect();
-    placeCat(event.clientX || rect.right, event.clientY || rect.top + rect.height / 2);
-  });
+    const target = event.target.closest("button, a, input, select, textarea, summary, label, [role='button']") || event.target;
+    const rect = target.getBoundingClientRect();
+    reachCatTo(event.detail ? event.clientX : rect.left + rect.width/2,
+      event.detail ? event.clientY : rect.top + rect.height/2);
+  }, {capture: true}); // Read bounds before a button replaces the current screen.
   document.addEventListener("visibilitychange", syncCatMode);
-  window.addEventListener("resize", syncCatMode, {passive: true});
+  window.addEventListener("resize", resizeCatViewport, {passive: true});
+  window.visualViewport?.addEventListener("resize", resizeCatViewport, {passive:true});
   reducedMotion.addEventListener("change", syncCatMode);
   syncCatMode();
 
