@@ -940,6 +940,13 @@ class QuietAdminMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
+def install_quiet_admin_middleware(dispatcher: Dispatcher) -> None:
+    # Check every content type before router filters, including unmatched stickers
+    # and messages consumed by the staff router.
+    dispatcher.message.outer_middleware(QuietAdminMiddleware())
+    dispatcher.edited_message.outer_middleware(QuietAdminMiddleware())
+
+
 class AlarmRestrictedMessageMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         if (
@@ -14978,12 +14985,12 @@ async def main() -> None:
 
     bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher()
+    install_quiet_admin_middleware(dispatcher)
     install_blacklist_middleware(dispatcher)
     staff_router.message.middleware(StaffTopicMiddleware())
     router.message.middleware(DropStaleMessagesMiddleware())
     router.message.middleware(StaffTopicMiddleware())
     router.message.middleware(AuditAdminStateMiddleware())
-    router.message.middleware(QuietAdminMiddleware())
     router.message.middleware(AlarmRestrictedMessageMiddleware())
     router.callback_query.middleware(StaleCallbackQueryMiddleware())
     router.callback_query.middleware(AuditCallbackMiddleware())
