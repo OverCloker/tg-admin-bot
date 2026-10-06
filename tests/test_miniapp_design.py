@@ -94,7 +94,7 @@ def test_cat_3d_is_lazy_local_and_preserves_input_and_lifecycle():
     from pathlib import Path
     assets = Path(__file__).resolve().parents[1] / 'app/assets/themes'
     runtime = (assets / 'cat-companion.js').read_text(encoding='utf-8')
-    assert 'import("/admin/theme-assets/cat-companion.bundle.js?v=3d-v4")' in MINI_APP_HTML
+    assert 'import("/admin/theme-assets/cat-companion.bundle.js?v=3d-v4-texture-20261006")' in MINI_APP_HTML
     assert 'catCompanion || catLoading || !catEnabled || catDestroyed' in MINI_APP_HTML
     assert 'realistic-cat-poses-v2.png' not in MINI_APP_HTML
     assert 'if (event.persisted)' in MINI_APP_HTML

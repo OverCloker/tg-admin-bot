@@ -19,7 +19,25 @@ export async function createCatCompanion({canvas, host, reducedMotion, onError})
   scene.add(new THREE.HemisphereLight(0xffffff, 0xb4afb5, 2.2));
   const light = new THREE.DirectionalLight(0xffffff, 2.4); light.position.set(2, 3, 4); scene.add(light);
   let gltf;
-  try { gltf = await new GLTFLoader().loadAsync('/admin/theme-assets/owner-cat-v4.glb'); }
+  try {
+    gltf = await new GLTFLoader().loadAsync('/admin/theme-assets/owner-cat-v4.glb?v=texture-20261006');
+    let missingTexture = false;
+    gltf.scene.traverse(o => {
+      if (o.isMesh) for (const material of (Array.isArray(o.material) ? o.material : [o.material])) {
+        if (!material.map) missingTexture = true;
+      }
+    });
+    if (missingTexture) {
+      const texture = await new THREE.TextureLoader().loadAsync('/admin/theme-assets/owner-cat-texture.jpg?v=20261006');
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.flipY = false;
+      gltf.scene.traverse(o => {
+        if (o.isMesh) for (const material of (Array.isArray(o.material) ? o.material : [o.material])) {
+          if (!material.map) { material.map = texture; material.needsUpdate = true; }
+        }
+      });
+    }
+  }
   catch (error) { renderer.dispose(); throw new Error('Не удалось загрузить модель котика. Попробуйте включить режим ещё раз.'); }
   const pivot = new THREE.Group();
   // Yaw first, then pitch in the cat's local forward plane (not screen X).

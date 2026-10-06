@@ -2718,7 +2718,7 @@ MINI_APP_HTML = r"""<!doctype html>
   async function loadCatCompanion() {
     if (catCompanion || catLoading || !catEnabled || catDestroyed) return;
     catError = "";
-    catLoading = import("/admin/theme-assets/cat-companion.bundle.js?v=3d-v4").then(async module => {
+    catLoading = import("/admin/theme-assets/cat-companion.bundle.js?v=3d-v4-texture-20261006").then(async module => {
       if (!catEnabled || catDestroyed) return;
       const instance = await module.createCatCompanion({canvas: catSprite, host: playfulCat, reducedMotion,
         onError: message => { catError = message; updateCatStatus(); }});
