@@ -15,6 +15,8 @@ locally transferred 43-joint rig from the user's `model (1).glb`. Source files w
 not changed. The shipped mesh has 57,471 triangles / 37,951 vertices (~4.85 MB).
 The three embedded test clips are retained; the interactive runtime uses procedural
 poses. This is a prototype transferred rig, not a professionally authored cat rig.
+The v4 derivative stores its JPEG texture as a separate same-origin asset so the
+Mini App's strict Content Security Policy can load it without creating a blob URL.
 Strong bends, especially fur around the shoulders and tail, still need visual QA.
 Whole-model roll/pitch and simulated rearing are deliberately disabled: the model
 stays upright during locomotion. A proper rear-leg-supported standing pose remains

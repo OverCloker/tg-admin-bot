@@ -1869,7 +1869,7 @@ HELP_SECTIONS = {
         "<code>ии включить</code> / <code>ии выключить</code> — управление ИИ в группе для администраторов; "
         "<code>ии статус</code> — состояние и оставшийся общий лимит.\n"
         "Новичкам даётся 30 минут на принятие обязательных правил, затем — блокировка в группе.\n"
-        "<code>черный список</code> — твой личный список пользователей в этой группе\n"
+        "<code>блокнот</code> — твой личный список пользователей в этой группе\n"
         "<code>напоминание</code> — личный планировщик\n"
         "<code>напомни через 30м текст</code> — создать напоминание\n"
         "<code>др 25.12 Имя</code> — добавить день рождения\n"
@@ -1943,8 +1943,9 @@ HELP_SECTIONS = {
         "<code>чат старт</code> — вернуть прежние права на текст; только админ\n"
         "<code>подтвердить комментарий</code> — подтвердить действие помощника; старший/админ\n"
         "<code>затихни админ @ник 2ч - причина</code> — тихий режим администратора; нужен доступ Telegram к удалению\n\n"
-        "<b>Личный чёрный список пользователей</b> · доступен каждому, отдельно в каждой группе\n"
-        "<code>черный список</code> — показать свой список с именем владельца и причинами\n"
+        "<b>Личный список пользователей (Блокнот)</b> · доступен каждому, отдельно в каждой группе\n"
+        "<code>блокнот</code> — показать свой список с именем владельца и причинами\n"
+        "Записи в блокноте личные и сами по себе не ограничивают и не блокируют участников.\n"
         "Ответом: <code>добавить в черный список</code>, следующей строкой причина\n"
         "<code>@ник в чс</code> — добавить; причину можно написать следующей строкой\n"
         "Без @ника: <code>123456789 в чс</code> или <code>добавить в чс 123456789</code>; причина следующей строкой\n"
@@ -14259,7 +14260,10 @@ async def manage_chat_blacklisted_user(message: Message) -> None:
     await safe_reply(message, f"{escape(target_name)} добавлен в чёрный список. Причина: {escape(reason or 'не указана')}.")
 
 
-@router.message(F.chat.type.in_(SUPPORTED_CHAT_TYPES), F.text.regexp(re.compile(r"^/?ч[её]рный\s+список[?!.]?$", re.IGNORECASE)))
+CHAT_USER_NOTE_COMMAND_RE = re.compile(r"^/?блокнот[?!.]?$", re.IGNORECASE)
+
+
+@router.message(F.chat.type.in_(SUPPORTED_CHAT_TYPES), F.text.regexp(CHAT_USER_NOTE_COMMAND_RE))
 async def list_chat_blacklisted_users(message: Message) -> None:
     if not message.from_user:
         return
@@ -14267,9 +14271,9 @@ async def list_chat_blacklisted_users(message: Message) -> None:
     owner_name = f"@{owner.username}" if owner.username else (owner.full_name or f"ID {owner.id}")
     rows = db.list_chat_blacklisted_users(message.chat.id, owner.id)
     if not rows:
-        await safe_reply(message, f"Чёрный список {escape(owner_name)} в этой группе пуст.")
+        await safe_reply(message, f"Блокнот {escape(owner_name)} в этой группе пуст.")
         return
-    lines = [f"<b>Чёрный список {escape(owner_name)} в этой группе:</b>"]
+    lines = [f"<b>Блокнот {escape(owner_name)} в этой группе:</b>"]
     for index, item in enumerate(rows, start=1):
         label = f"@{item.username}" if item.username else f"{item.full_name} (ID {item.user_id})"
         lines.append(f"{index}. {escape(label)} — {escape(item.reason or 'без причины')}")

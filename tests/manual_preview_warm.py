@@ -75,6 +75,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
             if filename in {"winter-forest.png", "autumn-courtyard.png", "spring-garden.png", "summer-lake.png", "playful-cat.png", "playful-cat-frames.png", "realistic-cat-poses-v2.png", "realistic-cat-gaze.png", "campfire-frames.png"}:
                 asset = ADMIN_THEME_ASSETS / "themes" / filename
                 content_type = "image/png"
+            elif filename == "owner-cat-texture.jpg":
+                asset = ADMIN_THEME_ASSETS / "themes" / filename
+                content_type = "image/jpeg"
             elif filename in {"owner-cat-v3.glb", "owner-cat-v4.glb", "cat-companion.bundle.js"}:
                 asset = ADMIN_THEME_ASSETS / "themes" / filename
                 content_type = "model/gltf-binary" if filename.endswith(".glb") else "text/javascript"

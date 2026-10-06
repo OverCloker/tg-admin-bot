@@ -6,6 +6,14 @@ from app import bot as bot_module
 from app.db import Database
 
 
+def test_personal_blacklist_listing_is_only_triggered_by_notepad_command() -> None:
+    assert bot_module.CHAT_USER_NOTE_COMMAND_RE.fullmatch("блокнот")
+    assert bot_module.CHAT_USER_NOTE_COMMAND_RE.fullmatch("/блокнот")
+    assert bot_module.CHAT_USER_NOTE_COMMAND_RE.fullmatch("Блокнот!")
+    assert not bot_module.CHAT_USER_NOTE_COMMAND_RE.fullmatch("черный список")
+    assert not bot_module.CHAT_USER_NOTE_COMMAND_RE.fullmatch("чёрный список")
+
+
 def test_chat_user_blacklist_is_separate_per_chat_and_owner(tmp_path) -> None:
     path = tmp_path / "bot.sqlite3"
     service = Database(str(path))
@@ -119,13 +127,14 @@ def test_chat_user_blacklist_handlers_are_personal_and_escape_reason(tmp_path, m
     asyncio.run(bot_module.manage_chat_blacklisted_user(message))
     assert service.list_chat_blacklisted_users(-100, 7)[0].reason == "Спам <script>"
     assert "&lt;script&gt;" in replies[-1]
+    message.text = "блокнот"
     asyncio.run(bot_module.list_chat_blacklisted_users(message))
-    assert "Чёрный список @editor7" in replies[-1]
+    assert "Блокнот @editor7" in replies[-1]
     assert "1. @vika123 — Спам &lt;script&gt;" in replies[-1]
 
     message.from_user = SimpleNamespace(id=8, username=None, full_name="Сосед")
     asyncio.run(bot_module.list_chat_blacklisted_users(message))
-    assert "Чёрный список Сосед в этой группе пуст" in replies[-1]
+    assert "Блокнот Сосед в этой группе пуст" in replies[-1]
     message.text = "@vika123 из чс"
     asyncio.run(bot_module.manage_chat_blacklisted_user(message))
     assert len(service.list_chat_blacklisted_users(-100, 7)) == 1
@@ -185,6 +194,7 @@ def test_chat_user_blacklist_numeric_id_without_username(tmp_path, monkeypatch) 
     )
     asyncio.run(bot_module.manage_chat_blacklisted_user(message))
     assert service.get_chat_blacklisted_user(-100, 7, 123456789).full_name == "Вика"
+    message.text = "блокнот"
     asyncio.run(bot_module.list_chat_blacklisted_users(message))
     assert "Вика (ID 123456789) — спам" in replies[-1]
     message.text = "123456789 из чс"
