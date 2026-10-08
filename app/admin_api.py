@@ -43,6 +43,7 @@ from .weather_geo import resolve_weather_place
 from .youtube_media import DOWNLOAD_TYPES, YoutubeMediaError, cleanup_youtube_file, download_youtube, inspect_youtube
 from .miniapp import router as miniapp_router
 from .inline_media import resolve_inline_photo
+from .power_outages import router as power_outages_router
 
 
 @asynccontextmanager
@@ -56,6 +57,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="Telegram Autoreply Bot Admin API", lifespan=lifespan)
 app.include_router(miniapp_router)
+app.include_router(power_outages_router)
 YOUTUBE_WORKER_TASK: asyncio.Task | None = None
 
 ADMIN_THEME_ASSETS = Path(__file__).resolve().parent / "assets"
