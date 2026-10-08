@@ -1,0 +1,5 @@
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="40dp" android:minHeight="110dp" android:targetCellWidth="1" android:targetCellHeight="2"
+    android:resizeMode="none" android:updatePeriodMillis="1800000" android:initialLayout="@layout/power_widget_compact"
+    android:configure="com.codex.tgbotcontrol.PowerActivity" android:widgetCategory="home_screen"
+    android:widgetFeatures="reconfigurable"/>

@@ -1,0 +1,13 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/power_body"
+    android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical"
+    android:padding="10dp" android:background="@drawable/power_widget_background">
+    <TextView android:id="@+id/power_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="⚡ Отключения света" android:textColor="#66564C" android:textSize="14sp" android:maxLines="2"/>
+    <TextView android:id="@+id/power_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="График не загружен" android:textSize="16sp" android:textStyle="bold" android:textColor="#32291F" android:maxLines="1"/>
+    <TextView android:id="@+id/power_next" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="11sp" android:textColor="#32291F"/>
+    <ImageView android:id="@+id/power_timeline" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:scaleType="fitCenter" android:contentDescription="График отключений за 24 часа"/>
+    <TextView android:id="@+id/power_day" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="10sp" android:maxLines="1" android:textColor="#32291F"/>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
+        <TextView android:id="@+id/power_updated" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:textSize="11sp" android:textColor="#79675B"/>
+        <TextView android:id="@+id/power_refresh" android:layout_width="32dp" android:layout_height="28dp" android:gravity="center" android:text="↻" android:textSize="22sp" android:textColor="#B26343" android:contentDescription="Обновить график"/>
+    </LinearLayout>
+</LinearLayout>

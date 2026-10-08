@@ -20,6 +20,11 @@ bot.db
 admin_access_keys.json
 logs/
 backups/
+android/**/build/
+android/**/.gradle/
+android/**/.idea/
+android/**/local.properties
+*.apk
 # Local Telegram Media Publisher state
 media_publisher_data/
 *.publisher.sqlite3

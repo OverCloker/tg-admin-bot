@@ -1,0 +1,9 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/power_body"
+    android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical"
+    android:padding="6dp" android:background="@drawable/power_widget_background">
+    <TextView android:id="@+id/power_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="⚡ Свет" android:textColor="#66564C" android:textSize="10sp" android:maxLines="2"/>
+    <TextView android:id="@+id/power_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Нет графика" android:textColor="#32291F" android:textSize="12sp" android:textStyle="bold" android:layout_marginTop="8dp"/>
+    <TextView android:id="@+id/power_next" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#32291F" android:textSize="20sp" android:textStyle="bold"/>
+    <TextView android:id="@+id/power_updated" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:textColor="#79675B" android:textSize="8sp" android:maxLines="3"/>
+    <TextView android:id="@+id/power_refresh" android:layout_width="match_parent" android:layout_height="32dp" android:gravity="center" android:text="↻" android:textSize="22sp" android:textColor="#B26343" android:contentDescription="Обновить график"/>
+</LinearLayout>
