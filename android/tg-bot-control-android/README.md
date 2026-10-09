@@ -1,4 +1,10 @@
-# Abstergo Android 0.4.4
+# Abstergo Android 0.4.5
+
+The power page uses the selected schedule-first design: editable address summary,
+current schedule status, Today/Tomorrow controls, readable semantic interval rows,
+and a separate widget section with native appearance preview. All adaptive widget
+layouts share its green/coral surfaces, round energy icon and typography.
+Location text alone is not a confirmed selection; choose a search result and group.
 
 Appearance settings: Light, Dark OLED (#000000) or Device theme; background
 transparency 0–100%. Text/icons and interval panels remain readable and opaque.
@@ -36,7 +42,7 @@ tools 36.1.0: `gradle :app:assembleDebug`. Output:
 An unpublished dated schedule is shown as «Сегодня без графиков»; connection
 failures and not-yet-loaded schedules are separate states.
 
-Release versionCode is 40004 (0.4.3: 40003; previous 0.3.4: 30004). Keep the existing signing
+Release versionCode is 40005 (0.4.4: 40004; previous 0.3.4: 30004). Keep the existing signing
 key for in-place upgrades. Publish explicitly with the repository's
 `publish_android_release.py --caption-file android/tg-bot-control-android/release-caption.txt`.
 

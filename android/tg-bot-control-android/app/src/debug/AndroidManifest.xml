@@ -1,1 +1,1 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application><activity android:name=".WidgetDesignQaActivity" android:exported="${widgetQaExported}"/></application></manifest>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application><activity android:name=".WidgetDesignQaActivity" android:exported="${widgetQaExported}"/><activity android:name=".PowerDesignQaActivity" android:exported="${widgetQaExported}"/></application></manifest>

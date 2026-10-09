@@ -11,8 +11,8 @@ android {
         applicationId = "com.codex.tgbotcontrol"
         minSdk = 26
         targetSdk = 35
-        versionCode = 40004
-        versionName = "0.4.4"
+        versionCode = 40005
+        versionName = "0.4.5"
         manifestPlaceholders["widgetQaExported"] = providers.gradleProperty("widgetQa").orElse("false").get()
     }
 

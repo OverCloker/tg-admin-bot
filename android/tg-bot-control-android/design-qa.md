@@ -1,3 +1,69 @@
+# Power page and widgets — selected direction 2, Abstergo 0.4.5
+
+final result: passed
+
+## Current visual evidence
+
+- Selected source: design-evidence/selected-power-page.png, 853×1844.
+  User selected the second displayed concept; source was refined to three
+  themes and the actual Без Світла source before implementation.
+- Implementation: design-evidence/power-page-native.png, native full-content
+  capture at 1080px width/density 2.625. The screen is Android, not a web clone.
+- Content comparison: power-comparison.png; readable top-region comparison:
+  power-focus.png. Normalize both to 390px width without stretching.
+  Source is 390×843 after scaling. Implementation content is 390×1052
+  after removing reserved system-bar padding. Actual viewport is 411dp wide.
+- Matched state: Київ, 2.2, 2026-10-09 12:31, identical five sample intervals.
+  View.draw captures full native content; live screenshots and UI-tree tests
+  independently checked the scrollable screen and controls.
+- Widgets: widget-045-matrix.png shows 180/260dp × 80/180/300/420dp
+  for the requested eight sizes. Physical cell sizes are launcher-dependent.
+
+## Fix / recapture history
+
+1. [P2] Small appearance preview broke the word «Отключение».
+   Shorten the event label at narrow widths, reduce event time to 22sp.
+   The latest page comparison shows readable «Откл.» and time.
+2. [P2] 2×2 footer was clipped after adding schedule-qualified detail text.
+   Use a one-line compact detail and compact layout under 170dp at narrow widths.
+   Revised widget-045-180x180.png shows the complete source/time and refresh icon.
+3. Comparison-only capture issue: transparent view pixels became black when
+   converted to RGB. Fill the native capture canvas with the actual page surface,
+   then recapture; the live screen itself was never black.
+
+## Required fidelity surfaces
+
+- Typography: native Roboto/sans-serif with medium heading/active weights,
+  12–15sp body, 19sp hero and 30sp title. Hierarchy matches the target.
+- Spacing: address summary, hero, dates, rows, refresh, then settings. Native
+  44–48dp touch targets and the retained explicit Apply button create a longer,
+  scrollable page than the static concept. This is an intentional native adaptation,
+  not an attempt to squeeze readable settings into the reference's fixed height.
+- Colors: #FFFCF7, #1B2232, #176B43, #EDF5EE, #AF4334, #FCEEE9;
+  OLED preserves #000000 and opaque readable foregrounds.
+- Assets: official Tabler map-pin, pencil, filled bolt, existing bulb/refresh
+  library icons; no raster decorations in the source. Native widget preview,
+  not a fake bitmap screenshot used as an interactive UI.
+- Copy: actual source, schedule-qualified state, no false availability when
+  unpublished. Theme modes corrected to Light/OLED/System. Small preview
+  emphasizes next event; bigger widgets add current state/day intervals.
+
+## Interactions / gaps
+
+- Real UI tested: open address editor, autocomplete for Київ, select returned
+  city, scroll/select group 60.1, save and load actual source data.
+- Today/Tomorrow switching: tomorrow without a published schedule correctly
+  displays «Завтра без графиков». Today restores dated data.
+- OLED Apply persisted after reopening; light mode restored afterward.
+- Fresh Android crash buffer empty. Eight widget snapshots rendered.
+- Per-widget caches and settings retained; no server/chat mutations.
+- Physical OEM launcher, extreme font scaling and all Android releases remain
+  device-test gaps. Native 12sp dates are abbreviated rather than full prose.
+- P3: source's subtle gradient omitted for stable semantic fills; native library
+  line icons replace tiny decorative dots. No actionable P0/P1/P2 findings remain.
+
+## Earlier widget baseline (0.4.3)
+
 # Adaptive outage widget — selected direction 1
 
 final result: passed

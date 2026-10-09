@@ -1,5 +1,12 @@
 # Abstergo 0.4.0 QA — 2026-10-08
 
+## 0.4.5 native redesign — 2026-10-09
+
+Build and upgrade passed on Pixel 6/API35. Live city search/selection,
+group selection 60.1, schedule load, Today/Tomorrow and OLED persistence tested
+using UI-tree coordinates. Eight RemoteViews snapshots and the selected mock
+were visually compared; see design-qa.md. Original default light theme restored.
+
 ## 0.4.4 appearance QA — 2026-10-09
 
 Android 15 emulator: build passed; selected widget retained appearance settings
