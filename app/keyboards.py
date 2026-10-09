@@ -869,6 +869,7 @@ def birthday_menu(chat_id: int, birthdays) -> InlineKeyboardMarkup:
 def quiet_menu(chat_id: int, has_media: bool) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="Замуть того", callback_data=f"quiet:manual:{chat_id}")],
+        [InlineKeyboardButton(text="Размутить", callback_data=f"quiet:unmute:{chat_id}")],
         [InlineKeyboardButton(text="Текст ответа", callback_data=f"quiet:text:{chat_id}")],
         [InlineKeyboardButton(text="Гиф/голос/аудио", callback_data=f"quiet:media:{chat_id}")],
     ]

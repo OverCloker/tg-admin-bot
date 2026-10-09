@@ -44,6 +44,7 @@ from .youtube_media import DOWNLOAD_TYPES, YoutubeMediaError, cleanup_youtube_fi
 from .miniapp import router as miniapp_router
 from .inline_media import resolve_inline_photo
 from .power_outages import router as power_outages_router
+from .quiet_actions import unmute_member
 
 
 @asynccontextmanager
@@ -175,6 +176,7 @@ ADMIN_SUBFEATURES: dict[str, list[dict[str, str]]] = {
     ],
     "quiet": [
         {"id": "quiet.manual", "title": "Замутить"},
+        {"id": "quiet.unmute", "title": "Размутить"},
         {"id": "quiet.text", "title": "Текст ответа"},
         {"id": "quiet.mediaSave", "title": "Сохранить медиа"},
         {"id": "quiet.mediaDelete", "title": "Удалить медиа"},
@@ -2367,6 +2369,8 @@ ADMIN_PANEL_HTML = r"""
           ["quietMinutes", "input", "Минуты"],
           ["quietReason", "input", "Причина"]
         ], "quietManual()") : writeLocked("quiet.manual")}
+        <h2>Снять мут</h2>
+        ${canWrite("quiet.unmute") ? form("Размутить", [["quietUnmuteTarget", "input", "@username или User ID"]], "quietUnmute()") : writeLocked("quiet.unmute")}
         <h2>Текст ответа</h2>
         ${canWrite("quiet.text") ? form("Сохранить текст", [["quiet", "textarea", "Текст ответа", overview.quiet.reply_text || ""]], "saveQuiet()") : writeLocked("quiet.text")}
         <h2>Гиф/голос/аудио</h2>
@@ -2803,6 +2807,12 @@ ADMIN_PANEL_HTML = r"""
         })
       });
       afterAction("Пользователь замучен");
+    }
+    async function quietUnmute() {
+      await api(`/admin/chats/${selectedChatId}/quiet/unmute`, {
+        method: "POST", body: JSON.stringify({ target: val("quietUnmuteTarget") })
+      });
+      afterAction("Мут снят");
     }
     async function saveQuietMedia() {
       const file = document.getElementById("quietMediaFile").files[0];
@@ -3276,6 +3286,10 @@ class QuietManualPayload(BaseModel):
     reason: str = ""
 
 
+class QuietUnmutePayload(BaseModel):
+    target: str = Field(min_length=1, max_length=100)
+
+
 class QuietMediaPayload(BaseModel):
     filename: str = Field(min_length=1)
     mimeType: str = "application/octet-stream"
@@ -3663,6 +3677,8 @@ def api_audit_action(method: str, path: str) -> str:
         return "Сапёр 9×9 завершён"
     if path == "/miniapp/shop/buy":
         return "Покупка в Mini App"
+    if path.endswith("/quiet/unmute"):
+        return "Снял мут через панель"
     if "/triggers" in path:
         return "Удалил триггер" if method == "DELETE" else "Добавил или изменил триггер"
     if "/replies" in path:
@@ -5419,6 +5435,24 @@ async def quiet_manual(chat_id: int, payload: QuietManualPayload) -> dict[str, A
     finally:
         await bot.session.close()
     return ok("user restricted")
+
+
+@app.post("/admin/chats/{chat_id}/quiet/unmute", dependencies=[Depends(require_admin)])
+async def quiet_unmute(chat_id: int, payload: QuietUnmutePayload) -> dict[str, Any]:
+    config = load_config()
+    bot = create_bot(config, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    try:
+        with open_db() as db:
+            require_admin_feature(db, "quiet.unmute")
+            require_chat(db, chat_id)
+            target_id, _ = await resolve_quiet_target(bot, db, chat_id, payload.target)
+            try:
+                await unmute_member(bot, db, chat_id, target_id, current_actor_id())
+            except (ValueError, TelegramBadRequest, TelegramForbiddenError) as exc:
+                raise HTTPException(400, str(exc)) from exc
+    finally:
+        await bot.session.close()
+    return ok("user unmuted")
 
 
 @app.post("/admin/chats/{chat_id}/quiet/media", dependencies=[Depends(require_admin)])

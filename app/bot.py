@@ -35,6 +35,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Chat, ChatMemberUpda
 
 from .config import load_config
 from .ai_chat import GeminiChat, ChatError
+from .quiet_actions import unmute_member
 from .alert_providers import (
     DEFAULT_NEPTUN_LOCATION,
     NEPTUN_LOCATIONS,
@@ -595,6 +596,7 @@ ADMIN_SUBFEATURES = {
     "rollMute": [("rollMute.settings", "Настройки строк")],
     "quiet": [
         ("quiet.manual", "Замутить"),
+        ("quiet.unmute", "Размутить"),
         ("quiet.text", "Текст ответа"),
         ("quiet.mediaSave", "Сохранить медиа"),
         ("quiet.mediaDelete", "Удалить медиа"),
@@ -642,6 +644,7 @@ STATE_FEATURES = {
     "set_quiet_text": "quiet.text",
     "set_quiet_media": "quiet.mediaSave",
     "set_quiet_manual": "quiet.manual",
+    "set_quiet_unmute": "quiet.unmute",
     "add_blacklist_word": "blacklist.add",
     "delete_blacklist_word": "blacklist.delete",
     "delete_quote": "quotes.delete",
@@ -1031,6 +1034,7 @@ class AdminInput(StatesGroup):
     set_quiet_text = State()
     set_quiet_media = State()
     set_quiet_manual = State()
+    set_quiet_unmute = State()
     feedback_reply = State()
     add_blacklist_word = State()
     delete_blacklist_word = State()
@@ -9086,6 +9090,15 @@ async def cb_quiet(callback: CallbackQuery, state: FSMContext) -> None:
             "Причина необязательна. Число - минуты.",
             reply_markup=back_to_chat_menu(chat_id),
         )
+    elif action == "unmute":
+        if not await require_callback_feature(callback, "quiet.unmute", default=True):
+            return
+        await state.set_state(AdminInput.set_quiet_unmute)
+        await state.update_data(chat_id=chat_id)
+        await safe_edit(callback, f"Группа: <b>{mention_chat(chat)}</b>\n\n"
+                        "Кого размутить? Отправь <code>@username</code> или <code>User ID</code>.\n"
+                        "Снимется и тихий админ-режим, если он был включён.",
+                        reply_markup=back_to_chat_menu(chat_id))
     elif action == "clear_media":
         if not await require_callback_feature(callback, "quiet.mediaDelete", default=True):
             return
@@ -9779,6 +9792,29 @@ async def ui_set_quiet_manual(message: Message, state: FSMContext) -> None:
         f"Готово: {escape(target_name)} затих на <b>{minutes}</b> мин.",
         reply_markup=quiet_menu(chat_id, bool(settings.media_file_id)),
     )
+
+
+@router.message(AdminInput.set_quiet_unmute, F.chat.type == "private")
+async def ui_set_quiet_unmute(message: Message, state: FSMContext) -> None:
+    chat_id = await require_state_admin(message, state)
+    if chat_id is None:
+        return
+    target = (message.text or '').strip()
+    if not re.fullmatch(r'@?[A-Za-z][A-Za-z0-9_]{3,31}|[1-9]\d{0,18}', target):
+        await message.answer('Отправь @username или числовой User ID.')
+        return
+    target_id, target_name, error = await resolve_quiet_panel_target(message.bot, chat_id, target)
+    if error or not target_id:
+        await message.answer(error or 'Пользователь не найден.')
+        return
+    try:
+        await unmute_member(message.bot, db, chat_id, target_id, message.from_user.id)
+    except (ValueError, TelegramBadRequest, TelegramForbiddenError) as exc:
+        await message.answer(f'Не удалось снять мут: {escape(str(exc))}')
+        return
+    await state.clear()
+    await message.answer(f'Мут снят: {escape(target_name or target)}.',
+                         reply_markup=quiet_menu(chat_id, bool(db.get_quiet_settings(chat_id).media_file_id)))
 
 
 @router.message(AdminInput.paid_message, F.chat.type == "private")
