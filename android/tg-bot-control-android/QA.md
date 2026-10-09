@@ -1,5 +1,14 @@
 # Abstergo 0.4.0 QA — 2026-10-08
 
+## 0.4.4 appearance QA — 2026-10-09
+
+Android 15 emulator: build passed; selected widget retained appearance settings
+after reopening, other widgets retained their preferences. Snapshot background
+RGBA: light (255,252,247,255), OLED (0,0,0,255), 50% (0,0,0,128),
+100% (0,0,0,0). System-theme snapshots switched with emulator night mode.
+Night mode restored; crash buffer empty. Live launcher configuration callback
+was not independently confirmed for the selected instance. OEM testing remains.
+
 Environment: Pixel 6 Android 15/API 35 emulator, Pixel Launcher, existing local
 debug signing key. Built with JDK 17 / Gradle 8.9 / AGP 8.7.3.
 

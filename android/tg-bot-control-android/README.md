@@ -1,4 +1,9 @@
-# Abstergo Android 0.4.3
+# Abstergo Android 0.4.4
+
+Appearance settings: Light, Dark OLED (#000000) or Device theme; background
+transparency 0–100%. Text/icons and interval panels remain readable and opaque.
+Apply separately per widget. App settings without a widget set new-widget defaults.
+Device theme refreshes on running process configuration changes or next refresh.
 
 Native Android shell for https://app.otvet04ka.com/ with home-screen outage
 widgets. Open **Адрес → Отключения света и виджет** to select any settlement
@@ -31,7 +36,7 @@ tools 36.1.0: `gradle :app:assembleDebug`. Output:
 An unpublished dated schedule is shown as «Сегодня без графиков»; connection
 failures and not-yet-loaded schedules are separate states.
 
-Release versionCode is 40003 (0.4.2: 40002; previous 0.3.4: 30004). Keep the existing signing
+Release versionCode is 40004 (0.4.3: 40003; previous 0.3.4: 30004). Keep the existing signing
 key for in-place upgrades. Publish explicitly with the repository's
 `publish_android_release.py --caption-file android/tg-bot-control-android/release-caption.txt`.
 

@@ -33,7 +33,7 @@ public class PowerWidget extends AppWidgetProvider {
             SharedPreferences p=PowerData.prefs(c,id);
             if (!p.contains("path")) {
                 SharedPreferences global=PowerData.prefs(c,0);
-                for (String key:new String[]{"path","name","group","server","today","tomorrow"})
+                for (String key:new String[]{"path","name","group","server","today","tomorrow","widget_theme","widget_transparency"})
                     if (global.contains(key)) p.edit().putString(key,global.getString(key,"")).apply();
             }
             render(c,id);

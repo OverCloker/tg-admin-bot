@@ -22,7 +22,8 @@ final class AdaptivePowerViews {
     static RemoteViews preview(Context c) {
         ZonedDateTime now=ZonedDateTime.now(PowerData.KYIV).withHour(14).withMinute(45);
         SharedPreferences prefs=c.getSharedPreferences("power_preview",Context.MODE_PRIVATE);
-        prefs.edit().putString("name","Чутове").putString("group","2.2").putString("path","/example").apply();
+        SharedPreferences defaults=PowerData.prefs(c,0);
+        prefs.edit().putString("name","Чутове").putString("group","2.2").putString("path","/example").putString("widget_theme",defaults.getString("widget_theme","light")).putString("widget_transparency",defaults.getString("widget_transparency","0")).apply();
         JSONObject data=new JSONObject();
         try {
             JSONArray slots=new JSONArray();int[] points={0,360,570,870,1080,1440};
@@ -72,8 +73,15 @@ final class AdaptivePowerViews {
     static boolean today(JSONObject d,ZonedDateTime now){return now.toLocalDate().toString().equals(d.optString("date"));}
     static RemoteViews make(Context c,int id,SharedPreferences p,JSONObject data,JSONObject tomorrow,ZonedDateTime now,float width,float height) {
         boolean compact=height<125,wide=width>=260,tall=height>=280;
+        String theme=p.getString("widget_theme","light");
+        boolean dark="dark".equals(theme)||("system".equals(theme)&&(c.getResources().getConfiguration().uiMode&android.content.res.Configuration.UI_MODE_NIGHT_MASK)==android.content.res.Configuration.UI_MODE_NIGHT_YES);
+        int fg=dark?0xfff5f5f5:INK,muted=dark?0xffbbbbbb:MUTED,onColor=dark?0xff8ad7a2:GREEN,offColor=dark?0xffffa49a:RED;
+        int transparency=0;try{transparency=Math.max(0,Math.min(100,Integer.parseInt(p.getString("widget_transparency","0"))));}catch(Exception ignored){}
         boolean micro=height<65||width<100||(width<140&&height<160);
         RemoteViews v=new RemoteViews(c.getPackageName(),micro?R.layout.adaptive_micro:width<140&&!compact?R.layout.adaptive_skinny:compact?R.layout.adaptive_compact:tall?R.layout.adaptive_tall:wide?R.layout.adaptive_wide:R.layout.adaptive_card);
+        v.setImageViewBitmap(R.id.aw_background,background(width,height,dark,transparency));
+        v.setTextColor(R.id.aw_title,fg);v.setTextColor(R.id.aw_time,fg);
+        if(!micro&&width>=140)v.setImageViewResource(R.id.aw_chevron,dark?R.drawable.widget_chevron_right_dark:R.drawable.widget_chevron_right);
         String name=p.getString("name","Выберите город").split(",")[0];
         v.setTextViewText(R.id.aw_title,name+" · "+p.getString("group","—"));
         boolean valid=today(data,now)&&data.optBoolean("published");
@@ -98,7 +106,7 @@ final class AdaptivePowerViews {
             event=today(data,now)&&!data.optBoolean("published")?"Сегодня без графиков":"График не загружен";
             detail=today(data,now)?"Источник ещё не опубликовал расписание":"Проверьте соединение · нажмите для настройки";
         }
-        int color="on".equals(state)?GREEN:"off".equals(state)?RED:MUTED;
+        int color="on".equals(state)?onColor:"off".equals(state)?offColor:muted;
         v.setTextViewText(R.id.aw_status,event);v.setTextColor(R.id.aw_status,color);v.setTextViewText(R.id.aw_time,time);
         v.setViewVisibility(R.id.aw_time,time.isEmpty()?View.GONE:View.VISIBLE);
         if(compact||micro) {
@@ -107,17 +115,20 @@ final class AdaptivePowerViews {
             if(width<100){v.setTextViewText(R.id.aw_status,allDay?"Свет":slots==null?"Нет данных":"off".equals(current)?"Нет света":"Свет");v.setTextViewTextSize(R.id.aw_status,android.util.TypedValue.COMPLEX_UNIT_SP,10);v.setViewVisibility(R.id.aw_status,time.isEmpty()?View.VISIBLE:View.GONE);v.setTextViewTextSize(R.id.aw_time,android.util.TypedValue.COMPLEX_UNIT_SP,12);}
             v.setContentDescription(R.id.aw_body,name+" "+p.getString("group","")+" "+event+" "+time+" "+detail);
         } else {
-            v.setInt(R.id.aw_status_box,"setBackgroundResource","on".equals(state)?R.drawable.widget_on:"off".equals(state)?R.drawable.widget_off:R.drawable.widget_neutral);
-            v.setImageViewResource(R.id.aw_icon,"off".equals(state)?R.drawable.widget_bulb_off:"on".equals(state)?R.drawable.widget_lightbulb:R.drawable.widget_flash_on);
+            v.setInt(R.id.aw_status_box,"setBackgroundResource",surface(dark,state,false));
+            v.setImageViewResource(R.id.aw_icon,icon(dark,state));
             v.setTextViewText(R.id.aw_detail,detail);
+            v.setTextColor(R.id.aw_detail,muted);v.setTextColor(R.id.aw_more,muted);
+            v.setImageViewResource(R.id.aw_refresh,dark?R.drawable.widget_refresh_dark:R.drawable.widget_refresh);
             v.removeAllViews(R.id.aw_rows);
             if(tall)v.setViewVisibility(R.id.aw_all_day_art,allDay&&height>=360&&width>=140?View.VISIBLE:View.GONE);
+            if(tall&&width>=140){v.setImageViewResource(R.id.aw_all_day_icon,dark?R.drawable.widget_lightbulb_dark:R.drawable.widget_lightbulb);v.setTextColor(R.id.aw_all_day_range,onColor);v.setTextColor(R.id.aw_all_day_note,muted);}
             if(tall&&slots!=null&&!allDay) {
                 String currentLabel="off".equals(current)?"Сейчас нет света":"on".equals(current)?"Сейчас есть свет":"Уточняется";
                 v.setTextViewText(R.id.aw_status,currentLabel);
-                v.setTextColor(R.id.aw_status,"off".equals(current)?RED:"on".equals(current)?GREEN:MUTED);
-                v.setInt(R.id.aw_status_box,"setBackgroundResource","off".equals(current)?R.drawable.widget_off:"on".equals(current)?R.drawable.widget_on:R.drawable.widget_neutral);
-                v.setImageViewResource(R.id.aw_icon,"off".equals(current)?R.drawable.widget_bulb_off:R.drawable.widget_lightbulb);
+                v.setTextColor(R.id.aw_status,"off".equals(current)?offColor:"on".equals(current)?onColor:muted);
+                v.setInt(R.id.aw_status_box,"setBackgroundResource",surface(dark,current,false));
+                v.setImageViewResource(R.id.aw_icon,icon(dark,current));
                 v.setViewVisibility(R.id.aw_time,View.GONE);
                 v.setTextViewText(R.id.aw_detail,time.isEmpty()?"Сегодня · время Киева":event+" в "+time+(detail.startsWith("Завтра")?" завтра":""));
             }
@@ -131,9 +142,9 @@ final class AdaptivePowerViews {
                 RemoteViews row=new RemoteViews(c.getPackageName(),R.layout.adaptive_row);
                 String status=s.optString("status");boolean on="on".equals(status),off="off".equals(status),active=s.optInt("start")<=minute&&minute<s.optInt("end");
                 String interval=PowerData.clock(s.optInt("start"))+(width<160?"–":" – ")+PowerData.clock(s.optInt("end"));
-                row.setTextViewText(R.id.ar_time,interval);row.setTextColor(R.id.ar_time,s.optInt("end")<=minute?MUTED:INK);
-                row.setInt(R.id.ar_body,"setBackgroundResource",on?(active?R.drawable.widget_on_active:R.drawable.widget_on):off?(active?R.drawable.widget_off_active:R.drawable.widget_off):R.drawable.widget_neutral);
-                row.setImageViewResource(R.id.ar_icon,off?R.drawable.widget_bulb_off:R.drawable.widget_lightbulb);
+                row.setTextViewText(R.id.ar_time,interval);row.setTextColor(R.id.ar_time,s.optInt("end")<=minute?muted:fg);
+                row.setInt(R.id.ar_body,"setBackgroundResource",surface(dark,status,active));
+                row.setImageViewResource(R.id.ar_icon,icon(dark,status));
                 row.setViewVisibility(R.id.ar_icon,on||off?View.VISIBLE:View.INVISIBLE);
                 if(width<160){row.setTextViewTextSize(R.id.ar_time,android.util.TypedValue.COMPLEX_UNIT_SP,width<140?11:12);row.setTextViewText(R.id.ar_time,PowerData.clock(s.optInt("start"))+"–"+PowerData.clock(s.optInt("end")));if(width<140)row.setViewVisibility(R.id.ar_icon,View.GONE);}
                 if(active){android.text.SpannableString emphasis=new android.text.SpannableString(interval);emphasis.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD),0,interval.length(),android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);row.setTextViewText(R.id.ar_time,emphasis);}
@@ -144,24 +155,42 @@ final class AdaptivePowerViews {
             v.setViewVisibility(R.id.aw_more,shown>0&&shown<total?View.VISIBLE:View.GONE);
             boolean chart=wide&&!tall&&slots!=null;
             v.setViewVisibility(R.id.aw_timeline,chart?View.VISIBLE:View.GONE);
-            if(chart)v.setImageViewBitmap(R.id.aw_timeline,timeline(slots,minute));
+            if(chart)v.setImageViewBitmap(R.id.aw_timeline,timeline(slots,minute,dark));
             String updated=data.optString("sourceUpdated"),saved="";
             try{if(data.optBoolean("stale")||Duration.between(ZonedDateTime.parse(data.getString("fetchedAt")),now).toMinutes()>45)saved=" · сохранено";}catch(Exception ignored){}
             v.setTextViewText(R.id.aw_updated,"Без Світла"+(updated.isEmpty()?"":" · "+updated)+saved);
-            v.setTextColor(R.id.aw_updated,MUTED);
+            v.setTextColor(R.id.aw_updated,muted);
             v.setOnClickPendingIntent(R.id.aw_refresh,PendingIntent.getBroadcast(c,id,new Intent(c,PowerWidget.class).setAction(PowerWidget.REFRESH),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE));
         }
         Intent open=new Intent(c,PowerActivity.class).putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID,id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP);
         v.setOnClickPendingIntent(R.id.aw_body,PendingIntent.getActivity(c,id,open,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE));
         return v;
     }
-    private static android.graphics.Bitmap timeline(JSONArray slots,int minute) {
+    private static int surface(boolean dark,String state,boolean active){
+        if("on".equals(state))return dark?(active?R.drawable.widget_on_dark_active:R.drawable.widget_on_dark):(active?R.drawable.widget_on_active:R.drawable.widget_on);
+        if("off".equals(state))return dark?(active?R.drawable.widget_off_dark_active:R.drawable.widget_off_dark):(active?R.drawable.widget_off_active:R.drawable.widget_off);
+        return dark?R.drawable.widget_neutral_dark:R.drawable.widget_neutral;
+    }
+    private static int icon(boolean dark,String state){
+        if("on".equals(state))return dark?R.drawable.widget_lightbulb_dark:R.drawable.widget_lightbulb;
+        if("off".equals(state))return dark?R.drawable.widget_bulb_off_dark:R.drawable.widget_bulb_off;
+        return R.drawable.widget_flash_on;
+    }
+    private static android.graphics.Bitmap background(float width,float height,boolean dark,int transparency){
+        int w=Math.max(1,Math.min(1000,(int)Math.ceil(width))),h=Math.max(1,Math.min(1400,(int)Math.ceil(height)));
+        android.graphics.Bitmap b=android.graphics.Bitmap.createBitmap(w,h,android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Paint p=new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        p.setColor((Math.round((100-transparency)*255/100f)<<24)|(dark?0:0x00fffcf7));
+        new android.graphics.Canvas(b).drawRoundRect(0,0,w,h,Math.min(24,w/4f),Math.min(24,w/4f),p);
+        return b;
+    }
+    private static android.graphics.Bitmap timeline(JSONArray slots,int minute,boolean dark) {
         android.graphics.Bitmap b=android.graphics.Bitmap.createBitmap(700,90,android.graphics.Bitmap.Config.ARGB_8888);
         android.graphics.Canvas canvas=new android.graphics.Canvas(b);
         android.graphics.Paint p=new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
         for(int i=0;i<slots.length();i++){JSONObject s=slots.optJSONObject(i);if(s==null)continue;p.setColor("on".equals(s.optString("status"))?0xff79af8b:"off".equals(s.optString("status"))?0xffd68478:0xffbdb8b0);canvas.drawRect(8+s.optInt("start")*684f/1440,12,8+s.optInt("end")*684f/1440,44,p);}
-        p.setColor(INK);p.setStrokeWidth(3);float x=8+minute*684f/1440;canvas.drawLine(x,6,x,50,p);
-        p.setColor(MUTED);p.setTextSize(23);
+        p.setColor(dark?0xfff5f5f5:INK);p.setStrokeWidth(3);float x=8+minute*684f/1440;canvas.drawLine(x,6,x,50,p);
+        p.setColor(dark?0xffbbbbbb:MUTED);p.setTextSize(23);
         for(int h=0;h<=24;h+=6){p.setTextAlign(h==0?android.graphics.Paint.Align.LEFT:h==24?android.graphics.Paint.Align.RIGHT:android.graphics.Paint.Align.CENTER);canvas.drawText(String.format(java.util.Locale.ROOT,"%02d",h),8+h*684f/24,80,p);}
         return b;
     }

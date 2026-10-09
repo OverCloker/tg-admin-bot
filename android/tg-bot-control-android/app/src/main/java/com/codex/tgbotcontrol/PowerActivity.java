@@ -26,6 +26,9 @@ public class PowerActivity extends Activity {
     private TextView status,graph;
     private EditText search;
     private Spinner groups;
+    private Spinner widgetTheme;
+    private SeekBar widgetTransparency;
+    private TextView transparencyLabel;
     private String selectedPath="",selectedName="";
     private int widgetId,request=0;
     private boolean settingText=false;
@@ -49,6 +52,18 @@ public class PowerActivity extends Activity {
         groups=new Spinner(this);groupValues=new String[13];groupValues[0]="Выберите группу";
         for(int i=1;i<=12;i++)groupValues[i]=((i+1)/2)+"."+(i%2==1?1:2);
         groups.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,groupValues));body.addView(groups);
+        text(widgetId==AppWidgetManager.INVALID_APPWIDGET_ID?"Оформление новых виджетов":"Оформление этого виджета",18);
+        widgetTheme=new Spinner(this);
+        widgetTheme.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"По теме устройства","Светлая","Тёмная OLED"}));body.addView(widgetTheme);
+        transparencyLabel=text("Прозрачность фона: 0%",14);
+        widgetTransparency=new SeekBar(this);widgetTransparency.setMax(100);body.addView(widgetTransparency);
+        widgetTransparency.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            public void onProgressChanged(SeekBar bar,int value,boolean user){transparencyLabel.setText("Прозрачность фона: "+value+"%");}
+            public void onStartTrackingTouch(SeekBar bar){}
+            public void onStopTrackingTouch(SeekBar bar){}
+        });
+        text("0% — непрозрачный фон, 100% — без фона. Текст и значки не становятся прозрачными. Для прозрачного фона подберите тему под обои. OLED использует чёрный фон.",12);
+        button("Применить оформление",()->{saveAppearance();if(widgetId!=AppWidgetManager.INVALID_APPWIDGET_ID)PowerWidget.render(this,widgetId);else AdaptivePowerViews.publishPreview(this);status.setText(widgetId==AppWidgetManager.INVALID_APPWIDGET_ID?"Оформление сохранено для новых виджетов.":"Оформление сохранено для этого виджета.");});
         status=text("Выберите населённый пункт и свою группу отключений.",14);
         button("Сохранить и показать график",this::save);
         button("Обновить",()->load(false));
@@ -63,6 +78,9 @@ public class PowerActivity extends Activity {
         int id=widgetId==AppWidgetManager.INVALID_APPWIDGET_ID?0:widgetId;
         SharedPreferences p=PowerData.prefs(this,id);
         if(!p.contains("path"))p=PowerData.prefs(this,0);
+        String style=p.getString("widget_theme","light");
+        widgetTheme.setSelection("system".equals(style)?0:"dark".equals(style)?2:1);
+        try{widgetTransparency.setProgress(Math.max(0,Math.min(100,Integer.parseInt(p.getString("widget_transparency","0")))));}catch(Exception ignored){}
         selectedPath=p.getString("path","");selectedName=p.getString("name","");
         search.setText(selectedName);
         String savedGroup=p.getString("group","");
@@ -140,7 +158,12 @@ public class PowerActivity extends Activity {
     private void button(String title,Runnable action){Button b=new Button(this);b.setText(title);b.setOnClickListener(v->action.run());body.addView(b,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT));}
     private boolean valid(){if(selectedPath.isEmpty()||groups.getSelectedItemPosition()==0){status.setText("Сначала выберите населённый пункт из поиска и группу.");return false;}return true;}
     private int dataId(){return widgetId==AppWidgetManager.INVALID_APPWIDGET_ID?0:widgetId;}
+    private void saveAppearance(){
+        String theme=new String[]{"system","light","dark"}[widgetTheme.getSelectedItemPosition()];
+        PowerData.prefs(this,dataId()).edit().putString("widget_theme",theme).putString("widget_transparency",Integer.toString(widgetTransparency.getProgress())).apply();
+    }
     private void savePreferences(){
+        saveAppearance();
         SharedPreferences p=PowerData.prefs(this,dataId());String group=groupValues[groups.getSelectedItemPosition()];
         SharedPreferences.Editor edit=p.edit();
         if(!group.equals(p.getString("group",""))||!selectedPath.equals(p.getString("path","")))edit.remove("today").remove("tomorrow");
