@@ -56,20 +56,25 @@ final class AdaptivePowerViews {
             LinkedHashMap<SizeF,RemoteViews> layouts=new LinkedHashMap<>();
             java.util.ArrayList<SizeF> sizes=options.getParcelableArrayList(AppWidgetManager.OPTION_APPWIDGET_SIZES);
             if(sizes!=null&&!sizes.isEmpty()) {
-                for(SizeF size:sizes) {if(layouts.size()==16)break;layouts.put(size,make(c,id,p,data,PowerData.cached(c,id,true),now,size.getWidth(),size.getHeight()));}
-            } else {
-                for(SizeF size:new SizeF[]{new SizeF(110,50),new SizeF(110,150),new SizeF(260,150),new SizeF(110,280),new SizeF(260,280)})
-                    layouts.put(size,make(c,id,p,data,PowerData.cached(c,id,true),now,size.getWidth(),size.getHeight()));
+                for(SizeF size:sizes) {if(layouts.size()==16)break;if(size==null||!Float.isFinite(size.getWidth())||!Float.isFinite(size.getHeight())||size.getWidth()<=0||size.getHeight()<=0)continue;layouts.put(size,make(c,id,p,data,PowerData.cached(c,id,true),now,size.getWidth(),size.getHeight()));}
             }
-            views=new RemoteViews(layouts);
+            views=layouts.isEmpty()?fallback(c,id,p,data,PowerData.cached(c,id,true),now,options):new RemoteViews(layouts);
         } else {
-            boolean landscape=c.getResources().getConfiguration().orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE;
-            float width=options.getInt(landscape?AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH:AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,280);
-            float height=options.getInt(landscape?AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT:AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT,150);
-            views=make(c,id,p,data,PowerData.cached(c,id,true),now,width,height);
+            views=fallback(c,id,p,data,PowerData.cached(c,id,true),now,options);
         }
         manager.updateAppWidget(id,views);
     }
+    /** Older/OEM launchers may omit OPTION_APPWIDGET_SIZES even on Android 12+. */
+    static RemoteViews fallback(Context c,int id,SharedPreferences p,JSONObject data,JSONObject tomorrow,ZonedDateTime now,Bundle options) {
+        float minWidth=dimension(options,AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,250);
+        float maxWidth=dimension(options,AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH,minWidth);
+        float minHeight=dimension(options,AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,140);
+        float maxHeight=dimension(options,AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT,minHeight);
+        RemoteViews portrait=make(c,id,p,data,tomorrow,now,minWidth,maxHeight);
+        RemoteViews landscape=make(c,id,p,data,tomorrow,now,maxWidth,minHeight);
+        return new RemoteViews(landscape,portrait);
+    }
+    private static float dimension(Bundle options,String key,float fallback){int n=options.getInt(key,Math.round(fallback));return n>0&&n<=10000?n:fallback;}
     static boolean today(JSONObject d,ZonedDateTime now){return now.toLocalDate().toString().equals(d.optString("date"));}
     static RemoteViews make(Context c,int id,SharedPreferences p,JSONObject data,JSONObject tomorrow,ZonedDateTime now,float width,float height) {
         boolean compact=height<125||(width<260&&height<170),wide=width>=260,tall=height>=280;
@@ -77,11 +82,14 @@ final class AdaptivePowerViews {
         boolean dark="dark".equals(theme)||("system".equals(theme)&&(c.getResources().getConfiguration().uiMode&android.content.res.Configuration.UI_MODE_NIGHT_MASK)==android.content.res.Configuration.UI_MODE_NIGHT_YES);
         int fg=dark?0xfff5f5f5:INK,muted=dark?0xffbbbbbb:MUTED,onColor=dark?0xff8ad7a2:GREEN,offColor=dark?0xffffa49a:RED;
         int transparency=0;try{transparency=Math.max(0,Math.min(100,Integer.parseInt(p.getString("widget_transparency","0"))));}catch(Exception ignored){}
-        boolean micro=height<65||width<100||(width<140&&height<160);
-        RemoteViews v=new RemoteViews(c.getPackageName(),micro?R.layout.adaptive_micro:width<140&&!compact?R.layout.adaptive_skinny:compact?R.layout.adaptive_compact:tall?R.layout.adaptive_tall:wide?R.layout.adaptive_wide:R.layout.adaptive_card);
-        v.setImageViewBitmap(R.id.aw_background,background(width,height,dark,transparency));
+        boolean micro=height<48||(width<120&&height<90);
+        boolean shortRow=height<76&&width>=120;
+        boolean narrowCompact=compact&&width<140&&!shortRow;
+        RemoteViews v=new RemoteViews(c.getPackageName(),micro?R.layout.adaptive_micro:shortRow?R.layout.adaptive_short:narrowCompact?R.layout.adaptive_narrow_compact:width<140&&!compact?R.layout.adaptive_skinny:compact?R.layout.adaptive_compact:tall?R.layout.adaptive_tall:wide?R.layout.adaptive_wide:R.layout.adaptive_card);
+        v.setImageViewResource(R.id.aw_background,dark?R.drawable.widget_surface_oled:R.drawable.widget_surface);
+        v.setInt(R.id.aw_background,"setImageAlpha",Math.round((100-transparency)*255/100f));
         v.setTextColor(R.id.aw_title,fg);v.setTextColor(R.id.aw_time,fg);
-        if(!micro&&width>=140)v.setImageViewResource(R.id.aw_chevron,dark?R.drawable.widget_chevron_right_dark:R.drawable.widget_chevron_right);
+        if(!micro&&(width>=140||shortRow))v.setImageViewResource(R.id.aw_chevron,dark?R.drawable.widget_chevron_right_dark:R.drawable.widget_chevron_right);
         String name=p.getString("name","Выберите город").split(",")[0];
         v.setTextViewText(R.id.aw_title,name+" · "+p.getString("group","—"));
         boolean valid=today(data,now)&&data.optBoolean("published");
@@ -116,6 +124,8 @@ final class AdaptivePowerViews {
                 v.setTextViewTextSize(R.id.aw_time,android.util.TypedValue.COMPLEX_UNIT_SP,22);
                 v.setTextViewTextSize(R.id.aw_status,android.util.TypedValue.COMPLEX_UNIT_SP,11);
             }
+            if(shortRow){v.setTextViewTextSize(R.id.aw_time,android.util.TypedValue.COMPLEX_UNIT_SP,16);v.setTextViewTextSize(R.id.aw_status,android.util.TypedValue.COMPLEX_UNIT_SP,10);}
+            if(narrowCompact){v.setTextViewTextSize(R.id.aw_time,android.util.TypedValue.COMPLEX_UNIT_SP,20);v.setTextViewTextSize(R.id.aw_status,android.util.TypedValue.COMPLEX_UNIT_SP,11);}
             if(micro&&width>=100&&width<140&&!time.isEmpty())v.setTextViewText(R.id.aw_status,"on".equals(state)?"Вкл.":"off".equals(state)?"Откл.":event);
             if(width<100){v.setTextViewText(R.id.aw_status,allDay?"Свет":slots==null?"Нет данных":"off".equals(current)?"Нет света":"Свет");v.setTextViewTextSize(R.id.aw_status,android.util.TypedValue.COMPLEX_UNIT_SP,10);v.setViewVisibility(R.id.aw_status,time.isEmpty()?View.VISIBLE:View.GONE);v.setTextViewTextSize(R.id.aw_time,android.util.TypedValue.COMPLEX_UNIT_SP,12);}
             v.setContentDescription(R.id.aw_body,name+" "+p.getString("group","")+" "+event+" "+time+" "+detail);
@@ -186,14 +196,6 @@ final class AdaptivePowerViews {
         if("on".equals(state))return dark?R.drawable.widget_lightbulb_dark:R.drawable.widget_lightbulb;
         if("off".equals(state))return dark?R.drawable.widget_bulb_off_dark:R.drawable.widget_bulb_off;
         return R.drawable.widget_flash_on;
-    }
-    private static android.graphics.Bitmap background(float width,float height,boolean dark,int transparency){
-        int w=Math.max(1,Math.min(1000,(int)Math.ceil(width))),h=Math.max(1,Math.min(1400,(int)Math.ceil(height)));
-        android.graphics.Bitmap b=android.graphics.Bitmap.createBitmap(w,h,android.graphics.Bitmap.Config.ARGB_8888);
-        android.graphics.Paint p=new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
-        p.setColor((Math.round((100-transparency)*255/100f)<<24)|(dark?0:0x00fffcf7));
-        new android.graphics.Canvas(b).drawRoundRect(0,0,w,h,Math.min(24,w/4f),Math.min(24,w/4f),p);
-        return b;
     }
     private static android.graphics.Bitmap timeline(JSONArray slots,int minute,boolean dark) {
         android.graphics.Bitmap b=android.graphics.Bitmap.createBitmap(700,90,android.graphics.Bitmap.Config.ARGB_8888);

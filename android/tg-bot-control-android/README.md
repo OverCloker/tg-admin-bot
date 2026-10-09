@@ -1,4 +1,15 @@
-# Abstergo Android 0.4.5
+# Abstergo Android 0.4.6
+
+Release workflow (user instruction, 2026-10-09): after verifying a requested
+Abstergo update, publish the finished APK to the staff Releases topic with the
+changelog automatically, without asking for another publication confirmation.
+Use the existing publisher and destination; do not publish incomplete builds.
+
+OEM resize compatibility: launchers without OPTION_APPWIDGET_SIZES use their
+actual min/max dimensions and separate orientation views, never hard-coded
+miniature fallbacks. Native rounded backgrounds retain a fixed dp corner radius
+through resizing. Force Dark is disabled for explicitly colored widget views:
+Light remains light in device dark mode; OLED/System selection still works.
 
 The power page uses the selected schedule-first design: editable address summary,
 current schedule status, Today/Tomorrow controls, readable semantic interval rows,
@@ -42,7 +53,7 @@ tools 36.1.0: `gradle :app:assembleDebug`. Output:
 An unpublished dated schedule is shown as «Сегодня без графиков»; connection
 failures and not-yet-loaded schedules are separate states.
 
-Release versionCode is 40005 (0.4.4: 40004; previous 0.3.4: 30004). Keep the existing signing
+Release versionCode is 40006 (0.4.5: 40005; previous 0.3.4: 30004). Keep the existing signing
 key for in-place upgrades. Publish explicitly with the repository's
 `publish_android_release.py --caption-file android/tg-bot-control-android/release-caption.txt`.
 

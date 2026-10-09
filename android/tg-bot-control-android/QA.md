@@ -1,5 +1,25 @@
 # Abstergo 0.4.0 QA — 2026-10-08
 
+## 0.4.6 OEM background / resize correction
+
+- Inspecting the prior fallback found fixed 110×50 / 110×150 / 260×150
+  mappings instead of launcher option dimensions when the sizes list is absent.
+  Replaced them with orientation-specific min/max option rendering.
+- Native shape resource replaces the stretched low-resolution rounded bitmap.
+  Image alpha changes only the base background, not text.
+- Explicit Force Dark opt-out on widget views and app theme; device-night
+  screenshots show Light staying light. User's OEM inversion was not reproduced
+  directly; the mitigation is verified in API35, needs the physical device.
+- AppWidgetHostView with no sizes-list: light 110×130 square and 320×60
+  unpublished, plus OLED 320×60 at 50% opacity. Snapshot captures in
+  design-evidence/resize-046-*.
+- Actual Pixel Launcher: same Чутове 3.1 instance resized 4×2 → 2×2 → 2×1
+  then restored to 4×2, including device night mode. No artifacts or crashes.
+- Emulated device night mode restored; no production chat/server writes.
+
+Android reference: https://developer.android.com/develop/ui/views/appwidgets/layouts
+documents that the optional sizes list may be absent on unsupported launchers.
+
 ## 0.4.5 native redesign — 2026-10-09
 
 Build and upgrade passed on Pixel 6/API35. Live city search/selection,

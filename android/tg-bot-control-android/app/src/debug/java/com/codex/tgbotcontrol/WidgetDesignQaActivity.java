@@ -27,7 +27,19 @@ public class WidgetDesignQaActivity extends Activity {
             d.put("intervals",intervals);
         }catch(Exception e){throw new RuntimeException(e);}
         boolean preview=getIntent().getBooleanExtra("preview",false);
-        View content=(preview?AdaptivePowerViews.preview(this):AdaptivePowerViews.make(this,0,prefs,d,new JSONObject(),now,w,h)).apply(this,null);
+        boolean fallback=getIntent().getBooleanExtra("fallback",false),hosted=getIntent().getBooleanExtra("hosted",false);
+        Bundle options=new Bundle();
+        options.putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,w);options.putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH,w);
+        options.putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,h);options.putInt(android.appwidget.AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT,h);
+        android.widget.RemoteViews remote=preview?AdaptivePowerViews.preview(this):fallback?AdaptivePowerViews.fallback(this,0,prefs,d,new JSONObject(),now,options):AdaptivePowerViews.make(this,0,prefs,d,new JSONObject(),now,w,h);
+        View content;
+        if(hosted){
+            android.appwidget.AppWidgetHostView host=new android.appwidget.AppWidgetHostView(this);
+            android.appwidget.AppWidgetProviderInfo info=null;
+            for(android.appwidget.AppWidgetProviderInfo p:android.appwidget.AppWidgetManager.getInstance(this).getInstalledProviders())if(p.provider.getClassName().equals(PowerWidget.class.getName()))info=p;
+            if(info==null)throw new IllegalStateException("Provider not installed");
+            host.setAppWidget(999999,info);host.setPadding(0,0,0,0);host.updateAppWidget(remote);content=host;
+        }else content=remote.apply(this,null);
         int pxw=Math.round(w*getResources().getDisplayMetrics().density),pxh=Math.round(h*getResources().getDisplayMetrics().density);
         LinearLayout stage=new LinearLayout(this);stage.setGravity(Gravity.CENTER);stage.setBackgroundColor(0xffe8e3da);
         stage.addView(content,new LinearLayout.LayoutParams(pxw,pxh));setContentView(stage);
@@ -36,6 +48,7 @@ public class WidgetDesignQaActivity extends Activity {
                 Bitmap image=Bitmap.createBitmap(content.getWidth(),content.getHeight(),Bitmap.Config.ARGB_8888);
                 content.draw(new Canvas(image));
                 String suffix=preview?"-preview":all?"-all":empty?"-empty":"";
+                if(fallback)suffix+="-fallback";if(hosted)suffix+="-host";
                 if(!"light".equals(prefs.getString("widget_theme","light"))||transparency!=0)suffix+="-"+prefs.getString("widget_theme","light")+"-"+transparency;
                 try(java.io.FileOutputStream out=new java.io.FileOutputStream(new java.io.File(getExternalFilesDir(null),"widget-"+w+"x"+h+suffix+".png"))){image.compress(Bitmap.CompressFormat.PNG,100,out);}
             }catch(Exception e){android.util.Log.e("WidgetQA","Snapshot failed",e);}

@@ -1,0 +1,14 @@
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/aw_body" android:forceDarkAllowed="false" android:layout_width="match_parent" android:layout_height="match_parent">
+    <ImageView android:id="@+id/aw_background" android:forceDarkAllowed="false" android:src="@drawable/widget_surface" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="fitXY" android:importantForAccessibility="no"/>
+    <LinearLayout android:forceDarkAllowed="false" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="5dp">
+        <LinearLayout android:forceDarkAllowed="false" android:layout_width="match_parent" android:layout_height="18dp" android:gravity="center_vertical">
+            <ImageView android:forceDarkAllowed="false" android:layout_width="18dp" android:layout_height="18dp" android:padding="3dp" android:src="@drawable/power_bolt" android:background="@drawable/power_energy" android:importantForAccessibility="no"/>
+            <TextView android:id="@+id/aw_title" android:forceDarkAllowed="false" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:layout_marginStart="5dp" android:textColor="#1B2232" android:textSize="10sp" android:textStyle="bold" android:maxLines="1" android:ellipsize="end" android:includeFontPadding="false"/>
+            <ImageView android:id="@+id/aw_chevron" android:forceDarkAllowed="false" android:layout_width="14dp" android:layout_height="14dp" android:src="@drawable/widget_chevron_right" android:importantForAccessibility="no"/>
+        </LinearLayout>
+        <LinearLayout android:forceDarkAllowed="false" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical">
+            <TextView android:id="@+id/aw_status" android:forceDarkAllowed="false" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:textSize="10sp" android:textColor="#176B43" android:maxLines="2" android:includeFontPadding="false"/>
+            <TextView android:id="@+id/aw_time" android:forceDarkAllowed="false" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textSize="16sp" android:textColor="#1B2232" android:textStyle="bold" android:includeFontPadding="false"/>
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>
