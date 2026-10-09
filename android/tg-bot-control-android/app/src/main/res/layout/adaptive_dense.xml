@@ -1,0 +1,16 @@
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/aw_body" android:forceDarkAllowed="false" android:layout_width="match_parent" android:layout_height="match_parent">
+    <ImageView android:id="@+id/aw_background" android:forceDarkAllowed="false" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="fitXY" android:importantForAccessibility="no"/>
+    <LinearLayout android:forceDarkAllowed="false" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="8dp">
+        <LinearLayout android:forceDarkAllowed="false" android:layout_width="match_parent" android:layout_height="20dp" android:gravity="center_vertical">
+            <ImageView android:forceDarkAllowed="false" android:layout_width="20dp" android:layout_height="20dp" android:padding="4dp" android:src="@drawable/power_bolt" android:background="@drawable/power_energy" android:importantForAccessibility="no"/>
+            <TextView android:id="@+id/aw_title" android:forceDarkAllowed="false" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:layout_marginStart="5dp" android:textSize="10sp" android:textStyle="bold" android:maxLines="1" android:ellipsize="end" android:includeFontPadding="false"/>
+            <ImageView android:id="@+id/aw_chevron" android:forceDarkAllowed="false" android:layout_width="12dp" android:layout_height="12dp" android:src="@drawable/widget_chevron_right" android:importantForAccessibility="no"/>
+        </LinearLayout>
+        <LinearLayout android:id="@+id/aw_status_box" android:forceDarkAllowed="false" android:layout_width="match_parent" android:layout_height="26dp" android:layout_marginTop="5dp" android:padding="4dp" android:gravity="center_vertical">
+            <ImageView android:id="@+id/aw_icon" android:forceDarkAllowed="false" android:layout_width="18dp" android:layout_height="18dp" android:padding="4dp" android:importantForAccessibility="no"/>
+            <TextView android:id="@+id/aw_status" android:forceDarkAllowed="false" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:layout_marginStart="4dp" android:textSize="11sp" android:textStyle="bold" android:maxLines="1" android:ellipsize="end" android:includeFontPadding="false"/>
+        </LinearLayout>
+        <TextView android:id="@+id/aw_time" android:forceDarkAllowed="false" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="3dp" android:textSize="24sp" android:textStyle="bold" android:maxLines="1" android:includeFontPadding="false"/>
+        <TextView android:id="@+id/aw_detail" android:forceDarkAllowed="false" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="9sp" android:maxLines="1" android:ellipsize="end" android:includeFontPadding="false"/>
+    </LinearLayout>
+</FrameLayout>

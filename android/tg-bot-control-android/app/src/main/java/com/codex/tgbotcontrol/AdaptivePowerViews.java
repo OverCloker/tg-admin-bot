@@ -82,14 +82,15 @@ final class AdaptivePowerViews {
         boolean dark="dark".equals(theme)||("system".equals(theme)&&(c.getResources().getConfiguration().uiMode&android.content.res.Configuration.UI_MODE_NIGHT_MASK)==android.content.res.Configuration.UI_MODE_NIGHT_YES);
         int fg=dark?0xfff5f5f5:INK,muted=dark?0xffbbbbbb:MUTED,onColor=dark?0xff8ad7a2:GREEN,offColor=dark?0xffffa49a:RED;
         int transparency=0;try{transparency=Math.max(0,Math.min(100,Integer.parseInt(p.getString("widget_transparency","0"))));}catch(Exception ignored){}
-        boolean micro=height<48||(width<120&&height<90);
-        boolean shortRow=height<76&&width>=120;
+        boolean dense=compact&&width>=100&&height>=100;
+        boolean micro=height<42||width<100;
+        boolean shortRow=height<100&&width>=100&&!micro;
         boolean narrowCompact=compact&&width<140&&!shortRow;
-        RemoteViews v=new RemoteViews(c.getPackageName(),micro?R.layout.adaptive_micro:shortRow?R.layout.adaptive_short:narrowCompact?R.layout.adaptive_narrow_compact:width<140&&!compact?R.layout.adaptive_skinny:compact?R.layout.adaptive_compact:tall?R.layout.adaptive_tall:wide?R.layout.adaptive_wide:R.layout.adaptive_card);
+        RemoteViews v=new RemoteViews(c.getPackageName(),dense?R.layout.adaptive_dense:micro?R.layout.adaptive_micro:shortRow?R.layout.adaptive_short:narrowCompact?R.layout.adaptive_narrow_compact:width<140&&!compact?R.layout.adaptive_skinny:compact?R.layout.adaptive_compact:tall?R.layout.adaptive_tall:wide?R.layout.adaptive_wide:R.layout.adaptive_card);
         v.setImageViewResource(R.id.aw_background,dark?R.drawable.widget_surface_oled:R.drawable.widget_surface);
         v.setInt(R.id.aw_background,"setImageAlpha",Math.round((100-transparency)*255/100f));
         v.setTextColor(R.id.aw_title,fg);v.setTextColor(R.id.aw_time,fg);
-        if(!micro&&(width>=140||shortRow))v.setImageViewResource(R.id.aw_chevron,dark?R.drawable.widget_chevron_right_dark:R.drawable.widget_chevron_right);
+        if(!micro&&(dense||width>=140||shortRow))v.setImageViewResource(R.id.aw_chevron,dark?R.drawable.widget_chevron_right_dark:R.drawable.widget_chevron_right);
         String name=p.getString("name","Выберите город").split(",")[0];
         v.setTextViewText(R.id.aw_title,name+" · "+p.getString("group","—"));
         boolean valid=today(data,now)&&data.optBoolean("published");
@@ -117,7 +118,19 @@ final class AdaptivePowerViews {
         int color="on".equals(state)?onColor:"off".equals(state)?offColor:muted;
         v.setTextViewText(R.id.aw_status,event);v.setTextColor(R.id.aw_status,color);v.setTextViewText(R.id.aw_time,time);
         v.setViewVisibility(R.id.aw_time,time.isEmpty()?View.GONE:View.VISIBLE);
-        if(compact||micro) {
+        if(dense) {
+            if(height<110){v.setTextViewTextSize(R.id.aw_time,android.util.TypedValue.COMPLEX_UNIT_SP,19);v.setTextViewTextSize(R.id.aw_detail,android.util.TypedValue.COMPLEX_UNIT_SP,8);}
+            String label=slots==null?"Нет графика":allDay?"Свет весь день":"off".equals(current)?"Нет света":"on".equals(current)?"Свет есть":"Уточняется";
+            String panelState=slots==null?"":current;
+            v.setTextViewText(R.id.aw_status,label);
+            v.setTextColor(R.id.aw_status,"on".equals(panelState)?onColor:"off".equals(panelState)?offColor:muted);
+            v.setInt(R.id.aw_status_box,"setBackgroundResource",surface(dark,panelState,false));
+            v.setImageViewResource(R.id.aw_icon,R.drawable.power_bolt);
+            v.setInt(R.id.aw_icon,"setBackgroundResource","on".equals(panelState)?R.drawable.power_energy:"off".equals(panelState)?R.drawable.power_energy_off:R.drawable.power_energy_unknown);
+            v.setTextViewText(R.id.aw_detail,time.isEmpty()?allDay?"Без отключений":slots==null?"Сегодня без графиков":"До конца дня":("on".equals(state)?"Включение":"off".equals(state)?"Отключение":"Уточняется")+(detail.startsWith("Завтра")?" завтра":width>=160?" по графику":""));
+            v.setTextColor(R.id.aw_detail,muted);
+            v.setContentDescription(R.id.aw_body,name+" "+p.getString("group","")+" "+label+" "+event+" "+time);
+        } else if(compact||micro) {
             v.setTextViewText(R.id.aw_status,allDay?"Без отключений":event);
             if(compact&&!micro&&width<200&&!time.isEmpty()){
                 v.setTextViewText(R.id.aw_status,"on".equals(state)?"Включение":"off".equals(state)?"Откл.":"Уточняется");
