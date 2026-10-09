@@ -26,6 +26,17 @@ Not asserted: actual electricity at a house, emergency outages, exact background
 execution timing under OEM battery restrictions, or layouts on every launcher.
 Android may delay jobs. Only Poltava settlements are supported in this release.
 
+## 0.4.2 widget verification (2026-10-09)
+
+- Android 15 pin dialogs show distinct previews and sizes 2×1, 2×4 and 4×2.
+- Added compact 2×1 and interval-list 2×4 on the launcher using saved Kyiv 60.1.
+- Inspected screenshots: list highlights the current interval, dims past rows,
+  and uses green light / red outage icons. Corrected stretched bitmap proportions.
+- Crash buffer was empty. Existing widgets retain their configurations.
+- Existing 1×2 launcher allocations must be removed and added again as 2×1.
+- Not verified on third-party launchers or Android versions older than 12
+  (previewLayout is supported from Android 12).
+
 ## 0.4.1 verification (2026-10-09)
 
 - Installed 0.4.1 over 0.4.0 on the Android 15 emulator.

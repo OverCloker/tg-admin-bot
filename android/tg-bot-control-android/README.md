@@ -1,4 +1,4 @@
-# Abstergo Android 0.4.1
+# Abstergo Android 0.4.3
 
 Native Android shell for https://app.otvet04ka.com/ with home-screen outage
 widgets. Open **Адрес → Отключения света и виджет** to select any settlement
@@ -6,8 +6,14 @@ in the site's catalog and the group for your house. Groups are loaded for the
 selected location (including Kyiv's extended groups). Selection of a settlement does not infer
 the house's group.
 
-- **1×2**: next planned switch-on/off and its Kyiv time, including tomorrow when published.
-- **4×2**: full-day timeline, current scheduled state, next boundary, last source update.
+- **One adaptive widget**: resize horizontally and vertically using the launcher's handles.
+  Small sizes show the next event; medium sizes add context; wide sizes add a timeline;
+  tall sizes show fixed-height intervals. Large schedules show current/upcoming rows
+  and a link to the full day instead of shrinking text or overflowing the widget.
+- Available minimum size depends on the launcher; 1×1 uses a minimal time/status view.
+- A whole day with light uses a dedicated summary, never one giant stretched row.
+- Preview support: packaged PNG fallback, Android 12 layout and Android 15 generated preview.
+  Old compact/list providers are retained for existing widgets but excluded from home-screen selection.
 
 Each widget has separate preferences. Tap its body to configure; tap ↻ to
 refresh. Cached dated schedules remain available offline. Missing/unknown
@@ -25,6 +31,10 @@ tools 36.1.0: `gradle :app:assembleDebug`. Output:
 An unpublished dated schedule is shown as «Сегодня без графиков»; connection
 failures and not-yet-loaded schedules are separate states.
 
-Release versionCode is 40001 (0.4.0: 40000; previous 0.3.4: 30004). Keep the existing signing
+Release versionCode is 40003 (0.4.2: 40002; previous 0.3.4: 30004). Keep the existing signing
 key for in-place upgrades. Publish explicitly with the repository's
 `publish_android_release.py --caption-file android/tg-bot-control-android/release-caption.txt`.
+
+For local native design QA only, build with `-PwidgetQa=true` to export the debug
+snapshot Activity. Distributed builds omit this flag; the QA Activity is not exported.
+See `design-qa.md` for reference comparison and known physical-launcher test gaps.

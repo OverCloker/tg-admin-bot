@@ -13,13 +13,17 @@
         <activity android:name=".PowerActivity" android:exported="true">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_CONFIGURE"/></intent-filter>
         </activity>
-        <receiver android:name=".PowerCompactWidget" android:exported="false" android:label="Свет · следующее событие 1×2">
+        <receiver android:name=".PowerCompactWidget" android:exported="false" android:label="Свет · следующее событие 2×1">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/power_widget_compact_info"/>
         </receiver>
-        <receiver android:name=".PowerWidget" android:exported="false" android:label="Свет · весь день 4×2">
+        <receiver android:name=".PowerWidget" android:exported="false" android:label="Свет · адаптивный">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/power_widget_info"/>
+        </receiver>
+        <receiver android:name=".PowerListWidget" android:exported="false" android:label="Свет · интервалы дня 2×4">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/power_widget_list_info"/>
         </receiver>
         <service android:name=".PowerJobService" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true"/>
         <activity

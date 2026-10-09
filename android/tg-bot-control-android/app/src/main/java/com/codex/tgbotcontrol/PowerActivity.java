@@ -34,6 +34,7 @@ public class PowerActivity extends Activity {
     private String observedGroup="";
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
+        AdaptivePowerViews.publishPreview(this);
         widgetId=getIntent().getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID,AppWidgetManager.INVALID_APPWIDGET_ID);
         setResult(RESULT_CANCELED);
         ScrollView scroll=new ScrollView(this);
@@ -53,8 +54,7 @@ public class PowerActivity extends Activity {
         button("Обновить",()->load(false));
         button("График на завтра",()->load(true));
         if(widgetId==AppWidgetManager.INVALID_APPWIDGET_ID) {
-            button("Добавить виджет 1×2 · следующее событие",()->pin(PowerCompactWidget.class));
-            button("Добавить виджет 4×2 · весь день",()->pin(PowerWidget.class));
+            button("Добавить виджет · размер можно менять",()->pin(PowerWidget.class));
         }
         graph=text("",18);
         button("Открыть источник · Без Світла",()->{
@@ -129,7 +129,11 @@ public class PowerActivity extends Activity {
     private void pin(Class<?> provider){
         if(!valid())return;savePreferences();
         AppWidgetManager manager=AppWidgetManager.getInstance(this);
-        if(manager.isRequestPinAppWidgetSupported())manager.requestPinAppWidget(new ComponentName(this,provider),null,null);
+        if(manager.isRequestPinAppWidgetSupported()){
+            android.os.Bundle preview=new android.os.Bundle();
+            preview.putParcelable(AppWidgetManager.EXTRA_APPWIDGET_PREVIEW,AdaptivePowerViews.preview(this));
+            manager.requestPinAppWidget(new ComponentName(this,provider),preview,null);
+        }
         else status.setText("Удерживайте свободное место на главном экране → Виджеты → Abstergo.");
     }
     private TextView text(String s,int size){TextView v=new TextView(this);v.setText(s);v.setTextSize(size);v.setTextColor(0xff32291f);v.setPadding(0,dp(10),0,dp(10));body.addView(v);return v;}
