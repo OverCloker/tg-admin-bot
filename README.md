@@ -129,7 +129,9 @@ Android-приложение подключается к этому API и уп�
 следующие запросы используют `If-Modified-Since`, а ответ `304 Not Modified` не обрабатывается повторно.
 В Mini App для каждой группы также можно выбрать NEPTUN или UkraineAlarm. Для UkraineAlarm
 нужен `UKRAINE_ALARM_API_TOKEN`; бот проверяет `/api/v3/alerts/status` раз в 30 секунд и
-загружает полный `/api/v3/alerts` только после изменения состояния.
+загружает полный `/api/v3/alerts` после изменения состояния. Если ключ не разрешает
+служебный `/alerts/status`, бот автоматически опрашивает доступный полный `/alerts`
+раз в 30 секунд.
 
 Команда `карта тревог` (также `/alertmap`) собирает свежую PNG-карту Украины из публичных
 NEPTUN `/api/v1/alerts`, `/api/v1/threats`, `raions.geojson` и `oblasts.geojson`. Готовая
