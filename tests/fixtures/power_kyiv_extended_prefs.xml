@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<map>
+    <string name="name">Київ</string>
+    <string name="path">/kyiv</string>
+    <string name="group">60.1</string>
+    <string name="server">http://10.0.2.2:4180</string>
+</map>

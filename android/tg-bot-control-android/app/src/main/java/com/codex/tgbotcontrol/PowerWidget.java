@@ -90,7 +90,7 @@ public class PowerWidget extends AppWidgetProvider {
         view.setTextViewText(R.id.power_status,summary[0]);view.setTextViewText(R.id.power_next,summary[1]);
         view.setTextColor(R.id.power_status,"on".equals(summary[2])?0xff276747:"off".equals(summary[2])?0xffac4931:0xff66564c);
         if(compact) {
-            String event="Нет графика",time="",eventState="";
+            String event=now.toLocalDate().toString().equals(data.optString("date"))&&!data.optBoolean("published")?"Сегодня без графиков":"Нет данных",time="",eventState="";
             JSONArray slots=data.optJSONArray("intervals");int minute=now.getHour()*60+now.getMinute();
             if(now.toLocalDate().toString().equals(data.optString("date"))&&data.optBoolean("published")&&slots!=null) {
                 event="До конца дня\nбез смены";
@@ -123,7 +123,7 @@ public class PowerWidget extends AppWidgetProvider {
                        .append(PowerData.clock(s.optInt("start"))).append("–").append(PowerData.clock(s.optInt("end"))).append("  ");
                 }
             }
-            view.setTextViewText(R.id.power_day,day.length()==0?"График на сегодня пока не опубликован":"Сегодня · оранжевый: отключение · зелёный: свет");
+            view.setTextViewText(R.id.power_day,day.length()==0?summary[0]:"Сегодня · оранжевый: отключение · зелёный: свет");
             view.setImageViewBitmap(R.id.power_timeline,timeline(data,now));
         }
         String updated=data.optString("sourceUpdated");

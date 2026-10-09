@@ -1,8 +1,9 @@
-# Abstergo Android 0.4.0
+# Abstergo Android 0.4.1
 
 Native Android shell for https://app.otvet04ka.com/ with home-screen outage
-widgets. Open **Адрес → Отключения света и виджет** to select a Poltava settlement
-and the group for your house (1.1–6.2). Selection of a settlement does not infer
+widgets. Open **Адрес → Отключения света и виджет** to select any settlement
+in the site's catalog and the group for your house. Groups are loaded for the
+selected location (including Kyiv's extended groups). Selection of a settlement does not infer
 the house's group.
 
 - **1×2**: next planned switch-on/off and its Kyiv time, including tomorrow when published.
@@ -21,6 +22,9 @@ Build this directory with JDK 17, Gradle 8.9, Android SDK platform 35 and build
 tools 36.1.0: `gradle :app:assembleDebug`. Output:
 `app/build/outputs/apk/debug/app-debug.apk`.
 
-Release versionCode is 40000 (previous 0.3.4: 30004). Keep the existing signing
+An unpublished dated schedule is shown as «Сегодня без графиков»; connection
+failures and not-yet-loaded schedules are separate states.
+
+Release versionCode is 40001 (0.4.0: 40000; previous 0.3.4: 30004). Keep the existing signing
 key for in-place upgrades. Publish explicitly with the repository's
 `publish_android_release.py --caption-file android/tg-bot-control-android/release-caption.txt`.

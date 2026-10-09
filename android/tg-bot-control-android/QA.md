@@ -25,3 +25,16 @@ Verified:
 Not asserted: actual electricity at a house, emergency outages, exact background
 execution timing under OEM battery restrictions, or layouts on every launcher.
 Android may delay jobs. Only Poltava settlements are supported in this release.
+
+## 0.4.1 verification (2026-10-09)
+
+- Installed 0.4.1 over 0.4.0 on the Android 15 emulator.
+- Verified native Kryvyi Rih search and unpublished-schedule display in both
+  pinned widget sizes: “Сегодня без графиков”, with a neutral timeline.
+- Verified Kyiv group 60.1 restoration and loading its published intervals.
+- Live read-only probes covered Kyiv, Kryvyi Rih, Chutove and Cherkasy.
+- 61 automated tests passed, including outage parsing, access checks and
+  mocked unmute operations. No live chat member was unmuted during testing.
+- Admin panel JavaScript syntax check passed.
+- All regions advertised by the source are now accepted. An absent schedule
+  is distinct from a connection failure; neither proves actual power availability.

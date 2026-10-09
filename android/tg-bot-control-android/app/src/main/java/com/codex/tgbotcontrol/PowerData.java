@@ -64,8 +64,9 @@ final class PowerData {
     }
     static String intervalLabel(String status) { return "on".equals(status) ? "Свет по графику" : "off".equals(status) ? "Отключение" : "Нет точных данных"; }
     static String[] summary(JSONObject data, ZonedDateTime now) {
-        if (!now.toLocalDate().toString().equals(data.optString("date")) || !data.optBoolean("published"))
-            return new String[]{"График не опубликован", "Откройте приложение или обновите", ""};
+        if (!now.toLocalDate().toString().equals(data.optString("date")))
+            return new String[]{"График не загружен", "Проверьте соединение и обновите", ""};
+        if(!data.optBoolean("published"))return new String[]{"Сегодня без графиков", "Источник не опубликовал расписание", ""};
         int minute = now.getHour()*60 + now.getMinute();
         JSONArray slots = data.optJSONArray("intervals");
         if (slots != null) for (int i=0;i<slots.length();i++) {

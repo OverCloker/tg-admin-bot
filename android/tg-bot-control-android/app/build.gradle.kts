@@ -11,8 +11,8 @@ android {
         applicationId = "com.codex.tgbotcontrol"
         minSdk = 26
         targetSdk = 35
-        versionCode = 40000
-        versionName = "0.4.0"
+        versionCode = 40001
+        versionName = "0.4.1"
     }
 
     compileOptions {
