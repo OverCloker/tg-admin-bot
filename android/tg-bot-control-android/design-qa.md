@@ -59,6 +59,11 @@ final result: passed
 - Body opens configuration; existing pin/configuration flows remain.
 - Applied/rendered compact, card, wide, tall, 1×1, narrow, all-day and
   unpublished cases in the native QA harness.
+- Additional size matrix: 2×1, 2×2, 2×3, 2×4, 3×1, 3×2, 3×3, 3×4.
+  Representative widths 180/260dp and heights 80/180/300/420dp were applied
+  with the same data; no clipped content or crash was observed.
+  Evidence: design-evidence/size-matrix.png. Actual cell-to-dp mapping is
+  determined by the user's launcher, not by these representative QA sizes.
 - Preview layers: PNG fallback, Android 12 layout, Android 15 generated
   preview. QA export is disabled by default in the distributed build.
 
