@@ -177,6 +177,9 @@ ADMIN_SUBFEATURES: dict[str, list[dict[str, str]]] = {
     "quiet": [
         {"id": "quiet.manual", "title": "Замутить"},
         {"id": "quiet.unmute", "title": "Размутить"},
+        {"id": "quiet.admin", "title": "Затихни админ"},
+        {"id": "quiet.ban", "title": "Забанить"},
+        {"id": "quiet.unban", "title": "Разбанить"},
         {"id": "quiet.text", "title": "Текст ответа"},
         {"id": "quiet.mediaSave", "title": "Сохранить медиа"},
         {"id": "quiet.mediaDelete", "title": "Удалить медиа"},
@@ -2369,7 +2372,14 @@ ADMIN_PANEL_HTML = r"""
           ["quietMinutes", "input", "Минуты"],
           ["quietReason", "input", "Причина"]
         ], "quietManual()") : writeLocked("quiet.manual")}
-        <h2>Снять мут</h2>
+        <h2>Затихни админ</h2>
+        <p class="muted">Удаление новых сообщений администратора на заданный срок. Владельца группы затронуть нельзя. Снять режим можно кнопкой «Размутить».</p>
+        ${canWrite("quiet.admin") ? form("Включить тихий режим", [["quietAdminTarget", "input", "@username или User ID"], ["quietAdminMinutes", "input", "Минуты (по умолчанию 60)"], ["quietAdminReason", "input", "Причина"]], "quietAdmin()") : writeLocked("quiet.admin")}
+        <h2>Бан и разбан</h2>
+        ${canWrite("quiet.ban") ? form("Забанить", [["quietBanTarget", "input", "@username или User ID"], ["quietBanReason", "input", "Причина"]], "quietBan()") : writeLocked("quiet.ban")}
+        ${canWrite("quiet.unban") ? form("Разбанить", [["quietUnbanTarget", "input", "@username или User ID"]], "quietUnban()") : writeLocked("quiet.unban")}
+        <p class="muted">Разбан разрешает повторно вступить в группу, но не возвращает участника автоматически.</p>
+        <h2>Снять мут / тихий режим админа</h2>
         ${canWrite("quiet.unmute") ? form("Размутить", [["quietUnmuteTarget", "input", "@username или User ID"]], "quietUnmute()") : writeLocked("quiet.unmute")}
         <h2>Текст ответа</h2>
         ${canWrite("quiet.text") ? form("Сохранить текст", [["quiet", "textarea", "Текст ответа", overview.quiet.reply_text || ""]], "saveQuiet()") : writeLocked("quiet.text")}
@@ -2813,6 +2823,19 @@ ADMIN_PANEL_HTML = r"""
         method: "POST", body: JSON.stringify({ target: val("quietUnmuteTarget") })
       });
       afterAction("Мут снят");
+    }
+    async function quietAdmin() {
+      await api(`/admin/chats/${selectedChatId}/quiet/admin`, {method: "POST", body: JSON.stringify({target: val("quietAdminTarget"), minutes: Number(val("quietAdminMinutes") || 60), reason: val("quietAdminReason")})});
+      afterAction("Тихий режим администратора включён");
+    }
+    async function quietBan() {
+      if (!confirm("Забанить этого участника?")) return;
+      await api(`/admin/chats/${selectedChatId}/quiet/ban`, {method: "POST", body: JSON.stringify({target: val("quietBanTarget"), reason: val("quietBanReason")})});
+      afterAction("Пользователь забанен");
+    }
+    async function quietUnban() {
+      await api(`/admin/chats/${selectedChatId}/quiet/unban`, {method: "POST", body: JSON.stringify({target: val("quietUnbanTarget")})});
+      afterAction("Бан снят — пользователь может вступить снова");
     }
     async function saveQuietMedia() {
       const file = document.getElementById("quietMediaFile").files[0];
@@ -3290,6 +3313,10 @@ class QuietUnmutePayload(BaseModel):
     target: str = Field(min_length=1, max_length=100)
 
 
+class QuietBanPayload(QuietUnmutePayload):
+    reason: str = Field(default="", max_length=1000)
+
+
 class QuietMediaPayload(BaseModel):
     filename: str = Field(min_length=1)
     mimeType: str = "application/octet-stream"
@@ -3679,6 +3706,12 @@ def api_audit_action(method: str, path: str) -> str:
         return "Покупка в Mini App"
     if path.endswith("/quiet/unmute"):
         return "Снял мут через панель"
+    if path.endswith("/quiet/admin"):
+        return "Включил тихий режим администратора"
+    if path.endswith("/quiet/ban"):
+        return "Забанил участника через панель"
+    if path.endswith("/quiet/unban"):
+        return "Снял бан через панель"
     if "/triggers" in path:
         return "Удалил триггер" if method == "DELETE" else "Добавил или изменил триггер"
     if "/replies" in path:
@@ -5453,6 +5486,61 @@ async def quiet_unmute(chat_id: int, payload: QuietUnmutePayload) -> dict[str, A
     finally:
         await bot.session.close()
     return ok("user unmuted")
+
+
+async def perform_panel_moderation(chat_id: int, payload, action: str) -> dict[str, Any]:
+    # Authorize before contacting Telegram or resolving the target.
+    with open_db() as db:
+        require_admin_feature(db, "quiet." + action)
+        require_chat(db, chat_id)
+    bot = create_bot(load_config(), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    try:
+        with open_db() as db:
+            target_id, _ = await resolve_quiet_target(bot, db, chat_id, payload.target)
+            member = await bot.get_chat_member(chat_id, target_id)
+            status = str(getattr(member.status, "value", member.status))
+            if status == "creator":
+                raise HTTPException(400, "Владельца группы затронуть нельзя")
+            if action == "admin":
+                if status != "administrator":
+                    raise HTTPException(400, "Тихий режим предназначен только для администраторов")
+                own = await bot.get_chat_member(chat_id, bot.id)
+                if not getattr(own, "can_delete_messages", False):
+                    raise HTTPException(400, "Боту нужны права удаления сообщений")
+                until = datetime.now(timezone.utc) + timedelta(minutes=payload.minutes)
+                db.set_quiet_admin(chat_id, target_id, member.user.username, member.user.full_name,
+                                   payload.reason, until.isoformat(timespec="seconds"), current_actor_id())
+                db.add_moderator_action(chat_id, current_actor_id(), target_id, "quiet_admin", payload.minutes, payload.reason)
+            elif action == "ban":
+                if status == "administrator":
+                    raise HTTPException(400, "Нельзя забанить администратора — сначала снимите его права")
+                await bot.ban_chat_member(chat_id=chat_id, user_id=target_id)
+                db.add_moderator_action(chat_id, current_actor_id(), target_id, "ban", None, payload.reason)
+            else:
+                if status != "kicked":
+                    raise HTTPException(400, "Пользователь не заблокирован")
+                await bot.unban_chat_member(chat_id=chat_id, user_id=target_id, only_if_banned=True)
+                db.add_moderator_action(chat_id, current_actor_id(), target_id, "unban", None, "")
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    finally:
+        await bot.session.close()
+    return ok("moderation action completed")
+
+
+@app.post("/admin/chats/{chat_id}/quiet/admin", dependencies=[Depends(require_admin)])
+async def quiet_admin_manual(chat_id: int, payload: QuietManualPayload) -> dict[str, Any]:
+    return await perform_panel_moderation(chat_id, payload, "admin")
+
+
+@app.post("/admin/chats/{chat_id}/quiet/ban", dependencies=[Depends(require_admin)])
+async def quiet_ban(chat_id: int, payload: QuietBanPayload) -> dict[str, Any]:
+    return await perform_panel_moderation(chat_id, payload, "ban")
+
+
+@app.post("/admin/chats/{chat_id}/quiet/unban", dependencies=[Depends(require_admin)])
+async def quiet_unban(chat_id: int, payload: QuietUnmutePayload) -> dict[str, Any]:
+    return await perform_panel_moderation(chat_id, payload, "unban")
 
 
 @app.post("/admin/chats/{chat_id}/quiet/media", dependencies=[Depends(require_admin)])

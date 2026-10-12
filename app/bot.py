@@ -596,6 +596,9 @@ ADMIN_SUBFEATURES = {
     "rollMute": [("rollMute.settings", "Настройки строк")],
     "quiet": [
         ("quiet.manual", "Замутить"),
+        ("quiet.admin", "Затихни админ"),
+        ("quiet.ban", "Забанить"),
+        ("quiet.unban", "Разбанить"),
         ("quiet.unmute", "Размутить"),
         ("quiet.text", "Текст ответа"),
         ("quiet.mediaSave", "Сохранить медиа"),
