@@ -1778,6 +1778,9 @@ def parse_auto_weather_command(text: str | None) -> tuple[str, str | None] | Non
         return "status", None
     if payload.casefold() in {"выкл", "выключить", "отключить", "off", "0"}:
         return "off", None
+    command, _, city = payload.partition(" ")
+    if command.casefold() in {"вкл", "включить", "включи", "on", "1"}:
+        return "on", city or None
     return "on", payload
 
 

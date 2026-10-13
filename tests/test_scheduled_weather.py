@@ -8,6 +8,11 @@ def test_parse_auto_weather_command() -> None:
     assert parse_auto_weather_command("автопогода") == ("status", None)
     assert parse_auto_weather_command("автопогода выкл") == ("off", None)
     assert parse_auto_weather_command("автопогода   Кривой   Рог ") == ("on", "Кривой Рог")
+    assert parse_auto_weather_command("автопогода включить кривой рог") == ("on", "кривой рог")
+    assert parse_auto_weather_command("автопогода ВКЛ Кривой Рог") == ("on", "Кривой Рог")
+    assert parse_auto_weather_command("автопогода on Київ") == ("on", "Київ")
+    assert parse_auto_weather_command("автопогода включить") == ("on", None)
+    assert parse_auto_weather_command("автопогода Включино") == ("on", "Включино")
 
 
 def test_chat_help_mentions_scheduled_weather() -> None:
