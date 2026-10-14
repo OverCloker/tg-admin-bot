@@ -64,8 +64,9 @@ def test_ukraine_alarm_provider_uses_raw_auth_and_revision_cache(monkeypatch):
     session_options = []
 
     class Response:
-        def __init__(self, payload):
+        def __init__(self, payload, status=200):
             self.payload = payload
+            self.status = status
 
         async def __aenter__(self):
             return self
@@ -101,6 +102,107 @@ def test_ukraine_alarm_provider_uses_raw_auth_and_revision_cache(monkeypatch):
     assert requests.count("https://api.ukrainealarm.com/api/v3/alerts/status") == 2
     assert requests.count("https://api.ukrainealarm.com/api/v3/alerts") == 1
     assert all(item["headers"]["Authorization"] == "secret-key" for item in session_options)
+
+
+def test_ukraine_alarm_provider_falls_back_when_status_is_not_authorized(monkeypatch):
+    snapshot = [region(alerts=[air(level("Yellow", "БПЛА"))])]
+    updated_snapshot = [region(alerts=[air(level("Red", "Ракетна небезпека"))])]
+    responses = [(None, 401), (snapshot, 200), (updated_snapshot, 200)]
+    requests = []
+    now = [0.0]
+
+    class Response:
+        def __init__(self, payload, status):
+            self.payload = payload
+            self.status = status
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def raise_for_status(self):
+            if self.status >= 400:
+                raise AssertionError(f"unexpected HTTP {self.status}")
+
+        async def json(self):
+            return self.payload
+
+    class Session:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def get(self, url):
+            requests.append(url)
+            payload, status = responses.pop(0)
+            return Response(payload, status)
+
+    monkeypatch.setattr(alert_providers.aiohttp, "ClientSession", Session)
+    monkeypatch.setattr(alert_providers.time, "monotonic", lambda: now[0])
+    provider = UkraineAlarmProvider("secret-key")
+    first = asyncio.run(provider.fetch())
+    assert first == snapshot
+    assert asyncio.run(provider.fetch()) is first
+    now[0] = 31.0
+    assert asyncio.run(provider.fetch()) == updated_snapshot
+    assert requests.count("https://api.ukrainealarm.com/api/v3/alerts/status") == 1
+    assert requests.count("https://api.ukrainealarm.com/api/v3/alerts") == 2
+
+
+def test_ukraine_alarm_provider_keeps_fresh_snapshot_when_status_becomes_unauthorized(monkeypatch):
+    snapshot = [region(alerts=[air(level("Yellow", "БПЛА"))])]
+    responses = [({"lastActionIndex": 7}, 200), (snapshot, 200), (None, 401)]
+    requests = []
+    now = [0.0]
+
+    class Response:
+        def __init__(self, payload, status):
+            self.payload = payload
+            self.status = status
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def raise_for_status(self):
+            if self.status >= 400:
+                raise AssertionError(f"unexpected HTTP {self.status}")
+
+        async def json(self):
+            return self.payload
+
+    class Session:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def get(self, url):
+            requests.append(url)
+            payload, status = responses.pop(0)
+            return Response(payload, status)
+
+    monkeypatch.setattr(alert_providers.aiohttp, "ClientSession", Session)
+    monkeypatch.setattr(alert_providers.time, "monotonic", lambda: now[0])
+    provider = UkraineAlarmProvider("secret-key")
+    first = asyncio.run(provider.fetch())
+    now[0] = 1.0
+    assert asyncio.run(provider.fetch()) is first
+    assert requests.count("https://api.ukrainealarm.com/api/v3/alerts/status") == 2
+    assert requests.count("https://api.ukrainealarm.com/api/v3/alerts") == 1
 
 
 def test_ukraine_alarm_air_without_known_levels_is_still_active():

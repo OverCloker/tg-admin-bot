@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+import time
 from typing import Protocol
 
 import aiohttp
@@ -456,7 +457,9 @@ def parse_ukraine_alarm_alerts(
 
 
 class UkraineAlarmProvider:
-    """Poll the lightweight revision and refresh all active regions on change."""
+    """Poll the lightweight revision and fall back to the permitted full feed."""
+
+    _FALLBACK_POLL_SECONDS = 30
 
     def __init__(self, token: str) -> None:
         if not token.strip():
@@ -464,18 +467,48 @@ class UkraineAlarmProvider:
         self._token = token.strip()
         self._last_action_index: int | float | None = None
         self._snapshot: object | None = None
+        self._status_supported: bool | None = None
+        self._last_full_fetch_at: float | None = None
 
     async def fetch(self) -> object:
+        now = time.monotonic()
+        if (
+            self._status_supported is False
+            and self._snapshot is not None
+            and self._last_full_fetch_at is not None
+            and now - self._last_full_fetch_at < self._FALLBACK_POLL_SECONDS
+        ):
+            return self._snapshot
         headers = {"Authorization": self._token, "Accept": "application/json"}
         timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get("https://api.ukrainealarm.com/api/v3/alerts/status") as response:
-                response.raise_for_status()
-                status = await response.json()
-            if not isinstance(status, dict) or not isinstance(status.get("lastActionIndex"), (int, float)):
-                raise ValueError("UkraineAlarm: invalid status response")
-            action_index = status["lastActionIndex"]
-            if self._snapshot is not None and action_index == self._last_action_index:
+            action_index = None
+            if self._status_supported is not False:
+                async with session.get("https://api.ukrainealarm.com/api/v3/alerts/status") as response:
+                    if response.status in {401, 403, 404}:
+                        self._status_supported = False
+                    else:
+                        response.raise_for_status()
+                        status = await response.json()
+                        if not isinstance(status, dict) or not isinstance(
+                            status.get("lastActionIndex"), (int, float)
+                        ):
+                            raise ValueError("UkraineAlarm: invalid status response")
+                        self._status_supported = True
+                        action_index = status["lastActionIndex"]
+            if (
+                action_index is None
+                and self._status_supported is False
+                and self._snapshot is not None
+                and self._last_full_fetch_at is not None
+                and now - self._last_full_fetch_at < self._FALLBACK_POLL_SECONDS
+            ):
+                return self._snapshot
+            if (
+                action_index is not None
+                and self._snapshot is not None
+                and action_index == self._last_action_index
+            ):
                 return self._snapshot
             async with session.get("https://api.ukrainealarm.com/api/v3/alerts") as response:
                 response.raise_for_status()
@@ -484,6 +517,7 @@ class UkraineAlarmProvider:
             raise ValueError("UkraineAlarm: invalid alerts response")
         self._last_action_index = action_index
         self._snapshot = snapshot
+        self._last_full_fetch_at = now
         return snapshot
 
     def state_for(self, snapshot: object, location_key: str) -> AlertsLocationState:
