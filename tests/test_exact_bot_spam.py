@@ -111,3 +111,28 @@ def test_reported_ad_bots_are_banned_and_deleted(monkeypatch, text, username):
     assert asyncio.run(bot.handle_exact_bot_spam(msg))
     msg.bot.ban_chat_member.assert_awaited_once_with(chat_id=-100, user_id=9)
     msg.delete.assert_awaited_once()
+
+
+@pytest.mark.parametrize("text,username", [
+    ("Когда тревога накрывает, я проходила тест в @newmindseedbot, помог понять себя", "newmindseedbot"),
+    ("При панике попробуй пройти тест по ссылке https://t.me/anotherpsybot?start=ad, мне помог", "anotherpsybot"),
+    ("Переживания сильные. Недавно проходила тест у @future_helperbot и он помог", "future_helperbot"),
+])
+def test_rotating_ad_bot_pattern_bans_and_deletes(monkeypatch, text, username):
+    msg = message(text)
+    monkeypatch.setattr(bot, "notify_staff_moderation", AsyncMock())
+    assert bot.exact_ad_bot_match(msg) == username
+    assert asyncio.run(bot.handle_exact_bot_spam(msg))
+    msg.bot.ban_chat_member.assert_awaited_once_with(chat_id=-100, user_id=9)
+    msg.delete.assert_awaited_once()
+
+
+@pytest.mark.parametrize("text", [
+    "У меня тревога, кто знает хороший тест?",
+    "Я проходила тест на тревогу, мне помог разобраться",
+    "@newmindseedbot прислал обновление",
+    "Тест у @newmindseedbot был скучным",
+    "При панике мне помог тест у @human_contact, не у бота",
+])
+def test_pattern_does_not_ban_context_without_promotion(text):
+    assert bot.exact_ad_bot_match(message(text)) is None

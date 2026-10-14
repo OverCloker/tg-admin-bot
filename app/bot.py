@@ -11766,14 +11766,19 @@ BLOCKED_AD_BOTS = frozenset({
 })
 AD_BOT_MENTION_RE = re.compile(r"(?<![\w@])@([a-zA-Z0-9_]{5,32})(?!\w)")
 AD_BOT_URL_RE = re.compile(r"(?<![\w./])(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/[a-zA-Z0-9_]+(?:\?[^\s<>]*)?", re.IGNORECASE)
+AD_TEST_RE = re.compile(r"\bтест[а-я]*\b", re.IGNORECASE)
+AD_DISTRESS_RE = re.compile(r"тревог|паник|пережив|психолог|психик|страх|чувств", re.IGNORECASE)
+AD_ENDORSEMENT_RE = re.compile(r"проходил|прош[её]л|рекоменд|попробуй|помог|показал|советую", re.IGNORECASE)
 
 
 def exact_ad_bot_match(message: Message) -> str | None:
     text = message.text or message.caption or ""
+    candidates = []
     for match in AD_BOT_MENTION_RE.finditer(text):
         username = match.group(1).casefold()
         if username in BLOCKED_AD_BOTS:
             return username
+        candidates.append(username)
     urls = [match.group(0) for match in AD_BOT_URL_RE.finditer(text)]
     for entity in (getattr(message, "entities", None) or getattr(message, "caption_entities", None) or []):
         if getattr(entity, "url", None):
@@ -11785,8 +11790,17 @@ def exact_ad_bot_match(message: Message) -> str | None:
                 username = parsed.path.strip("/").split("/")[0].casefold()
                 if username in BLOCKED_AD_BOTS:
                     return username
+                candidates.append(username)
         except ValueError:
             continue
+    # Identify the repeated "I took a test at @...bot" promotion even when
+    # the advertiser rotates usernames. Require all three contextual signals
+    # so a simple discussion of anxiety or a bot mention is not actionable.
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    normalized = "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf")
+    if (AD_TEST_RE.search(normalized) and AD_DISTRESS_RE.search(normalized)
+            and AD_ENDORSEMENT_RE.search(normalized)):
+        return next((name for name in candidates if name.endswith("bot")), None)
     return None
 
 
