@@ -11760,7 +11760,10 @@ async def handle_birthdays(message: Message) -> None:
         db.mark_birthday_sent(message.chat.id, birthday.id, sent_date)
 
 
-BLOCKED_AD_BOTS = frozenset({"psikh_lightbot", "myppsychologybot", "psohmarybot", "psumarybot"})
+BLOCKED_AD_BOTS = frozenset({
+    "psikh_lightbot", "myppsychologybot", "psohmarybot", "psumarybot",
+    "psykhodreambot", "pszch_larybot", "psihology_marybot", "my_psycoseedbot",
+})
 AD_BOT_MENTION_RE = re.compile(r"(?<![\w@])@([a-zA-Z0-9_]{5,32})(?!\w)")
 AD_BOT_URL_RE = re.compile(r"(?<![\w./])(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/[a-zA-Z0-9_]+(?:\?[^\s<>]*)?", re.IGNORECASE)
 

@@ -96,3 +96,18 @@ def test_unknown_admin_status_is_not_banned(monkeypatch):
     assert asyncio.run(bot.handle_exact_bot_spam(msg))
     msg.delete.assert_awaited_once()
     msg.bot.ban_chat_member.assert_not_awaited()
+
+
+@pytest.mark.parametrize("text,username", [
+    ("Я проходила тест в @psykhodreambot и он помог понять тревогу", "psykhodreambot"),
+    ("Недавно проходила тест у @pszch_larybot и была поражена", "pszch_larybot"),
+    ("Тест у @psihology_marybot описал мой внутренний мир", "psihology_marybot"),
+    ("Недавно проходила тест в @my_psycoseedbot", "my_psycoseedbot"),
+])
+def test_reported_ad_bots_are_banned_and_deleted(monkeypatch, text, username):
+    msg = message(text)
+    monkeypatch.setattr(bot, "notify_staff_moderation", AsyncMock())
+    assert bot.exact_ad_bot_match(msg) == username
+    assert asyncio.run(bot.handle_exact_bot_spam(msg))
+    msg.bot.ban_chat_member.assert_awaited_once_with(chat_id=-100, user_id=9)
+    msg.delete.assert_awaited_once()
